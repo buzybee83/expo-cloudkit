@@ -1,0 +1,20 @@
+{
+  "expo": {
+    "name": "ExpoCloudKitExample",
+    "slug": "expo-cloudkit-example",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.example.expocloudkitexample"
+    },
+    "plugins": [
+      [
+        "expo-cloudkit",
+        {
+          "containerIds": ["iCloud.com.example.expocloudkitexample"]
+        }
+      ]
+    ]
+  }
+}
