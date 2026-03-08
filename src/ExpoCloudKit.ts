@@ -15,6 +15,7 @@ import type {
   AccountStatus,
   AssetProgress,
   CloudKitRecord,
+  CloudKitSubscription,
   DatabaseScope,
   PendingRecordChange,
   QueryPredicate,
@@ -22,8 +23,10 @@ import type {
   RecordIdentifier,
   RecordToSave,
   SavedRecord,
+  SaveQuerySubscriptionOptions,
   SortDescriptor,
   Subscription,
+  SubscriptionEvent,
   SyncEngineConfig,
   SyncEngineEvent,
   SyncState,
@@ -444,4 +447,134 @@ export function downloadAsset(
       database
     )
   );
+}
+
+// ---------------------------------------------------------------------------
+// Push Subscriptions (Phase B)
+// ---------------------------------------------------------------------------
+
+/**
+ * Creates a CKQuerySubscription that delivers push notifications when records
+ * of the given type are created, updated, or deleted.
+ *
+ * The subscription is saved to iCloud so it survives app restarts.
+ * Duplicate subscriptions for the same `recordType` + `zoneName` are
+ * de-duplicated on the server.
+ *
+ * @param options - Record type, optional predicate, trigger flags, and database.
+ * @returns The opaque subscription ID string assigned by CloudKit.
+ * @throws {CloudKitError} code NOT_AUTHENTICATED if the user is not signed in.
+ * @throws {CloudKitError} code NETWORK_UNAVAILABLE if the device is offline.
+ *
+ * @example
+ * ```typescript
+ * const id = await saveQuerySubscription({
+ *   recordType: 'Note',
+ *   firesOnRecordCreation: true,
+ *   firesOnRecordUpdate: true,
+ *   firesOnRecordDeletion: false,
+ *   zoneName: 'myZone',
+ * });
+ * ```
+ */
+export function saveQuerySubscription(
+  options: SaveQuerySubscriptionOptions
+): Promise<string> {
+  return callAsync(() => NativeModule!.saveQuerySubscription(options));
+}
+
+/**
+ * Creates a CKDatabaseSubscription that delivers a push notification whenever
+ * any records change in the specified database.
+ *
+ * On receiving this notification, call `fetchRecordZoneChanges` to retrieve
+ * the actual deltas (the push payload does not include record data).
+ *
+ * @param database - Which database to monitor. Default: 'private'.
+ * @returns The opaque subscription ID string assigned by CloudKit.
+ * @throws {CloudKitError} code NOT_AUTHENTICATED if the user is not signed in.
+ * @throws {CloudKitError} code NETWORK_UNAVAILABLE if the device is offline.
+ *
+ * @example
+ * ```typescript
+ * const id = await saveDatabaseSubscription('private');
+ * ```
+ */
+export function saveDatabaseSubscription(
+  database: DatabaseScope = 'private'
+): Promise<string> {
+  return callAsync(() => NativeModule!.saveDatabaseSubscription(database));
+}
+
+/**
+ * Deletes an existing subscription by ID.
+ *
+ * Safe to call if the subscription no longer exists — the native layer maps
+ * a missing-subscription server error to CloudKitErrorCode.SUBSCRIPTION_NOT_FOUND.
+ *
+ * @param subscriptionID - The subscription ID returned by a previous save call.
+ * @param database       - The database the subscription belongs to. Default: 'private'.
+ * @throws {CloudKitError} code SUBSCRIPTION_NOT_FOUND if the ID does not exist.
+ *
+ * @example
+ * ```typescript
+ * await deleteSubscription(id, 'private');
+ * ```
+ */
+export function deleteSubscription(
+  subscriptionID: string,
+  database: DatabaseScope = 'private'
+): Promise<void> {
+  return callAsync(() => NativeModule!.deleteSubscription(subscriptionID, database));
+}
+
+/**
+ * Returns all active subscriptions for the specified database.
+ *
+ * @param database - Which database to query. Default: 'private'.
+ * @returns Array of subscriptions, each with `id`, `type`, optional `recordType`, and `database`.
+ * @throws {CloudKitError} code NOT_AUTHENTICATED if the user is not signed in.
+ *
+ * @example
+ * ```typescript
+ * const subs = await fetchSubscriptions('private');
+ * subs.forEach(sub => console.log(sub.id, sub.type));
+ * ```
+ */
+export function fetchSubscriptions(
+  database: DatabaseScope = 'private'
+): Promise<CloudKitSubscription[]> {
+  return callAsync(() => NativeModule!.fetchSubscriptions(database));
+}
+
+/**
+ * Registers a listener for push subscription notification events delivered
+ * through the `onSubscriptionEvent` native event channel.
+ *
+ * Events arrive when the app is foregrounded after receiving a silent push
+ * from a CloudKit subscription. Filter by `event.type` to handle query vs.
+ * database subscription events.
+ *
+ * @param callback - Called on the main thread when a subscription event fires.
+ * @returns A Subscription handle; call `.remove()` to stop receiving events.
+ *
+ * @example
+ * ```typescript
+ * const sub = addSubscriptionListener((event) => {
+ *   if (event.type === 'query') {
+ *     console.log(event.notificationType, event.recordID);
+ *   } else {
+ *     fetchRecordZoneChanges(['myZone']);
+ *   }
+ * });
+ * // Later:
+ * sub.remove();
+ * ```
+ */
+export function addSubscriptionListener(
+  callback: (event: SubscriptionEvent) => void
+): Subscription {
+  assertNativeAvailable();
+  const subscription = emitter!.addListener('onSubscriptionEvent', callback);
+  return { remove: () => subscription.remove() };
 }
