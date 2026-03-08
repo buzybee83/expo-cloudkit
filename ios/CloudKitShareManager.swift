@@ -353,6 +353,7 @@ final class CloudKitShareManager {
 
         // For each zone, build a base dictionary and attempt to attach share info.
         // We query for CKShare records in each zone to get participant data.
+        let resultQueue = DispatchQueue(label: "expo.cloudkit.fetchSharedZones.results")
         var resultDicts: [[String: Any]] = []
         let group = DispatchGroup()
 
@@ -379,7 +380,9 @@ final class CloudKitShareManager {
             if let share = foundShare {
               zoneDict["share"] = Converters.toShareDictionary(share)
             }
-            resultDicts.append(zoneDict)
+            resultQueue.sync {
+              resultDicts.append(zoneDict)
+            }
             group.leave()
           }
 
@@ -610,10 +613,7 @@ private final class CloudKitSharingControllerDelegate: NSObject, UICloudSharingC
   func cloudSharingControllerDidStopSharing(_ csc: UICloudSharingController) {
     guard !didComplete else { return }
     didComplete = true
-    completion(.success([
-      "outcome": "cancelled",
-      "share": NSNull()
-    ]))
+    completion(.success(["outcome": "shared", "share": NSNull()]))
   }
 }
 

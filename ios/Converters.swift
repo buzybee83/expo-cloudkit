@@ -455,7 +455,7 @@ enum Converters {
   /// ```
   static func toShareDictionary(_ share: CKShare) -> [String: Any] {
     var dict: [String: Any] = [
-      "recordName": share.recordID.recordName,
+      "shareRecordName": share.recordID.recordName,
       "zoneName": share.recordID.zoneID.zoneName,
       "publicPermission": participantPermissionToString(share.publicPermission),
       "participants": share.participants.map { toParticipantDictionary($0) }
@@ -487,7 +487,7 @@ enum Converters {
     ]
 
     if let userRecordID = participant.userIdentity.userRecordID {
-      dict["recordName"] = userRecordID.recordName
+      dict["participantRecordName"] = userRecordID.recordName
     }
 
     // Include name components when the user identity has been looked up.
