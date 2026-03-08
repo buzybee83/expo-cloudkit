@@ -351,7 +351,7 @@ export interface CreateShareOptions {
   database?: DatabaseScope;
   /**
    * Permission level granted to anyone who joins via the share URL.
-   * Default: 'readOnly'.
+   * Default: 'none'.
    */
   publicPermission?: SharePermission;
 }
