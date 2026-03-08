@@ -9,8 +9,9 @@
  */
 
 import { EventEmitter, requireNativeModule } from 'expo-modules-core';
+import { Platform } from 'react-native';
 
-import { CloudKitError, CloudKitErrorCode } from './errors';
+import { CloudKitError, CloudKitErrorCode, CloudKitNotSupportedError } from './errors';
 import type {
   AcceptedShare,
   AcceptShareOptions,
@@ -51,9 +52,13 @@ import type {
 // Native module acquisition
 // ---------------------------------------------------------------------------
 
+/** True on iOS; false on Android, web, and all other platforms. */
+const isIOS = Platform.OS === 'ios';
+
 /**
  * Attempts to acquire the native module. On Android or web this will throw,
- * which we catch and replace with a stub that throws CloudKitError on every call.
+ * which we catch and replace with a stub that throws CloudKitNotSupportedError
+ * on every call.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let NativeModule: Record<string, any> | null = null;
@@ -71,14 +76,25 @@ try {
   // Platform does not support CloudKit. All calls will produce a clear error.
 }
 
+/**
+ * Throws CloudKitNotSupportedError on non-iOS platforms.
+ * Throws CloudKitError(UNKNOWN) if the native module failed to load on iOS
+ * (should not happen in practice).
+ */
 function assertNativeAvailable(): void {
+  if (!isIOS) {
+    throw new CloudKitNotSupportedError();
+  }
   if (!NativeModule) {
     throw new CloudKitError(
       CloudKitErrorCode.UNKNOWN,
-      'expo-cloudkit is only supported on iOS. This device/platform does not have CloudKit.'
+      'expo-cloudkit native module failed to load. Ensure the iOS build includes the ExpoCloudKit module.'
     );
   }
 }
+
+/** No-op Subscription returned by event listener helpers on non-iOS platforms. */
+const noopSubscription: Subscription = { remove: () => {} };
 
 /**
  * Wraps a native async call so that native errors are converted to CloudKitError.
@@ -126,6 +142,7 @@ export function getAccountStatus(): Promise<AccountStatus> {
 export function addAccountStatusListener(
   callback: (status: AccountStatus) => void
 ): Subscription {
+  if (!isIOS) return noopSubscription;
   assertNativeAvailable();
   const subscription = emitter!.addListener('onAccountStatusChanged', (event: { status: AccountStatus }) => {
     callback(event.status);
@@ -399,6 +416,7 @@ export function enqueuePendingChange(change: PendingRecordChange): void {
 export function addSyncEngineListener(
   callback: (event: SyncEngineEvent) => void
 ): Subscription {
+  if (!isIOS) return noopSubscription;
   assertNativeAvailable();
   const subscription = emitter!.addListener('onSyncEngineEvent', callback);
   return { remove: () => subscription.remove() };
@@ -426,6 +444,7 @@ export function stopSyncEngine(): Promise<void> {
 export function addAssetProgressListener(
   callback: (progress: AssetProgress) => void
 ): Subscription {
+  if (!isIOS) return noopSubscription;
   assertNativeAvailable();
   const subscription = emitter!.addListener('onAssetProgress', callback);
   return { remove: () => subscription.remove() };
@@ -587,6 +606,7 @@ export function fetchSubscriptions(
 export function addSubscriptionListener(
   callback: (event: SubscriptionEvent) => void
 ): Subscription {
+  if (!isIOS) return noopSubscription;
   assertNativeAvailable();
   const subscription = emitter!.addListener('onSubscriptionEvent', callback);
   return { remove: () => subscription.remove() };
@@ -795,6 +815,7 @@ export function fetchSharedDatabaseZones(): Promise<SharedZone[]> {
 export function addShareAcceptedListener(
   callback: (event: ShareInvitationEvent) => void
 ): Subscription {
+  if (!isIOS) return noopSubscription;
   assertNativeAvailable();
   const subscription = emitter!.addListener('onShareAccepted', callback);
   return { remove: () => subscription.remove() };

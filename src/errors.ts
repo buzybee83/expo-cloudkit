@@ -101,6 +101,42 @@ export enum CloudKitErrorCode {
    * UICloudSharingController is unavailable on this OS version).
    */
   SHARING_UI_UNAVAILABLE = 'SHARING_UI_UNAVAILABLE',
+
+  // Phase C — Cross-platform stub
+
+  /**
+   * CloudKit is not available on this platform (e.g. Android, web).
+   * All API calls on non-iOS platforms reject with this code.
+   */
+  NOT_SUPPORTED = 'NOT_SUPPORTED',
+}
+
+/**
+ * Thrown synchronously or as a rejection when expo-cloudkit is called on a
+ * non-iOS platform (Android, web, etc.).
+ *
+ * All exported async functions reject with this error on non-iOS platforms.
+ * Event listener helpers return a no-op `Subscription` instead of throwing.
+ *
+ * @example
+ * ```typescript
+ * try {
+ *   await getAccountStatus();
+ * } catch (err) {
+ *   if (err instanceof CloudKitNotSupportedError) {
+ *     // Running on Android or web — CloudKit is unavailable
+ *   }
+ * }
+ * ```
+ */
+export class CloudKitNotSupportedError extends Error {
+  readonly code = CloudKitErrorCode.NOT_SUPPORTED;
+
+  constructor() {
+    super('CloudKit is only available on iOS. This device/platform is not supported.');
+    this.name = 'CloudKitNotSupportedError';
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
 }
 
 /**
