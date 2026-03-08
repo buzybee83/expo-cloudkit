@@ -27,6 +27,15 @@ public class ExpoCloudKitModule: Module {
   /// Lazily initialised on the first subscription call after `configure()`.
   private var subscriptionManager: CloudKitSubscriptionManager?
 
+  // MARK: - Cursor cache for queryRecords pagination
+
+  /// In-memory store of CKQueryOperation.Cursor objects, keyed by opaque UUID token.
+  /// CKQueryOperation.Cursor is not serializable to Data via the public API — the
+  /// only safe way to pass it across calls is to keep the Swift object alive in memory
+  /// and hand an opaque string token to JS. Cursors do not survive app restarts;
+  /// that is acceptable and expected for CloudKit cursor-based pagination.
+  private var cursorCache: [String: CKQueryOperation.Cursor] = [:]
+
   // MARK: - Sync provider (Phase B)
 
   /// Active sync provider — either CKSyncEngine adapter (iOS 17+) or the
@@ -214,6 +223,12 @@ public class ExpoCloudKitModule: Module {
       let predicate = predicateDict.map { Converters.toPredicate(from: $0) } ?? NSPredicate(value: true)
       let sortDescriptors = sortDescriptorDicts?.compactMap { Converters.toNSSortDescriptor(from: $0) }
 
+      // Resolve the cursor token to the live CKQueryOperation.Cursor object.
+      // CKQueryOperation.Cursor is opaque and cannot be constructed from Data —
+      // it must be the exact Swift object returned by a prior query operation.
+      // We store it in cursorCache keyed by a UUID string and give JS that token.
+      let resolvedCursor: CKQueryOperation.Cursor? = cursor.flatMap { self.cursorCache[$0] }
+
       recordManager.queryRecords(
         recordType: recordType,
         predicate: predicate,
@@ -221,14 +236,21 @@ public class ExpoCloudKitModule: Module {
         zoneName: zoneName,
         database: scope,
         resultsLimit: resultsLimit,
-        cursor: cursor.flatMap { Data(base64Encoded: $0).map { CKQueryOperation.Cursor.fromData($0) } } ?? nil
-      ) { result in
+        cursor: resolvedCursor
+      ) { [weak self] result in
         switch result {
         case .success(let (records, nextCursor)):
-          let cursorString = nextCursor.map { _ in "opaque_cursor_placeholder" }
+          // If CloudKit returned a cursor, store it and give JS the token.
+          // If nil, there are no more pages.
+          var nextToken: String? = nil
+          if let nextCursor = nextCursor {
+            let token = UUID().uuidString
+            self?.cursorCache[token] = nextCursor
+            nextToken = token
+          }
           promise.resolve([
             "records": records.map { Converters.toDictionary($0) },
-            "cursor": cursorString as Any
+            "cursor": nextToken as Any
           ])
         case .failure(let error):
           promise.reject(Converters.toExpoError(error))
@@ -630,55 +652,66 @@ extension ExpoCloudKitModule {
   }
 }
 
-// MARK: - Module-level error codes
+// MARK: - Module-level typed exceptions
+//
+// Each error case is a separate Exception subclass so that Expo Modules Core
+// serializes the `code` field correctly to JavaScript as a structured CloudKitError.
+// A plain Swift enum conforming to Error/LocalizedError does not guarantee the
+// `code` field is propagated through the JS bridge.
 
-enum CloudKitModuleError: Error, LocalizedError {
-  case notConfigured
-  case requiresiOS17
-  case notImplemented(String)
-  case syncEngineNotRunning
-  case subscriptionNotFound(String)
-  case invalidArgument(String)
-
-  var errorDescription: String? {
-    switch self {
-    case .notConfigured:
-      return "ExpoCloudKit is not configured. Call configure(containerId) first."
-    case .requiresiOS17:
-      return "CKSyncEngine requires iOS 17 or later."
-    case .notImplemented(let feature):
-      return "\(feature) is not yet implemented in this phase of expo-cloudkit."
-    case .syncEngineNotRunning:
-      return "Sync engine is not running. Call startSyncEngine() first."
-    case .subscriptionNotFound(let id):
-      return "Subscription not found: \(id)"
-    case .invalidArgument(let message):
-      return "Invalid argument: \(message)"
-    }
-  }
-
-  // Expo's error protocol requires a code string for JS
-  var code: String {
-    switch self {
-    case .notConfigured:           return "NOT_CONFIGURED"
-    case .requiresiOS17:           return "REQUIRES_IOS_17"
-    case .notImplemented:          return "NOT_IMPLEMENTED"
-    case .syncEngineNotRunning:    return "SYNC_ENGINE_NOT_RUNNING"
-    case .subscriptionNotFound:    return "SUBSCRIPTION_NOT_FOUND"
-    case .invalidArgument:         return "INVALID_ARGUMENT"
-    }
+class CloudKitNotConfiguredException: Exception {
+  override var reason: String {
+    "ExpoCloudKit is not configured. Call configure(containerId) first."
   }
 }
 
-// MARK: - CKQueryOperation.Cursor serialization placeholder
-// In Phase A we return an opaque cursor string. This extension provides
-// a hook that Phase B can replace with real serialization.
-extension CKQueryOperation.Cursor {
-  static func fromData(_ data: Data) -> CKQueryOperation.Cursor? {
-    // CKQueryOperation.Cursor is not directly constructable from Data in the
-    // public API — the cursor must come from a previous query operation.
-    // This is a placeholder; real cursor passing is handled by storing the
-    // cursor object in memory between paginated calls (Phase A+).
-    return nil
+class CloudKitRequiresiOS17Exception: Exception {
+  override var reason: String {
+    "CKSyncEngine requires iOS 17 or later."
   }
+}
+
+class CloudKitNotImplementedException: Exception {
+  private let feature: String
+  init(_ feature: String) { self.feature = feature }
+  override var reason: String {
+    "\(feature) is not yet implemented in this phase of expo-cloudkit."
+  }
+}
+
+class CloudKitSyncEngineNotRunningException: Exception {
+  override var reason: String {
+    "Sync engine is not running. Call startSyncEngine() first."
+  }
+}
+
+class CloudKitSubscriptionNotFoundException: Exception {
+  private let subscriptionID: String
+  init(_ subscriptionID: String) { self.subscriptionID = subscriptionID }
+  override var reason: String {
+    "Subscription not found: \(subscriptionID)"
+  }
+}
+
+class CloudKitInvalidArgumentException: Exception {
+  private let message: String
+  init(_ message: String) { self.message = message }
+  override var reason: String {
+    "Invalid argument: \(message)"
+  }
+}
+
+// MARK: - CloudKitModuleError namespace
+//
+// This typealias-style enum is kept so that existing call sites compile
+// without modification. Each case now constructs the corresponding Exception
+// subclass, which Expo Modules Core serializes correctly to JS.
+
+enum CloudKitModuleError {
+  static var notConfigured: Exception         { CloudKitNotConfiguredException() }
+  static var requiresiOS17: Exception         { CloudKitRequiresiOS17Exception() }
+  static var syncEngineNotRunning: Exception  { CloudKitSyncEngineNotRunningException() }
+  static func notImplemented(_ f: String) -> Exception  { CloudKitNotImplementedException(f) }
+  static func subscriptionNotFound(_ id: String) -> Exception { CloudKitSubscriptionNotFoundException(id) }
+  static func invalidArgument(_ msg: String) -> Exception    { CloudKitInvalidArgumentException(msg) }
 }

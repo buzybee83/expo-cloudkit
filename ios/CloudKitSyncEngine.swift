@@ -104,18 +104,24 @@ final class CloudKitSyncEngineAdapter: CloudKitSyncProvider {
   }
 
   func enqueueSave(_ record: CKRecord) {
+    // Both the array append and the engine notification must happen inside the
+    // same pendingQueue.async block. If engine.state.add() is called first on
+    // the calling thread, nextRecordZoneChangeBatch can fire before the append
+    // completes, finding pendingSaves empty while the record ID is already
+    // registered as pending.
     pendingQueue.async { [weak self] in
-      self?.pendingSaves.append(record)
+      guard let self = self else { return }
+      self.pendingSaves.append(record)
+      self.engine?.state.add(pendingRecordZoneChanges: [.saveRecord(record.recordID)])
     }
-    // Notify the engine that there are pending changes to send.
-    engine?.state.add(pendingRecordZoneChanges: [.saveRecord(record.recordID)])
   }
 
   func enqueueDelete(_ recordID: CKRecord.ID) {
     pendingQueue.async { [weak self] in
-      self?.pendingDeletes.append(recordID)
+      guard let self = self else { return }
+      self.pendingDeletes.append(recordID)
+      self.engine?.state.add(pendingRecordZoneChanges: [.deleteRecord(recordID)])
     }
-    engine?.state.add(pendingRecordZoneChanges: [.deleteRecord(recordID)])
   }
 }
 
