@@ -135,3 +135,20 @@ export {
   fetchSharedDatabaseZones,
   addShareAcceptedListener,
 } from './ExpoCloudKit';
+
+// Phase C — React Hooks
+export {
+  useCloudKitRecord,
+  useCloudKitQuery,
+  useCloudKitSync,
+} from './hooks';
+
+export type {
+  UseCloudKitRecordOptions,
+  UseCloudKitRecordReturn,
+  UseCloudKitQueryOptions,
+  UseCloudKitQueryReturn,
+  UseCloudKitSyncOptions,
+  UseCloudKitSyncReturn,
+  CloudKitHookState,
+} from './hooks';
