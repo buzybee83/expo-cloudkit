@@ -9,6 +9,10 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+---
+
+## [0.2.0] — 2026-03-08
+
 ### Added
 
 **Phase B: CKSyncEngine (iOS 17+)**
@@ -89,4 +93,5 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 - Example app demonstrating configure, getAccountStatus, createZone, saveRecords, queryRecords
 
 [0.1.0]: https://github.com/atlas-ledger/expo-cloudkit/releases/tag/v0.1.0
-[Unreleased]: https://github.com/atlas-ledger/expo-cloudkit/compare/v0.1.0...HEAD
+[0.2.0]: https://github.com/atlas-ledger/expo-cloudkit/compare/v0.1.0...v0.2.0
+[Unreleased]: https://github.com/atlas-ledger/expo-cloudkit/compare/v0.2.0...HEAD
