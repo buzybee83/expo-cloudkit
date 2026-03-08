@@ -453,14 +453,16 @@ export type SyncEngineEvent =
   | RecordsSentEvent
   | SyncErrorEvent;
 
-/** A queued change for the sync engine to process on its next send cycle. */
-export interface PendingRecordChange {
-  type: 'save' | 'delete';
-  /** Required when type is 'save'. The record to save. */
-  record?: RecordToSave;
-  /** Required when type is 'delete'. The record to delete. */
-  recordIdentifier?: RecordIdentifier;
-}
+/**
+ * A queued change for the sync engine to process on its next send cycle.
+ *
+ * Discriminated union that makes invalid states unrepresentable at compile time:
+ * - `type: 'save'` requires `record` — omitting it is a TypeScript error.
+ * - `type: 'delete'` requires `recordIdentifier` — omitting it is a TypeScript error.
+ */
+export type PendingRecordChange =
+  | { type: 'save'; record: RecordToSave }
+  | { type: 'delete'; recordIdentifier: RecordIdentifier };
 
 // ---------------------------------------------------------------------------
 // Push Subscriptions (Phase B)
