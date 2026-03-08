@@ -83,7 +83,7 @@ export type {
 } from './types';
 
 // Errors
-export { CloudKitError, CloudKitErrorCode } from './errors';
+export { CloudKitError, CloudKitErrorCode, CloudKitNotSupportedError } from './errors';
 
 // Phase A — Container & Account
 export { configure, getAccountStatus, addAccountStatusListener } from './ExpoCloudKit';
