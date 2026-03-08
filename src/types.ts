@@ -396,6 +396,8 @@ export interface SyncStateChangedEvent {
  */
 export interface RecordsFetchedEvent {
   type: 'recordsFetched';
+  /** The name of the CloudKit record zone this event's records belong to. */
+  zoneName: string;
   /** Records that were inserted or modified on the server. */
   changedRecords: CloudKitRecord[];
   /** Identifiers of records deleted on the server since the last sync. */
