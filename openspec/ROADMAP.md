@@ -25,11 +25,13 @@
 - [ ] Silent push handling (APNs background mode entitlement via config plugin)
 
 ### CKShare
-- [ ] `createShare(recordID)` — share a record or zone
-- [ ] `acceptShare(url)` — accept a share invitation from a URL
-- [ ] `fetchShareParticipants(shareURL)` — list participants and their roles
-- [ ] `updateShareParticipant(participantID, role, permission)` — change access
-- [ ] Shared zone support in record/zone APIs
+- [x] `createShare(recordName:)` — share a record; saves CKShare + root record via CKModifyRecordsOperation
+- [x] `acceptShare(shareURL:)` + `addShareAcceptedListener` — accept a share invitation from a URL; emits `onShareAccepted` on deep link open
+- [x] `fetchShareParticipants(shareRecordName:)` — list participants and their roles from the CKShare record
+- [x] `updateSharePermission` + `removeShareParticipant` — change or revoke participant access
+- [x] `fetchSharedDatabaseZones()` — list all zones in the shared database with attached share/participant info
+- [x] `presentSharingUI()` — present UICloudSharingController for create-share and manage-participants modes
+- [x] `deleteShare(shareRecordName:)` — unshare a record by deleting its CKShare
 
 ### iOS 16 Fallback
 - [x] `CKServerChangeToken` persistence and management
