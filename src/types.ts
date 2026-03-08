@@ -321,6 +321,111 @@ export interface SharedZone {
 }
 
 // ---------------------------------------------------------------------------
+// Sharing — CKShare options interfaces (Phase B)
+// ---------------------------------------------------------------------------
+
+/**
+ * Options for `createShare()`.
+ * Creates a new CKShare record for the specified root record, making it
+ * eligible for sharing with other iCloud users.
+ */
+export interface CreateShareOptions {
+  /** recordName of the root record to share. */
+  recordName: string;
+  /** Zone the root record lives in. Omit for the default zone. */
+  zoneName?: string;
+  /** Database the root record lives in. Default: 'private'. */
+  database?: DatabaseScope;
+  /**
+   * Permission level granted to anyone who joins via the share URL.
+   * Default: 'readOnly'.
+   */
+  publicPermission?: SharePermission;
+}
+
+/**
+ * Options for `deleteShare()`.
+ * Deletes a CKShare record and revokes access for all participants.
+ */
+export interface DeleteShareOptions {
+  /** recordName of the CKShare record to delete. */
+  shareRecordName: string;
+  /** Zone the share lives in. Omit for the default zone. */
+  zoneName?: string;
+  /** Database the share lives in. Default: 'private'. */
+  database?: DatabaseScope;
+}
+
+/**
+ * Options for `presentSharingUI()`.
+ * Presents the system UICloudSharingController for the specified record.
+ */
+export interface PresentSharingOptions {
+  /** recordName of the root record whose share to manage. */
+  recordName: string;
+  /** Zone the root record lives in. Omit for the default zone. */
+  zoneName?: string;
+  /** Database the root record lives in. Default: 'private'. */
+  database?: DatabaseScope;
+  /**
+   * Initial public permission to set on a newly created share.
+   * Ignored if a CKShare already exists for the record.
+   */
+  permission?: SharePermission;
+}
+
+/**
+ * Options for `fetchShareParticipants()`.
+ * Returns the current list of participants on an existing share.
+ */
+export interface FetchParticipantsOptions {
+  /** recordName of the CKShare record to inspect. */
+  shareRecordName: string;
+  /** Zone the share lives in. Omit for the default zone. */
+  zoneName?: string;
+  /** Database the share lives in. Default: 'private'. */
+  database?: DatabaseScope;
+}
+
+/**
+ * Options for `updateSharePermission()`.
+ * Changes the permission of a specific participant on a share.
+ */
+export interface UpdatePermissionOptions {
+  /** recordName of the CKShare record to update. */
+  shareRecordName: string;
+  /** recordName of the participant whose permission to change. */
+  participantRecordName: string;
+  /** New permission level to assign to the participant. */
+  permission: ParticipantPermission;
+  /** Zone the share lives in. Omit for the default zone. */
+  zoneName?: string;
+}
+
+/**
+ * Options for `removeShareParticipant()`.
+ * Removes a participant from a share, revoking their access.
+ */
+export interface RemoveParticipantOptions {
+  /** recordName of the CKShare record to update. */
+  shareRecordName: string;
+  /** recordName of the participant to remove. */
+  participantRecordName: string;
+  /** Zone the share lives in. Omit for the default zone. */
+  zoneName?: string;
+}
+
+/**
+ * Options for `acceptShare()`.
+ * Accepts a share invitation via its URL, making the shared zone accessible
+ * in the current user's shared database.
+ */
+export interface AcceptShareOptions {
+  /** The CKShare URL from the invitation (e.g. `https://www.icloud.com/share/...`). */
+  shareURL: string;
+}
+
+// ---------------------------------------------------------------------------
 // CKSyncEngine (Phase B — iOS 17+)
 // ---------------------------------------------------------------------------
 

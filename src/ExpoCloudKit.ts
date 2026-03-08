@@ -12,24 +12,36 @@ import { EventEmitter, requireNativeModule } from 'expo-modules-core';
 
 import { CloudKitError, CloudKitErrorCode } from './errors';
 import type {
+  AcceptedShare,
+  AcceptShareOptions,
   AccountStatus,
   AssetProgress,
   CloudKitRecord,
   CloudKitSubscription,
+  CreateShareOptions,
   DatabaseScope,
+  DeleteShareOptions,
+  FetchParticipantsOptions,
   PendingRecordChange,
+  PresentSharingOptions,
   QueryPredicate,
   QueryResult,
   RecordIdentifier,
   RecordToSave,
+  RemoveParticipantOptions,
   SavedRecord,
   SaveQuerySubscriptionOptions,
+  Share,
+  SharedZone,
+  ShareParticipant,
+  SharingUIResult,
   SortDescriptor,
   Subscription,
   SubscriptionEvent,
   SyncEngineConfig,
   SyncEngineEvent,
   SyncState,
+  UpdatePermissionOptions,
   Zone,
   ZoneChanges,
 } from './types';
@@ -576,5 +588,209 @@ export function addSubscriptionListener(
 ): Subscription {
   assertNativeAvailable();
   const subscription = emitter!.addListener('onSubscriptionEvent', callback);
+  return { remove: () => subscription.remove() };
+}
+
+// ---------------------------------------------------------------------------
+// CKShare (Phase B)
+// ---------------------------------------------------------------------------
+
+/**
+ * Creates a new CKShare for the specified root record, enabling it to be
+ * shared with other iCloud users.
+ *
+ * Internally calls `CKModifyRecordsOperation` to save the new CKShare record.
+ * A record can only be the root of one active share at a time.
+ *
+ * @param options - Root record identifier, zone, database, and initial public permission.
+ * @returns The newly created Share record, including the share URL.
+ * @throws {CloudKitError} code ALREADY_SHARED if the record is already shared.
+ * @throws {CloudKitError} code NOT_AUTHENTICATED if the user is not signed in.
+ * @throws {CloudKitError} code NETWORK_UNAVAILABLE if the device is offline.
+ *
+ * @example
+ * ```typescript
+ * const share = await createShare({ recordName: 'abc123', zoneName: 'MyZone' });
+ * console.log(share.shareURL); // https://www.icloud.com/share/...
+ * ```
+ */
+export function createShare(options: CreateShareOptions): Promise<Share> {
+  return callAsync(() => NativeModule!.createShare(options));
+}
+
+/**
+ * Deletes an existing CKShare record, revoking access for all participants.
+ *
+ * The root record is not deleted — only the share relationship is removed.
+ *
+ * @param options - Share record name, zone, and database.
+ * @throws {CloudKitError} code SHARE_NOT_FOUND if the share record does not exist.
+ * @throws {CloudKitError} code NOT_AUTHENTICATED if the user is not signed in.
+ *
+ * @example
+ * ```typescript
+ * await deleteShare({ shareRecordName: 'share-uuid', zoneName: 'MyZone' });
+ * ```
+ */
+export function deleteShare(options: DeleteShareOptions): Promise<void> {
+  return callAsync(() => NativeModule!.deleteShare(options));
+}
+
+/**
+ * Presents the system `UICloudSharingController` for the specified record.
+ *
+ * Creates a share if one does not already exist, then shows the sharing sheet.
+ * The promise resolves when the user dismisses the controller.
+ *
+ * @param options - Root record identifier, zone, database, and initial permission.
+ * @returns An outcome ('shared' | 'cancelled') plus the current Share state.
+ * @throws {CloudKitError} code SHARING_UI_UNAVAILABLE if no view controller is available.
+ * @throws {CloudKitError} code NOT_AUTHENTICATED if the user is not signed in.
+ *
+ * @example
+ * ```typescript
+ * const result = await presentSharingUI({ recordName: 'abc123', zoneName: 'MyZone' });
+ * if (result.outcome === 'shared') {
+ *   console.log(result.share?.shareURL);
+ * }
+ * ```
+ */
+export function presentSharingUI(options: PresentSharingOptions): Promise<SharingUIResult> {
+  return callAsync(() => NativeModule!.presentSharingUI(options));
+}
+
+/**
+ * Returns the current list of participants on an existing share.
+ *
+ * Includes the owner and all invited users with their acceptance status
+ * and permission levels.
+ *
+ * @param options - Share record name, zone, and database.
+ * @returns Array of ShareParticipant objects.
+ * @throws {CloudKitError} code SHARE_NOT_FOUND if the share record does not exist.
+ * @throws {CloudKitError} code NOT_AUTHENTICATED if the user is not signed in.
+ *
+ * @example
+ * ```typescript
+ * const participants = await fetchShareParticipants({ shareRecordName: 'share-uuid' });
+ * participants.forEach(p => console.log(p.participantRecordName, p.acceptanceStatus));
+ * ```
+ */
+export function fetchShareParticipants(
+  options: FetchParticipantsOptions
+): Promise<ShareParticipant[]> {
+  return callAsync(() => NativeModule!.fetchShareParticipants(options));
+}
+
+/**
+ * Changes the permission level of a specific participant on a share.
+ *
+ * The owner's permission cannot be changed.
+ *
+ * @param options - Share record name, participant record name, new permission, and zone.
+ * @returns The updated Share record reflecting the new participant permission.
+ * @throws {CloudKitError} code SHARE_NOT_FOUND if the share record does not exist.
+ * @throws {CloudKitError} code PARTICIPANT_NOT_FOUND if the participant is not on the share.
+ * @throws {CloudKitError} code PERMISSION_DENIED if the caller is not the share owner.
+ *
+ * @example
+ * ```typescript
+ * const updated = await updateSharePermission({
+ *   shareRecordName: 'share-uuid',
+ *   participantRecordName: 'participant-uuid',
+ *   permission: 'readWrite',
+ * });
+ * ```
+ */
+export function updateSharePermission(options: UpdatePermissionOptions): Promise<Share> {
+  return callAsync(() => NativeModule!.updateSharePermission(options));
+}
+
+/**
+ * Removes a participant from a share, revoking their access to the shared zone.
+ *
+ * @param options - Share record name, participant record name, and zone.
+ * @returns The updated Share record after the participant is removed.
+ * @throws {CloudKitError} code SHARE_NOT_FOUND if the share record does not exist.
+ * @throws {CloudKitError} code PARTICIPANT_NOT_FOUND if the participant is not on the share.
+ * @throws {CloudKitError} code PERMISSION_DENIED if the caller is not the share owner.
+ *
+ * @example
+ * ```typescript
+ * const updated = await removeShareParticipant({
+ *   shareRecordName: 'share-uuid',
+ *   participantRecordName: 'participant-uuid',
+ * });
+ * ```
+ */
+export function removeShareParticipant(options: RemoveParticipantOptions): Promise<Share> {
+  return callAsync(() => NativeModule!.removeShareParticipant(options));
+}
+
+/**
+ * Accepts a share invitation via its URL, making the shared zone accessible
+ * in the current user's shared database.
+ *
+ * Call `fetchSharedDatabaseZones()` after acceptance to enumerate what was shared.
+ *
+ * @param options - The share URL from the invitation link.
+ * @returns The accepted share metadata including zone name and owner.
+ * @throws {CloudKitError} code SHARE_NOT_FOUND if the share URL is invalid or expired.
+ * @throws {CloudKitError} code NOT_AUTHENTICATED if the user is not signed in.
+ *
+ * @example
+ * ```typescript
+ * const accepted = await acceptShare({ shareURL: 'https://www.icloud.com/share/...' });
+ * console.log(accepted.zoneName, accepted.ownerName);
+ * ```
+ */
+export function acceptShare(options: AcceptShareOptions): Promise<AcceptedShare> {
+  return callAsync(() => NativeModule!.acceptShare(options));
+}
+
+/**
+ * Returns all zones currently accessible in the shared database.
+ *
+ * Each SharedZone includes the zone name, owner, share record name, and
+ * the list of participants who have access.
+ *
+ * @returns Array of SharedZone objects.
+ * @throws {CloudKitError} code NOT_AUTHENTICATED if the user is not signed in.
+ * @throws {CloudKitError} code NETWORK_UNAVAILABLE if the device is offline.
+ *
+ * @example
+ * ```typescript
+ * const zones = await fetchSharedDatabaseZones();
+ * zones.forEach(z => console.log(z.zoneName, z.ownerName));
+ * ```
+ */
+export function fetchSharedDatabaseZones(): Promise<SharedZone[]> {
+  return callAsync(() => NativeModule!.fetchSharedDatabaseZones());
+}
+
+/**
+ * Registers a listener for `onShareAccepted` events.
+ *
+ * Fires when the system routes a share acceptance URL to the app (e.g. via
+ * universal links or the Sharing sheet). Call `fetchSharedDatabaseZones()`
+ * inside the callback to retrieve the newly accessible shared zone.
+ *
+ * @param callback - Called on the main thread when a share acceptance event fires.
+ * @returns A Subscription handle; call `.remove()` to stop receiving events.
+ *
+ * @example
+ * ```typescript
+ * const sub = addShareAcceptedListener((result) => {
+ *   console.log('Share accepted:', result.zoneName, result.ownerName);
+ * });
+ * // Later:
+ * sub.remove();
+ * ```
+ */
+export function addShareAcceptedListener(
+  callback: (result: AcceptedShare) => void
+): Subscription {
+  assertNativeAvailable();
+  const subscription = emitter!.addListener('onShareAccepted', callback);
   return { remove: () => subscription.remove() };
 }
