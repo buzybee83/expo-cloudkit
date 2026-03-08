@@ -469,16 +469,18 @@ public class ExpoCloudKitModule: Module {
       let zoneName = options["zoneName"] as? String
       let zoneID = zoneName.map { CKRecordZone.ID(zoneName: $0, ownerName: CKCurrentUserDefaultName) }
 
-      // Map option flag strings to CKQuerySubscription.Options bitmask
-      let flagStrings = options["options"] as? [String] ?? ["firesOnRecordCreation", "firesOnRecordUpdate", "firesOnRecordDeletion"]
+      // Read boolean trigger flags directly from the options dict.
+      // Default to true when absent — consistent with CloudKit's default behaviour
+      // for new subscriptions where all three event types are enabled.
       var subscriptionOptions: CKQuerySubscription.Options = []
-      for flag in flagStrings {
-        switch flag {
-        case "firesOnRecordCreation": subscriptionOptions.insert(.firesOnRecordCreation)
-        case "firesOnRecordUpdate":   subscriptionOptions.insert(.firesOnRecordUpdate)
-        case "firesOnRecordDeletion": subscriptionOptions.insert(.firesOnRecordDeletion)
-        default: break
-        }
+      if options["firesOnRecordCreation"] as? Bool ?? true {
+        subscriptionOptions.insert(.firesOnRecordCreation)
+      }
+      if options["firesOnRecordUpdate"] as? Bool ?? true {
+        subscriptionOptions.insert(.firesOnRecordUpdate)
+      }
+      if options["firesOnRecordDeletion"] as? Bool ?? true {
+        subscriptionOptions.insert(.firesOnRecordDeletion)
       }
 
       manager.saveQuerySubscription(
