@@ -46,6 +46,7 @@ export type {
   SharePermission,
   SharingUIResult,
   AcceptedShare,
+  ShareInvitationEvent,
   ParticipantAcceptanceStatus,
   ParticipantPermission,
   ParticipantRole,

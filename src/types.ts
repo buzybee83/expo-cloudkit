@@ -292,6 +292,19 @@ export interface AcceptedShare {
   shareRecordName: string;
 }
 
+/**
+ * Event emitted by `addShareAcceptedListener` when the system routes a
+ * CloudKit share URL to the app (e.g. via universal link or Sharing sheet).
+ *
+ * This event fires *before* the share has been accepted — only the URL is
+ * available at this point. Pass `shareURL` to `acceptShare()` to complete
+ * the acceptance flow and gain access to the shared zone.
+ */
+export interface ShareInvitationEvent {
+  /** The CloudKit share URL the app was opened with. Pass this to acceptShare() to complete the flow. */
+  shareURL: string;
+}
+
 export type ParticipantRole = 'owner' | 'privateUser' | 'publicUser' | 'unknown';
 export type ParticipantPermission = 'none' | 'readOnly' | 'readWrite' | 'unknown';
 export type ParticipantAcceptanceStatus =

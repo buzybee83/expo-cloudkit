@@ -33,6 +33,7 @@ import type {
   SaveQuerySubscriptionOptions,
   Share,
   SharedZone,
+  ShareInvitationEvent,
   ShareParticipant,
   SharingUIResult,
   SortDescriptor,
@@ -771,24 +772,28 @@ export function fetchSharedDatabaseZones(): Promise<SharedZone[]> {
 /**
  * Registers a listener for `onShareAccepted` events.
  *
- * Fires when the system routes a share acceptance URL to the app (e.g. via
- * universal links or the Sharing sheet). Call `fetchSharedDatabaseZones()`
- * inside the callback to retrieve the newly accessible shared zone.
+ * Fires when the system routes a CloudKit share URL to the app (e.g. via
+ * universal links or the Sharing sheet). At this point the share has NOT yet
+ * been accepted — only the URL is available. Pass `event.shareURL` to
+ * `acceptShare()` to complete the acceptance flow and gain access to the
+ * shared zone.
  *
- * @param callback - Called on the main thread when a share acceptance event fires.
+ * @param callback - Called on the main thread when a share invitation URL arrives.
  * @returns A Subscription handle; call `.remove()` to stop receiving events.
  *
  * @example
  * ```typescript
- * const sub = addShareAcceptedListener((result) => {
- *   console.log('Share accepted:', result.zoneName, result.ownerName);
+ * const sub = addShareAcceptedListener((event) => {
+ *   acceptShare({ shareURL: event.shareURL }).then((accepted) => {
+ *     console.log('Share accepted:', accepted.zoneName, accepted.ownerName);
+ *   });
  * });
  * // Later:
  * sub.remove();
  * ```
  */
 export function addShareAcceptedListener(
-  callback: (result: AcceptedShare) => void
+  callback: (event: ShareInvitationEvent) => void
 ): Subscription {
   assertNativeAvailable();
   const subscription = emitter!.addListener('onShareAccepted', callback);
