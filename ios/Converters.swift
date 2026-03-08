@@ -390,6 +390,49 @@ enum Converters {
     ]
   }
 
+  // MARK: - CKSubscription → Dictionary
+
+  /// Converts a `CKSubscription` (either `CKQuerySubscription` or
+  /// `CKDatabaseSubscription`) to a JS-bridge-safe dictionary.
+  ///
+  /// Shape:
+  /// ```json
+  /// {
+  ///   "id":         "expo-ck-query-...",
+  ///   "type":       "query" | "database" | "unknown",
+  ///   "recordType": "Note",          // query subscriptions only
+  ///   "zoneID":     { "zoneName": "...", "ownerName": "..." }  // query, if set
+  /// }
+  /// ```
+  ///
+  /// Note: `CKSubscription` does not expose which database the subscription
+  /// was registered on. Callers should track database scope at registration time.
+  static func toSubscriptionDict(_ subscription: CKSubscription) -> [String: Any] {
+    var dict: [String: Any] = [
+      "id": subscription.subscriptionID
+    ]
+
+    switch subscription {
+    case let query as CKQuerySubscription:
+      dict["type"] = "query"
+      dict["recordType"] = query.recordType
+      if let zoneID = query.zoneID {
+        dict["zoneID"] = [
+          "zoneName": zoneID.zoneName,
+          "ownerName": zoneID.ownerName
+        ]
+      }
+
+    case _ as CKDatabaseSubscription:
+      dict["type"] = "database"
+
+    default:
+      dict["type"] = "unknown"
+    }
+
+    return dict
+  }
+
   // MARK: - Private helpers
 
   private static func isoString(from date: Date?) -> String? {
