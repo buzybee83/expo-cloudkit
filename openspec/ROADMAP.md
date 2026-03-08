@@ -9,7 +9,7 @@
 - [x] TypeScript bindings and type definitions (`src/types.ts`, `src/index.ts`)
 - [x] Expo config plugin (iCloud entitlements in `plugin/`)
 
-## Phase B — Sync & Sharing (in progress)
+## Phase B — Sync & Sharing (complete)
 
 ### CKSyncEngine (iOS 17+)
 - [x] `ios/ExpoCloudKitSyncEngine.swift` adapter implementing `CKSyncEngineDelegate`
@@ -19,10 +19,10 @@
 - [x] JS events: `onSyncStateChanged`, `onRecordsReceived`, `onRecordsSent`
 
 ### Push Subscriptions
-- [ ] `CKQuerySubscription` — subscribe to record changes matching a predicate
-- [ ] `CKDatabaseSubscription` — subscribe to all changes in a database
-- [ ] `addEventListener` / `removeEventListener` JS API for subscription events
-- [ ] Silent push handling (APNs background mode entitlement via config plugin)
+- [x] `CKQuerySubscription` — subscribe to record changes matching a predicate
+- [x] `CKDatabaseSubscription` — subscribe to all changes in a database
+- [x] `addEventListener` / `removeEventListener` JS API for subscription events
+- [x] Silent push handling (APNs background mode entitlement via config plugin)
 
 ### CKShare
 - [x] `createShare(recordName:)` — share a record; saves CKShare + root record via CKModifyRecordsOperation
