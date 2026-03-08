@@ -46,9 +46,18 @@ export type {
   SharePermission,
   SharingUIResult,
   AcceptedShare,
+  ShareInvitationEvent,
   ParticipantAcceptanceStatus,
   ParticipantPermission,
   ParticipantRole,
+  // Phase B — CKShare options
+  CreateShareOptions,
+  DeleteShareOptions,
+  PresentSharingOptions,
+  FetchParticipantsOptions,
+  UpdatePermissionOptions,
+  RemoveParticipantOptions,
+  AcceptShareOptions,
   SortDescriptor,
   Subscription,
   // Phase B — CKSyncEngine
@@ -112,4 +121,17 @@ export {
   deleteSubscription,
   fetchSubscriptions,
   addSubscriptionListener,
+} from './ExpoCloudKit';
+
+// Phase B — CKShare
+export {
+  createShare,
+  deleteShare,
+  presentSharingUI,
+  fetchShareParticipants,
+  updateSharePermission,
+  removeShareParticipant,
+  acceptShare,
+  fetchSharedDatabaseZones,
+  addShareAcceptedListener,
 } from './ExpoCloudKit';

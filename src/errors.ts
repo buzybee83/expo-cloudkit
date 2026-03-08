@@ -68,6 +68,39 @@ export enum CloudKitErrorCode {
    * It may have already been deleted or was never created.
    */
   SUBSCRIPTION_NOT_FOUND = 'SUBSCRIPTION_NOT_FOUND',
+
+  // Phase B — CKShare
+
+  /**
+   * The record is already shared. A record can only be the root of one CKShare at a time.
+   */
+  ALREADY_SHARED = 'ALREADY_SHARED',
+
+  /**
+   * A participant must verify their identity before they can be added to a share.
+   */
+  PARTICIPANT_NEEDS_VERIFICATION = 'PARTICIPANT_NEEDS_VERIFICATION',
+
+  /**
+   * The operation would violate a CKRecord reference integrity constraint.
+   */
+  REFERENCE_VIOLATION = 'REFERENCE_VIOLATION',
+
+  /**
+   * The specified CKShare record does not exist.
+   */
+  SHARE_NOT_FOUND = 'SHARE_NOT_FOUND',
+
+  /**
+   * The specified participant was not found on the share.
+   */
+  PARTICIPANT_NOT_FOUND = 'PARTICIPANT_NOT_FOUND',
+
+  /**
+   * The sharing UI could not be presented (e.g. no view controller available or
+   * UICloudSharingController is unavailable on this OS version).
+   */
+  SHARING_UI_UNAVAILABLE = 'SHARING_UI_UNAVAILABLE',
 }
 
 /**
