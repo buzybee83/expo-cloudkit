@@ -51,9 +51,16 @@ export type {
   ParticipantRole,
   SortDescriptor,
   Subscription,
+  // Phase B — CKSyncEngine
   SyncEngineConfig,
   SyncEngineEvent,
   SyncEngineEventType,
+  SyncProviderStatus,
+  SyncState,
+  SyncStateChangedEvent,
+  RecordsFetchedEvent,
+  RecordsSentEvent,
+  SyncErrorEvent,
   Zone,
   ZoneChanges,
 } from './types';
@@ -80,6 +87,7 @@ export {
 export {
   isSyncEngineAvailable,
   startSyncEngine,
+  getSyncState,
   triggerSync,
   enqueuePendingChange,
   addSyncEngineListener,

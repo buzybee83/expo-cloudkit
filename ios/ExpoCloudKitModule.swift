@@ -21,6 +21,16 @@ public class ExpoCloudKitModule: Module {
   private var zoneManager: CloudKitZoneManager?
   private var recordManager: CloudKitRecordManager?
 
+  // MARK: - Sync provider (Phase B)
+
+  /// Active sync provider — either CKSyncEngine adapter (iOS 17+) or the
+  /// manual fallback (iOS 16). Nil when sync has not been started or was stopped.
+  private var syncProvider: CloudKitSyncProvider?
+
+  /// Manages UserDefaults persistence for change tokens and engine state.
+  /// Lazily created on first `startSyncEngine()` call.
+  private var tokenStore: ChangeTokenStore?
+
   // MARK: - Module Definition
 
   public func definition() -> ModuleDefinition {
@@ -193,7 +203,7 @@ public class ExpoCloudKitModule: Module {
         return
       }
       let scope = Converters.toDatabaseScope(database)
-      let predicate = predicateDict != nil ? Converters.toPredicate(from: predicateDict!) : NSPredicate(value: true)
+      let predicate = predicateDict.map { Converters.toPredicate(from: $0) } ?? NSPredicate(value: true)
       let sortDescriptors = sortDescriptorDicts?.compactMap { Converters.toNSSortDescriptor(from: $0) }
 
       recordManager.queryRecords(
@@ -270,25 +280,121 @@ public class ExpoCloudKitModule: Module {
       return false
     }
 
-    AsyncFunction("startSyncEngine") { (_: [String: Any], promise: Promise) in
+    /// Starts sync for the specified zones.
+    /// On iOS 17+ uses CKSyncEngine; on iOS 16 uses timer-based polling fallback.
+    AsyncFunction("startSyncEngine") { [weak self] (config: [String: Any], promise: Promise) in
+      guard let self = self, let container = self.container else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+
+      let zoneNames = config["zones"] as? [String] ?? []
+      let dbString = config["database"] as? String ?? "private"
+      let autoSync = config["automaticallySync"] as? Bool ?? true
+      let scope = Converters.toDatabaseScope(dbString)
+
+      let zoneIDs = zoneNames.map {
+        CKRecordZone.ID(zoneName: $0, ownerName: CKCurrentUserDefaultName)
+      }
+
+      // Lazily create the token store keyed by container identifier.
+      if self.tokenStore == nil {
+        let containerID = container.ckContainer.containerIdentifier ?? "default"
+        self.tokenStore = ChangeTokenStore(containerIdentifier: containerID)
+      }
+
+      guard let store = self.tokenStore else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+
+      // Stop any existing provider before starting a new one.
+      self.syncProvider?.stop()
+      self.syncProvider = nil
+
+      let provider: CloudKitSyncProvider
       if #available(iOS 17.0, *) {
-        // Phase B: CKSyncEngineWrapper.start(config) goes here
-        promise.reject(CloudKitModuleError.notImplemented("CKSyncEngine (Phase B)"))
+        provider = CloudKitSyncEngineAdapter(
+          ckContainer: container.ckContainer,
+          tokenStore: store
+        )
       } else {
-        promise.reject(CloudKitModuleError.requiresiOS17)
+        provider = CloudKitSyncFallbackAdapter(
+          ckContainer: container.ckContainer,
+          tokenStore: store
+        )
+      }
+
+      self.syncProvider = provider
+
+      provider.start(
+        zones: zoneIDs,
+        database: scope,
+        automaticallySync: autoSync,
+        eventHandler: { [weak self] event in
+          self?.handleSyncEvent(event)
+        }
+      )
+
+      promise.resolve(nil)
+    }
+
+    /// Returns the current sync state synchronously from in-memory provider state.
+    Function("getSyncState") { [weak self] () -> [String: Any] in
+      guard let provider = self?.syncProvider else {
+        return [
+          "usesSyncEngine": false,
+          "status": SyncProviderState.notStarted.rawValue
+        ]
+      }
+      return [
+        "usesSyncEngine": provider.usesSyncEngine,
+        "status": provider.state.rawValue
+      ]
+    }
+
+    /// Manually triggers a sync cycle. Rejects if sync engine is not running.
+    AsyncFunction("triggerSync") { [weak self] (promise: Promise) in
+      guard let provider = self?.syncProvider else {
+        promise.reject(CloudKitModuleError.syncEngineNotRunning)
+        return
+      }
+      provider.triggerSync()
+      promise.resolve(nil)
+    }
+
+    /// Enqueues a pending record save or delete for the next sync cycle.
+    /// Silently drops malformed entries — callers should validate before enqueuing.
+    Function("enqueuePendingChange") { [weak self] (changeDict: [String: Any]) in
+      guard let provider = self?.syncProvider else { return }
+
+      let changeType = changeDict["type"] as? String ?? ""
+
+      if changeType == "save", let recordDict = changeDict["record"] as? [String: Any] {
+        guard let record = try? Converters.toCKRecord(from: recordDict) else { return }
+        provider.enqueueSave(record)
+      } else if changeType == "delete",
+                let idDict = changeDict["recordIdentifier"] as? [String: Any],
+                let recordName = idDict["recordName"] as? String {
+        let zoneName = idDict["zoneName"] as? String
+        let zoneID = zoneName.map {
+          CKRecordZone.ID(zoneName: $0, ownerName: CKCurrentUserDefaultName)
+        } ?? CKRecordZone.ID.default
+        let recordID = CKRecord.ID(recordName: recordName, zoneID: zoneID)
+        provider.enqueueDelete(recordID)
       }
     }
 
-    AsyncFunction("triggerSync") { (promise: Promise) in
-      promise.reject(CloudKitModuleError.notImplemented("triggerSync (Phase B)"))
-    }
-
-    Function("enqueuePendingChange") { (_: [String: Any]) in
-      // Phase B stub
-    }
-
-    AsyncFunction("stopSyncEngine") { (promise: Promise) in
-      promise.reject(CloudKitModuleError.notImplemented("stopSyncEngine (Phase B)"))
+    /// Stops the sync provider and releases its resources.
+    /// Rejects if sync engine is not running.
+    AsyncFunction("stopSyncEngine") { [weak self] (promise: Promise) in
+      guard let provider = self?.syncProvider else {
+        promise.reject(CloudKitModuleError.syncEngineNotRunning)
+        return
+      }
+      provider.stop()
+      self?.syncProvider = nil
+      promise.resolve(nil)
     }
 
     // -------------------------------------------------------------------------
@@ -301,12 +407,85 @@ public class ExpoCloudKitModule: Module {
   }
 }
 
+// MARK: - Sync Event Bridging
+
+extension ExpoCloudKitModule {
+
+  /// Converts a `SyncProviderEvent` to a JS-bridge dictionary and dispatches it
+  /// via `sendEvent("onSyncEngineEvent", ...)` on the main queue.
+  ///
+  /// All sync events flow through the single `"onSyncEngineEvent"` channel,
+  /// differentiated by the `type` field. JS callers filter by `event.type`.
+  func handleSyncEvent(_ event: SyncProviderEvent) {
+    let payload: [String: Any]
+
+    switch event {
+    case .stateChanged(let newState):
+      payload = [
+        "type": "stateChanged",
+        "state": [
+          "usesSyncEngine": syncProvider?.usesSyncEngine ?? false,
+          "status": newState.rawValue
+        ]
+      ]
+
+    case .recordsFetched(let changed, let deleted, let zoneName):
+      payload = [
+        "type": "recordsFetched",
+        "changedRecords": changed.map { Converters.toDictionary($0) },
+        "deletedRecordIDs": deleted.map { id in
+          [
+            "recordName": id.recordName,
+            "zoneName": id.zoneID.zoneName
+          ] as [String: Any]
+        },
+        "zoneName": zoneName
+      ]
+
+    case .recordsSent(let saved, let failed):
+      payload = [
+        "type": "recordsSent",
+        "savedRecords": saved.map { Converters.toDictionary($0) },
+        "failedRecords": failed.map { (recordID, error) -> [String: Any] in
+          var dict: [String: Any] = [
+            "recordIdentifier": [
+              "recordName": recordID.recordName,
+              "zoneName": recordID.zoneID.zoneName
+            ] as [String: Any],
+            "error": Converters.toErrorDict(error)
+          ]
+          // Attach server record for conflict errors so JS can implement
+          // custom merge logic if desired.
+          if let ckError = error as? CKError,
+             ckError.code == .serverRecordChanged,
+             let serverRecord = ckError.serverRecord {
+            dict["serverRecord"] = Converters.toDictionary(serverRecord)
+          }
+          return dict
+        }
+      ]
+
+    case .syncError(let error):
+      payload = [
+        "type": "syncError",
+        "error": Converters.toErrorDict(error)
+      ]
+    }
+
+    // Expo requires sendEvent on the main thread.
+    DispatchQueue.main.async { [weak self] in
+      self?.sendEvent("onSyncEngineEvent", payload)
+    }
+  }
+}
+
 // MARK: - Module-level error codes
 
 enum CloudKitModuleError: Error, LocalizedError {
   case notConfigured
   case requiresiOS17
   case notImplemented(String)
+  case syncEngineNotRunning
 
   var errorDescription: String? {
     switch self {
@@ -316,15 +495,18 @@ enum CloudKitModuleError: Error, LocalizedError {
       return "CKSyncEngine requires iOS 17 or later."
     case .notImplemented(let feature):
       return "\(feature) is not yet implemented in this phase of expo-cloudkit."
+    case .syncEngineNotRunning:
+      return "Sync engine is not running. Call startSyncEngine() first."
     }
   }
 
   // Expo's error protocol requires a code string for JS
   var code: String {
     switch self {
-    case .notConfigured: return "NOT_CONFIGURED"
-    case .requiresiOS17: return "REQUIRES_IOS_17"
-    case .notImplemented: return "NOT_IMPLEMENTED"
+    case .notConfigured:         return "NOT_CONFIGURED"
+    case .requiresiOS17:         return "REQUIRES_IOS_17"
+    case .notImplemented:        return "NOT_IMPLEMENTED"
+    case .syncEngineNotRunning:  return "SYNC_ENGINE_NOT_RUNNING"
     }
   }
 }

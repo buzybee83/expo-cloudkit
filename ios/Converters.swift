@@ -349,6 +349,10 @@ enum Converters {
       code = "ASSET_TOO_LARGE"
     case .limitExceeded:
       code = "LIMIT_EXCEEDED"
+    case .changeTokenExpired:
+      code = "TOKEN_EXPIRED"
+    case .accountTemporarilyUnavailable:
+      code = "NOT_AUTHENTICATED"
     default:
       code = "UNKNOWN"
       if let retryAfter = ckError.retryAfterSeconds {
@@ -362,6 +366,28 @@ enum Converters {
       retryAfterSeconds: retryAfterSeconds,
       serverRecord: serverRecord
     )
+  }
+
+  // MARK: - Error Dictionary (for event payloads, not Promise rejection)
+
+  /// Converts an Error to a simple `{code, message}` dictionary for use in
+  /// sync event payloads sent over `sendEvent`. Not used for Promise rejection
+  /// (use `toExpoError` for that).
+  static func toErrorDict(_ error: Error) -> [String: Any] {
+    if let ckError = error as? CKError {
+      let bridgeError = toExpoError(ckError) as? ExpoCloudKitBridgeError
+      return [
+        "code": bridgeError?.code ?? "UNKNOWN",
+        "message": bridgeError?.message ?? ckError.localizedDescription
+      ]
+    }
+    // All other error types (including SyncAdapterError) fall through to the
+    // generic path. LocalizedError.errorDescription is used when available.
+    let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+    return [
+      "code": "UNKNOWN",
+      "message": message
+    ]
   }
 
   // MARK: - Private helpers

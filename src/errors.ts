@@ -39,6 +39,27 @@ export enum CloudKitErrorCode {
   LIMIT_EXCEEDED = 'LIMIT_EXCEEDED',
   /** An unexpected error occurred. Check `message` for details. */
   UNKNOWN = 'UNKNOWN',
+
+  // Phase B — CKSyncEngine
+
+  /**
+   * `startSyncEngine()` has not been called, or `stopSyncEngine()` was already
+   * called. Call `startSyncEngine()` before using sync-engine operations.
+   */
+  SYNC_ENGINE_NOT_RUNNING = 'SYNC_ENGINE_NOT_RUNNING',
+
+  /**
+   * The stored CKServerChangeToken or CKSyncEngine state is no longer valid.
+   * The sync provider will automatically perform a full re-sync from the beginning.
+   * This code is informational; no action is required by the caller.
+   */
+  TOKEN_EXPIRED = 'TOKEN_EXPIRED',
+
+  /**
+   * The iCloud account changed (user signed out or switched accounts).
+   * All local change tokens have been reset. A full re-sync will follow automatically.
+   */
+  ACCOUNT_CHANGED = 'ACCOUNT_CHANGED',
 }
 
 /**

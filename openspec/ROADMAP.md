@@ -12,11 +12,11 @@
 ## Phase B — Sync & Sharing (in progress)
 
 ### CKSyncEngine (iOS 17+)
-- [ ] `ios/ExpoCloudKitSyncEngine.swift` adapter implementing `CKSyncEngineDelegate`
-- [ ] `startSync()` / `stopSync()` / `getSyncState()` JS API
-- [ ] Change token persistence (UserDefaults, keyed per container + zone)
-- [ ] Conflict resolution — server-record-wins default, hook for custom resolution
-- [ ] JS events: `onSyncStateChanged`, `onRecordsReceived`, `onRecordsSent`
+- [x] `ios/ExpoCloudKitSyncEngine.swift` adapter implementing `CKSyncEngineDelegate`
+- [x] `startSync()` / `stopSync()` / `getSyncState()` JS API
+- [x] Change token persistence (UserDefaults, keyed per container + zone)
+- [x] Conflict resolution — server-record-wins default, hook for custom resolution
+- [x] JS events: `onSyncStateChanged`, `onRecordsReceived`, `onRecordsSent`
 
 ### Push Subscriptions
 - [ ] `CKQuerySubscription` — subscribe to record changes matching a predicate
@@ -32,10 +32,10 @@
 - [ ] Shared zone support in record/zone APIs
 
 ### iOS 16 Fallback
-- [ ] `CKServerChangeToken` persistence and management
-- [ ] Manual fetch-changes flow (no CKSyncEngine dependency)
-- [ ] Automatic capability detection — use CKSyncEngine on 17+, fallback on 16
-- [ ] Graceful degradation surface in JS API (returns `syncEngine: false` in status)
+- [x] `CKServerChangeToken` persistence and management
+- [x] Manual fetch-changes flow (no CKSyncEngine dependency)
+- [x] Automatic capability detection — use CKSyncEngine on 17+, fallback on 16
+- [x] Graceful degradation surface in JS API (returns `syncEngine: false` in status)
 
 ## Phase C — Advanced (planned)
 

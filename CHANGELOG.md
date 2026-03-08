@@ -9,6 +9,22 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+**Phase B: Sync Engine & iOS 16 Fallback**
+
+- CKSyncEngine integration (iOS 17+): `startSyncEngine()`, `stopSyncEngine()`, `triggerSync()`, `getSyncState()`, `addSyncEngineListener()`
+- iOS 16 fallback: manual `CKFetchRecordZoneChangesOperation` with timer-based polling and per-zone `CKServerChangeToken` persistence
+- Automatic capability detection: uses CKSyncEngine on iOS 17+, polling fallback on iOS 16
+- Change token persistence via UserDefaults, keyed per container and zone
+- Server-record-wins conflict resolution with failed record surfacing in `recordsSent` events
+- New TypeScript types: `SyncState`, `SyncEngineConfig`, `SyncEngineEvent` (discriminated union), `SyncProviderStatus`
+- New error codes: `SYNC_ENGINE_NOT_RUNNING`, `TOKEN_EXPIRED`, `ACCOUNT_CHANGED`
+
+### Fixed
+
+- `RecordsFetchedEvent` now includes `zoneName: string` field, matching the Swift event payload
+
 ## [0.1.0] - 2026-03-07
 
 ### Added
