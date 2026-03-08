@@ -73,7 +73,7 @@ final class CloudKitSyncEngineAdapter: CloudKitSyncProvider {
       newEngine.state.add(pendingDatabaseChanges: zonesToAdd.map { .saveZone($0) })
     }
 
-    pendingQueue.async { [weak self] in
+    pendingQueue.sync { [weak self] in
       self?.state = .idle
     }
     eventHandler(.stateChanged(.idle))
@@ -97,7 +97,10 @@ final class CloudKitSyncEngineAdapter: CloudKitSyncProvider {
     guard let engine = engine else { return }
     // Asking the engine to fetch changes immediately.
     // CKSyncEngine coalesces overlapping fetches internally.
-    engine.fetchChanges(in: .allDatabases)
+    // fetchChanges() is async throws — wrap in a Task since triggerSync() is synchronous.
+    Task {
+      try? await engine.fetchChanges()
+    }
   }
 
   func enqueueSave(_ record: CKRecord) {
@@ -136,7 +139,7 @@ extension CloudKitSyncEngineAdapter: CKSyncEngineDelegate {
       default:
         break
       }
-      pendingQueue.async { [weak self] in
+      pendingQueue.sync { [weak self] in
         self?.state = .suspended
       }
       emit(.stateChanged(.suspended))
@@ -184,7 +187,7 @@ extension CloudKitSyncEngineAdapter: CKSyncEngineDelegate {
       emit(.recordsSent(saved: saved, failed: failed))
 
     case .willFetchChanges:
-      pendingQueue.async { [weak self] in
+      pendingQueue.sync { [weak self] in
         self?.state = .syncing
       }
       emit(.stateChanged(.syncing))
@@ -194,19 +197,19 @@ extension CloudKitSyncEngineAdapter: CKSyncEngineDelegate {
       break
 
     case .didFetchChanges:
-      pendingQueue.async { [weak self] in
+      pendingQueue.sync { [weak self] in
         self?.state = .idle
       }
       emit(.stateChanged(.idle))
 
     case .willSendChanges:
-      pendingQueue.async { [weak self] in
+      pendingQueue.sync { [weak self] in
         self?.state = .syncing
       }
       emit(.stateChanged(.syncing))
 
     case .didSendChanges:
-      pendingQueue.async { [weak self] in
+      pendingQueue.sync { [weak self] in
         self?.state = .idle
       }
       emit(.stateChanged(.idle))

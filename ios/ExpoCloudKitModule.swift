@@ -203,7 +203,7 @@ public class ExpoCloudKitModule: Module {
         return
       }
       let scope = Converters.toDatabaseScope(database)
-      let predicate = predicateDict != nil ? Converters.toPredicate(from: predicateDict!) : NSPredicate(value: true)
+      let predicate = predicateDict.map { Converters.toPredicate(from: $0) } ?? NSPredicate(value: true)
       let sortDescriptors = sortDescriptorDicts?.compactMap { Converters.toNSSortDescriptor(from: $0) }
 
       recordManager.queryRecords(

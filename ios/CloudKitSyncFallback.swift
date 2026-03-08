@@ -67,7 +67,7 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
     eventHandler: @escaping (SyncProviderEvent) -> Void
   ) {
     self.eventHandler = eventHandler
-    pendingQueue.async { [weak self] in
+    pendingQueue.sync { [weak self] in
       guard let self = self else { return }
       self.trackedZones = zones
       self.databaseScope = database
@@ -98,7 +98,7 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
       self?.pollingTimer?.invalidate()
       self?.pollingTimer = nil
     }
-    pendingQueue.async { [weak self] in
+    pendingQueue.sync { [weak self] in
       guard let self = self else { return }
       self.state = .notStarted
       self.pendingSaves.removeAll()
@@ -184,7 +184,8 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
     var failedSaves: [(CKRecord.ID, Error)] = []
     var conflictedRecords: [CKRecord] = []
 
-    operation.perRecordSaveBlock = { recordID, result in
+    operation.perRecordSaveBlock = { [weak self] recordID, result in
+      guard let self = self else { return }
       switch result {
       case .success(let record):
         savedRecords.append(record)
@@ -324,12 +325,12 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
       }
     }
 
-    operation.fetchRecordZoneChangesResultBlock = { result in
+    operation.fetchRecordZoneChangesResultBlock = { [weak self] result in
       switch result {
       case .success:
         break
       case .failure(let error):
-        self.eventHandler?(.syncError(error))
+        self?.eventHandler?(.syncError(error))
       }
       completion()
     }
