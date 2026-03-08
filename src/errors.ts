@@ -60,6 +60,14 @@ export enum CloudKitErrorCode {
    * All local change tokens have been reset. A full re-sync will follow automatically.
    */
   ACCOUNT_CHANGED = 'ACCOUNT_CHANGED',
+
+  // Phase B — Push Subscriptions
+
+  /**
+   * The specified subscription ID does not exist on the server.
+   * It may have already been deleted or was never created.
+   */
+  SUBSCRIPTION_NOT_FOUND = 'SUBSCRIPTION_NOT_FOUND',
 }
 
 /**

@@ -63,6 +63,14 @@ export type {
   SyncErrorEvent,
   Zone,
   ZoneChanges,
+  // Phase B — Push Subscriptions
+  SubscriptionType,
+  CloudKitSubscription,
+  SaveQuerySubscriptionOptions,
+  SubscriptionNotificationType,
+  QuerySubscriptionEvent,
+  DatabaseSubscriptionEvent,
+  SubscriptionEvent,
 } from './types';
 
 // Errors
@@ -96,3 +104,12 @@ export {
 
 // Phase D — CKAsset
 export { downloadAsset, addAssetProgressListener } from './ExpoCloudKit';
+
+// Phase B — Push Subscriptions
+export {
+  saveQuerySubscription,
+  saveDatabaseSubscription,
+  deleteSubscription,
+  fetchSubscriptions,
+  addSubscriptionListener,
+} from './ExpoCloudKit';
