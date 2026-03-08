@@ -353,6 +353,12 @@ enum Converters {
       code = "TOKEN_EXPIRED"
     case .accountTemporarilyUnavailable:
       code = "NOT_AUTHENTICATED"
+    case .alreadyShared:
+      code = "ALREADY_SHARED"
+    case .participantMayNeedVerification:
+      code = "PARTICIPANT_NEEDS_VERIFICATION"
+    case .referenceViolation:
+      code = "REFERENCE_VIOLATION"
     default:
       code = "UNKNOWN"
       if let retryAfter = ckError.retryAfterSeconds {
@@ -431,6 +437,110 @@ enum Converters {
     }
 
     return dict
+  }
+
+  // MARK: - CKShare → Dictionary
+
+  /// Converts a CKShare to a JS-bridge-safe dictionary.
+  ///
+  /// Shape:
+  /// ```json
+  /// {
+  ///   "recordName":       "CK-share-uuid",
+  ///   "zoneName":         "MyZone",
+  ///   "publicPermission": "readOnly",
+  ///   "url":              "https://www.icloud.com/...",
+  ///   "participants":     [{ ... }]
+  /// }
+  /// ```
+  static func toShareDictionary(_ share: CKShare) -> [String: Any] {
+    var dict: [String: Any] = [
+      "recordName": share.recordID.recordName,
+      "zoneName": share.recordID.zoneID.zoneName,
+      "publicPermission": participantPermissionToString(share.publicPermission),
+      "participants": share.participants.map { toParticipantDictionary($0) }
+    ]
+
+    if let url = share.url {
+      dict["url"] = url.absoluteString
+    }
+
+    return dict
+  }
+
+  /// Converts a CKShare.Participant to a JS-bridge-safe dictionary.
+  ///
+  /// Shape:
+  /// ```json
+  /// {
+  ///   "recordName":       "user-record-uuid",
+  ///   "role":             "owner" | "privateUser" | "publicUser" | "unknown",
+  ///   "permission":       "none" | "readOnly" | "readWrite" | "unknown",
+  ///   "acceptanceStatus": "unknown" | "pending" | "accepted" | "removed"
+  /// }
+  /// ```
+  static func toParticipantDictionary(_ participant: CKShare.Participant) -> [String: Any] {
+    var dict: [String: Any] = [
+      "role": participantRoleToString(participant.role),
+      "permission": participantPermissionToString(participant.permission),
+      "acceptanceStatus": participantAcceptanceToString(participant.acceptanceStatus)
+    ]
+
+    if let userRecordID = participant.userIdentity.userRecordID {
+      dict["recordName"] = userRecordID.recordName
+    }
+
+    // Include name components when the user identity has been looked up.
+    if let nameComponents = participant.userIdentity.nameComponents {
+      var nameDict: [String: Any] = [:]
+      if let givenName = nameComponents.givenName { nameDict["givenName"] = givenName }
+      if let familyName = nameComponents.familyName { nameDict["familyName"] = familyName }
+      dict["name"] = nameDict
+    }
+
+    return dict
+  }
+
+  /// Maps a JS permission string to CKShare.ParticipantPermission.
+  /// Unknown strings map to `.none` (no access).
+  static func toSharePermission(_ string: String) -> CKShare.ParticipantPermission {
+    switch string {
+    case "readOnly":  return .readOnly
+    case "readWrite": return .readWrite
+    default:          return .none
+    }
+  }
+
+  /// Maps CKShare.ParticipantPermission to a JS-friendly string.
+  static func participantPermissionToString(_ permission: CKShare.ParticipantPermission) -> String {
+    switch permission {
+    case .none:      return "none"
+    case .readOnly:  return "readOnly"
+    case .readWrite: return "readWrite"
+    @unknown default: return "unknown"
+    }
+  }
+
+  /// Maps CKShare.ParticipantRole to a JS-friendly string.
+  static func participantRoleToString(_ role: CKShare.ParticipantRole) -> String {
+    switch role {
+    case .owner:       return "owner"
+    case .privateUser: return "privateUser"
+    case .publicUser:  return "publicUser"
+    case .unknown:     return "unknown"
+    @unknown default:  return "unknown"
+    }
+  }
+
+  /// Maps CKShare.ParticipantAcceptanceStatus to a JS-friendly string.
+  static func participantAcceptanceToString(_ status: CKShare.ParticipantAcceptanceStatus) -> String {
+    switch status {
+    case .unknown:  return "unknown"
+    case .pending:  return "pending"
+    case .accepted: return "accepted"
+    case .removed:  return "removed"
+    @unknown default: return "unknown"
+    }
   }
 
   // MARK: - Private helpers

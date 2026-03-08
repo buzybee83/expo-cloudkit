@@ -1,5 +1,6 @@
 import ExpoModulesCore
 import CloudKit
+import UIKit
 
 /// Main Expo module entry point for expo-cloudkit.
 ///
@@ -26,6 +27,13 @@ public class ExpoCloudKitModule: Module {
   /// Manages push subscriptions (CKQuerySubscription, CKDatabaseSubscription).
   /// Lazily initialised on the first subscription call after `configure()`.
   private var subscriptionManager: CloudKitSubscriptionManager?
+
+  // MARK: - Share manager (Phase B)
+
+  /// Manages CKShare lifecycle: create, delete, fetch participants,
+  /// update permissions, remove participants, accept shares.
+  /// Lazily initialised after `configure()` is called.
+  private var shareManager: CloudKitShareManager?
 
   // MARK: - Cursor cache for queryRecords pagination
 
@@ -56,7 +64,8 @@ public class ExpoCloudKitModule: Module {
       "onAccountStatusChanged",
       "onSyncEngineEvent",
       "onSubscriptionEvent",
-      "onAssetProgress"
+      "onAssetProgress",
+      "onShareAccepted"
     )
 
     // -------------------------------------------------------------------------
@@ -76,6 +85,7 @@ public class ExpoCloudKitModule: Module {
       self.zoneManager = CloudKitZoneManager(ckContainer: ck)
       self.recordManager = CloudKitRecordManager(ckContainer: ck)
       self.subscriptionManager = CloudKitSubscriptionManager(ckContainer: ck)
+      self.shareManager = CloudKitShareManager(ckContainer: ck)
 
       // Start listening for account status changes and forward to JS
       container.startAccountStatusObserver { [weak self] status in
@@ -571,6 +581,343 @@ public class ExpoCloudKitModule: Module {
     }
 
     // -------------------------------------------------------------------------
+    // CKShare — Phase B
+    // -------------------------------------------------------------------------
+
+    /// Creates a CKShare for the given root record and returns a share dictionary
+    /// including the share URL once the server accepts the new share.
+    ///
+    /// Options keys:
+    ///   - recordName (String, required)
+    ///   - zoneName (String, optional)
+    ///   - database (String, default "private")
+    ///   - publicPermission ("none"|"readOnly"|"readWrite", default "none")
+    AsyncFunction("createShare") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self, let shareManager = self.shareManager, let container = self.container else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+
+      guard let recordName = options["recordName"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("recordName is required"))
+        return
+      }
+
+      let zoneName = options["zoneName"] as? String
+      let dbString = options["database"] as? String ?? "private"
+      let scope = Converters.toDatabaseScope(dbString)
+      let database = container.ckContainer.database(with: scope)
+
+      let permissionString = options["publicPermission"] as? String ?? "none"
+      let publicPermission = Converters.toSharePermission(permissionString)
+
+      shareManager.createShare(
+        recordName: recordName,
+        zoneName: zoneName,
+        database: database,
+        publicPermission: publicPermission
+      ) { result in
+        switch result {
+        case .success(let shareDict):
+          promise.resolve(shareDict)
+        case .failure(let error):
+          promise.reject(Converters.toExpoError(error))
+        }
+      }
+    }
+
+    /// Deletes the CKShare record identified by shareRecordName, effectively
+    /// unsharing the associated root record.
+    ///
+    /// Options keys:
+    ///   - shareRecordName (String, required)
+    ///   - zoneName (String, optional)
+    ///   - database (String, default "private")
+    AsyncFunction("deleteShare") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self, let shareManager = self.shareManager, let container = self.container else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+
+      guard let shareRecordName = options["shareRecordName"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("shareRecordName is required"))
+        return
+      }
+
+      let zoneName = options["zoneName"] as? String
+      let dbString = options["database"] as? String ?? "private"
+      let scope = Converters.toDatabaseScope(dbString)
+      let database = container.ckContainer.database(with: scope)
+
+      shareManager.deleteShare(
+        shareRecordName: shareRecordName,
+        zoneName: zoneName,
+        database: database
+      ) { result in
+        switch result {
+        case .success:
+          promise.resolve(nil)
+        case .failure(let error):
+          promise.reject(Converters.toExpoError(error))
+        }
+      }
+    }
+
+    /// Fetches the participant list for an existing CKShare.
+    ///
+    /// Options keys:
+    ///   - shareRecordName (String, required)
+    ///   - zoneName (String, optional)
+    ///   - database (String, default "private")
+    AsyncFunction("fetchShareParticipants") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self, let shareManager = self.shareManager, let container = self.container else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+
+      guard let shareRecordName = options["shareRecordName"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("shareRecordName is required"))
+        return
+      }
+
+      let zoneName = options["zoneName"] as? String
+      let dbString = options["database"] as? String ?? "private"
+      let scope = Converters.toDatabaseScope(dbString)
+      let database = container.ckContainer.database(with: scope)
+
+      shareManager.fetchShareParticipants(
+        shareRecordName: shareRecordName,
+        zoneName: zoneName,
+        database: database
+      ) { result in
+        switch result {
+        case .success(let participants):
+          promise.resolve(participants)
+        case .failure(let error):
+          promise.reject(Converters.toExpoError(error))
+        }
+      }
+    }
+
+    /// Updates a participant's permission on an existing CKShare.
+    ///
+    /// Options keys:
+    ///   - shareRecordName (String, required)
+    ///   - participantRecordName (String, required) — the user's CKRecord.ID.recordName
+    ///   - permission ("none"|"readOnly"|"readWrite", required)
+    ///   - zoneName (String, optional)
+    ///   - database (String, default "private")
+    AsyncFunction("updateSharePermission") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self, let shareManager = self.shareManager, let container = self.container else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+
+      guard let shareRecordName = options["shareRecordName"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("shareRecordName is required"))
+        return
+      }
+      guard let participantRecordName = options["participantRecordName"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("participantRecordName is required"))
+        return
+      }
+      guard let permissionString = options["permission"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("permission is required"))
+        return
+      }
+
+      let zoneName = options["zoneName"] as? String
+      let dbString = options["database"] as? String ?? "private"
+      let scope = Converters.toDatabaseScope(dbString)
+      let database = container.ckContainer.database(with: scope)
+      let permission = Converters.toSharePermission(permissionString)
+
+      shareManager.updateSharePermission(
+        shareRecordName: shareRecordName,
+        participantRecordName: participantRecordName,
+        permission: permission,
+        zoneName: zoneName,
+        database: database
+      ) { result in
+        switch result {
+        case .success(let shareDict):
+          promise.resolve(shareDict)
+        case .failure(let error):
+          if case ShareManagerError.participantNotFound = error {
+            promise.reject(CloudKitModuleError.participantNotFound(participantRecordName))
+          } else {
+            promise.reject(Converters.toExpoError(error))
+          }
+        }
+      }
+    }
+
+    /// Removes a participant from an existing CKShare.
+    ///
+    /// Options keys:
+    ///   - shareRecordName (String, required)
+    ///   - participantRecordName (String, required)
+    ///   - zoneName (String, optional)
+    ///   - database (String, default "private")
+    AsyncFunction("removeShareParticipant") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self, let shareManager = self.shareManager, let container = self.container else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+
+      guard let shareRecordName = options["shareRecordName"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("shareRecordName is required"))
+        return
+      }
+      guard let participantRecordName = options["participantRecordName"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("participantRecordName is required"))
+        return
+      }
+
+      let zoneName = options["zoneName"] as? String
+      let dbString = options["database"] as? String ?? "private"
+      let scope = Converters.toDatabaseScope(dbString)
+      let database = container.ckContainer.database(with: scope)
+
+      shareManager.removeShareParticipant(
+        shareRecordName: shareRecordName,
+        participantRecordName: participantRecordName,
+        zoneName: zoneName,
+        database: database
+      ) { result in
+        switch result {
+        case .success(let shareDict):
+          promise.resolve(shareDict)
+        case .failure(let error):
+          if case ShareManagerError.participantNotFound = error {
+            promise.reject(CloudKitModuleError.participantNotFound(participantRecordName))
+          } else {
+            promise.reject(Converters.toExpoError(error))
+          }
+        }
+      }
+    }
+
+    /// Accepts a CloudKit share invitation URL.
+    ///
+    /// The URL is the iCloud share link received via a deep link or universal link.
+    ///
+    /// Options keys:
+    ///   - shareURL (String, required) — the full iCloud share URL
+    AsyncFunction("acceptShare") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self, let shareManager = self.shareManager else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+
+      guard let urlString = options["shareURL"] as? String,
+            let shareURL = URL(string: urlString) else {
+        promise.reject(CloudKitModuleError.invalidArgument("shareURL must be a valid URL string"))
+        return
+      }
+
+      shareManager.acceptShare(shareURL: shareURL) { result in
+        switch result {
+        case .success(let shareDict):
+          promise.resolve(shareDict)
+        case .failure(let error):
+          promise.reject(Converters.toExpoError(error))
+        }
+      }
+    }
+
+    /// Lists all zones in the shared CloudKit database, each optionally enriched
+    /// with its associated CKShare record (participants, URL, public permission).
+    AsyncFunction("fetchSharedDatabaseZones") { [weak self] (promise: Promise) in
+      guard let self = self, let shareManager = self.shareManager else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+
+      shareManager.fetchSharedDatabaseZones { result in
+        switch result {
+        case .success(let zones):
+          promise.resolve(zones)
+        case .failure(let error):
+          promise.reject(Converters.toExpoError(error))
+        }
+      }
+    }
+
+    /// Presents the system UICloudSharingController for the given root record.
+    ///
+    /// If the record already has a share, presents in manage-participants mode.
+    /// If not, creates a new share then presents the controller.
+    ///
+    /// Returns `{ outcome: "shared"|"cancelled", share: {...}|null }`.
+    ///
+    /// Options keys:
+    ///   - recordName (String, required)
+    ///   - zoneName (String, optional)
+    ///   - database (String, default "private")
+    AsyncFunction("presentSharingUI") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self, let shareManager = self.shareManager, let container = self.container else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+
+      guard let recordName = options["recordName"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("recordName is required"))
+        return
+      }
+
+      // UICloudSharingController must be presented from the main thread.
+      // Capture the presenting view controller before dispatching.
+      guard let viewController = self.appContext?.utilities?.currentViewController() else {
+        promise.reject(CloudKitModuleError.sharingUIUnavailable)
+        return
+      }
+
+      let zoneName = options["zoneName"] as? String
+      let dbString = options["database"] as? String ?? "private"
+      let scope = Converters.toDatabaseScope(dbString)
+      let database = container.ckContainer.database(with: scope)
+
+      shareManager.presentSharingUI(
+        recordName: recordName,
+        zoneName: zoneName,
+        database: database,
+        presentingViewController: viewController
+      ) { result in
+        switch result {
+        case .success(let outcomeDict):
+          promise.resolve(outcomeDict)
+        case .failure(let error):
+          promise.reject(Converters.toExpoError(error))
+        }
+      }
+    }
+
+    // Listen for CloudKit share URL opens and emit onShareAccepted.
+    // The app delegate method `application(_:userDidAcceptCloudKitShareWith:)` is not
+    // hookable via Expo Modules lifecycle. Instead we intercept the URL opened event
+    // here and filter for CloudKit share URLs (scheme "cloudkit-" or the iCloud host).
+    OnAppOpenURL { [weak self] url in
+      guard let self = self else { return }
+
+      // CloudKit share URLs use the iCloud host or custom deep link schemes.
+      // CKContainer can validate the URL via fetchShareMetadata — we emit the event
+      // optimistically and let JS call acceptShare() if it wants to proceed.
+      let urlString = url.absoluteString
+      let isCloudKitShare = urlString.contains("www.icloud.com/iclouddrive")
+        || urlString.contains("cloudkit")
+        || url.host?.hasSuffix("icloud.com") == true
+
+      guard isCloudKitShare else { return }
+
+      DispatchQueue.main.async { [weak self] in
+        self?.sendEvent("onShareAccepted", [
+          "shareURL": urlString
+        ])
+      }
+    }
+
+    // -------------------------------------------------------------------------
     // CKAsset — Phase D
     // -------------------------------------------------------------------------
 
@@ -701,6 +1048,24 @@ class CloudKitInvalidArgumentException: Exception {
   }
 }
 
+class ShareNotFoundException: Exception {
+  override var reason: String { "Share record not found." }
+}
+
+class ParticipantNotFoundException: Exception {
+  private let participantRecordName: String
+  init(_ participantRecordName: String) { self.participantRecordName = participantRecordName }
+  override var reason: String {
+    "Participant '\(participantRecordName)' not found on this share."
+  }
+}
+
+class SharingUIUnavailableException: Exception {
+  override var reason: String {
+    "Cannot present sharing UI: no active view controller is available."
+  }
+}
+
 // MARK: - CloudKitModuleError namespace
 //
 // This typealias-style enum is kept so that existing call sites compile
@@ -711,7 +1076,9 @@ enum CloudKitModuleError {
   static var notConfigured: Exception         { CloudKitNotConfiguredException() }
   static var requiresiOS17: Exception         { CloudKitRequiresiOS17Exception() }
   static var syncEngineNotRunning: Exception  { CloudKitSyncEngineNotRunningException() }
+  static var sharingUIUnavailable: Exception  { SharingUIUnavailableException() }
   static func notImplemented(_ f: String) -> Exception  { CloudKitNotImplementedException(f) }
   static func subscriptionNotFound(_ id: String) -> Exception { CloudKitSubscriptionNotFoundException(id) }
   static func invalidArgument(_ msg: String) -> Exception    { CloudKitInvalidArgumentException(msg) }
+  static func participantNotFound(_ name: String) -> Exception { ParticipantNotFoundException(name) }
 }
