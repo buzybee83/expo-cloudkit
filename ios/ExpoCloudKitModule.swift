@@ -21,6 +21,12 @@ public class ExpoCloudKitModule: Module {
   private var zoneManager: CloudKitZoneManager?
   private var recordManager: CloudKitRecordManager?
 
+  // MARK: - Subscription manager (Phase B)
+
+  /// Manages push subscriptions (CKQuerySubscription, CKDatabaseSubscription).
+  /// Lazily initialised on the first subscription call after `configure()`.
+  private var subscriptionManager: CloudKitSubscriptionManager?
+
   // MARK: - Sync provider (Phase B)
 
   /// Active sync provider — either CKSyncEngine adapter (iOS 17+) or the
@@ -40,6 +46,7 @@ public class ExpoCloudKitModule: Module {
     Events(
       "onAccountStatusChanged",
       "onSyncEngineEvent",
+      "onSubscriptionEvent",
       "onAssetProgress"
     )
 
@@ -59,6 +66,7 @@ public class ExpoCloudKitModule: Module {
       self.container = container
       self.zoneManager = CloudKitZoneManager(ckContainer: ck)
       self.recordManager = CloudKitRecordManager(ckContainer: ck)
+      self.subscriptionManager = CloudKitSubscriptionManager(ckContainer: ck)
 
       // Start listening for account status changes and forward to JS
       container.startAccountStatusObserver { [weak self] status in
@@ -398,6 +406,149 @@ public class ExpoCloudKitModule: Module {
     }
 
     // -------------------------------------------------------------------------
+    // Push Subscriptions — Phase B
+    // -------------------------------------------------------------------------
+
+    /// Creates a CKQuerySubscription for the given record type and predicate.
+    ///
+    /// Options flags accepted in the `options` array:
+    ///   "firesOnRecordCreation" | "firesOnRecordUpdate" | "firesOnRecordDeletion"
+    ///
+    /// Returns the generated subscriptionID string.
+    AsyncFunction("saveQuerySubscription") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self, let manager = self.subscriptionManager, let container = self.container else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+
+      guard let recordType = options["recordType"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("recordType is required"))
+        return
+      }
+
+      let predicateDict = options["predicate"] as? [String: Any]
+      let predicate = predicateDict.map { Converters.toPredicate(from: $0) } ?? NSPredicate(value: true)
+
+      let dbString = options["database"] as? String ?? "private"
+      let scope = Converters.toDatabaseScope(dbString)
+      let database = container.ckContainer.database(with: scope)
+
+      // Build zoneID if provided
+      let zoneName = options["zoneName"] as? String
+      let zoneID = zoneName.map { CKRecordZone.ID(zoneName: $0, ownerName: CKCurrentUserDefaultName) }
+
+      // Map option flag strings to CKQuerySubscription.Options bitmask
+      let flagStrings = options["options"] as? [String] ?? ["firesOnRecordCreation", "firesOnRecordUpdate", "firesOnRecordDeletion"]
+      var subscriptionOptions: CKQuerySubscription.Options = []
+      for flag in flagStrings {
+        switch flag {
+        case "firesOnRecordCreation": subscriptionOptions.insert(.firesOnRecordCreation)
+        case "firesOnRecordUpdate":   subscriptionOptions.insert(.firesOnRecordUpdate)
+        case "firesOnRecordDeletion": subscriptionOptions.insert(.firesOnRecordDeletion)
+        default: break
+        }
+      }
+
+      manager.saveQuerySubscription(
+        recordType: recordType,
+        predicate: predicate,
+        options: subscriptionOptions,
+        zoneID: zoneID,
+        database: database
+      ) { result in
+        switch result {
+        case .success(let subscriptionID):
+          promise.resolve(subscriptionID)
+        case .failure(let error):
+          promise.reject(Converters.toExpoError(error))
+        }
+      }
+    }
+
+    /// Creates a CKDatabaseSubscription that fires whenever any record in the
+    /// specified database changes.
+    ///
+    /// Only valid for "private" and "shared" databases.
+    /// Returns the generated subscriptionID string.
+    AsyncFunction("saveDatabaseSubscription") { [weak self] (database: String, promise: Promise) in
+      guard let self = self, let manager = self.subscriptionManager, let container = self.container else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+
+      let scope = Converters.toDatabaseScope(database)
+      let db = container.ckContainer.database(with: scope)
+
+      manager.saveDatabaseSubscription(database: db) { result in
+        switch result {
+        case .success(let subscriptionID):
+          promise.resolve(subscriptionID)
+        case .failure(let error):
+          promise.reject(Converters.toExpoError(error))
+        }
+      }
+    }
+
+    /// Deletes the subscription with the given ID from the specified database.
+    AsyncFunction("deleteSubscription") { [weak self] (subscriptionID: String, database: String, promise: Promise) in
+      guard let self = self, let manager = self.subscriptionManager, let container = self.container else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+
+      let scope = Converters.toDatabaseScope(database)
+      let db = container.ckContainer.database(with: scope)
+
+      manager.deleteSubscription(subscriptionID: subscriptionID, database: db) { result in
+        switch result {
+        case .success:
+          promise.resolve(nil)
+        case .failure(let error):
+          // Surface CKError.unknownItem as a typed subscriptionNotFound error
+          if let ckError = error as? CKError, ckError.code == .unknownItem {
+            promise.reject(CloudKitModuleError.subscriptionNotFound(subscriptionID))
+          } else {
+            promise.reject(Converters.toExpoError(error))
+          }
+        }
+      }
+    }
+
+    /// Fetches all active subscriptions on the specified database.
+    ///
+    /// Returns an array of subscription dictionaries:
+    ///   `[{ id, type, recordType?, zoneID? }]`
+    AsyncFunction("fetchSubscriptions") { [weak self] (database: String, promise: Promise) in
+      guard let self = self, let manager = self.subscriptionManager, let container = self.container else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+
+      let scope = Converters.toDatabaseScope(database)
+      let db = container.ckContainer.database(with: scope)
+
+      manager.fetchSubscriptions(database: db) { result in
+        switch result {
+        case .success(let dicts):
+          promise.resolve(dicts)
+        case .failure(let error):
+          promise.reject(Converters.toExpoError(error))
+        }
+      }
+    }
+
+    // Forward incoming remote notifications to the CloudKit notification handler.
+    // Non-CloudKit payloads are ignored (handler returns false).
+    OnAppDidReceiveRemoteNotification { [weak self] userInfo in
+      guard let self = self else { return }
+      _ = CloudKitNotificationHandler.handle(userInfo: userInfo) { [weak self] payload in
+        // CloudKitNotificationHandler already dispatches the closure on the main
+        // queue, so sendEvent is always called from the correct thread.
+        self?.sendEvent("onSubscriptionEvent", payload)
+      }
+    }
+
+    // -------------------------------------------------------------------------
     // CKAsset — Phase D
     // -------------------------------------------------------------------------
 
@@ -486,6 +637,8 @@ enum CloudKitModuleError: Error, LocalizedError {
   case requiresiOS17
   case notImplemented(String)
   case syncEngineNotRunning
+  case subscriptionNotFound(String)
+  case invalidArgument(String)
 
   var errorDescription: String? {
     switch self {
@@ -497,16 +650,22 @@ enum CloudKitModuleError: Error, LocalizedError {
       return "\(feature) is not yet implemented in this phase of expo-cloudkit."
     case .syncEngineNotRunning:
       return "Sync engine is not running. Call startSyncEngine() first."
+    case .subscriptionNotFound(let id):
+      return "Subscription not found: \(id)"
+    case .invalidArgument(let message):
+      return "Invalid argument: \(message)"
     }
   }
 
   // Expo's error protocol requires a code string for JS
   var code: String {
     switch self {
-    case .notConfigured:         return "NOT_CONFIGURED"
-    case .requiresiOS17:         return "REQUIRES_IOS_17"
-    case .notImplemented:        return "NOT_IMPLEMENTED"
-    case .syncEngineNotRunning:  return "SYNC_ENGINE_NOT_RUNNING"
+    case .notConfigured:           return "NOT_CONFIGURED"
+    case .requiresiOS17:           return "REQUIRES_IOS_17"
+    case .notImplemented:          return "NOT_IMPLEMENTED"
+    case .syncEngineNotRunning:    return "SYNC_ENGINE_NOT_RUNNING"
+    case .subscriptionNotFound:    return "SUBSCRIPTION_NOT_FOUND"
+    case .invalidArgument:         return "INVALID_ARGUMENT"
     }
   }
 }
