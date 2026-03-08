@@ -324,43 +324,138 @@ export interface SharedZone {
 // CKSyncEngine (Phase B — iOS 17+)
 // ---------------------------------------------------------------------------
 
+/**
+ * Configuration passed to `startSyncEngine()`.
+ *
+ * On iOS 17+, `automaticallySync` delegates scheduling to CKSyncEngine.
+ * On iOS 16, it starts a timer-based polling loop (default 30s interval).
+ */
 export interface SyncEngineConfig {
   /** Zone names to track with the sync engine. */
   zones: string[];
-  database: DatabaseScope;
-  /** Whether the engine should schedule syncs automatically. Default: true. */
+  /** Which database to sync. Default: 'private'. */
+  database?: DatabaseScope;
+  /**
+   * Whether the engine should schedule syncs automatically.
+   * On iOS 17+, uses CKSyncEngine's built-in scheduling.
+   * On iOS 16, starts a polling timer (default 30s interval).
+   * Default: true.
+   */
   automaticallySync?: boolean;
 }
 
-export type SyncEngineEventType =
-  | 'willFetchChanges'
-  | 'fetchedRecordChanges'
-  | 'willSendChanges'
-  | 'sentRecordChanges'
-  | 'accountChanged'
-  | 'syncEngineError';
+/**
+ * Current lifecycle state of the sync provider as returned by `getSyncState()`.
+ *
+ * - `'idle'`       — Running normally, no active sync cycle.
+ * - `'syncing'`    — A fetch or send cycle is in progress.
+ * - `'suspended'`  — Engine is paused (e.g. account unavailable).
+ * - `'notStarted'` — `startSyncEngine()` has not been called.
+ */
+export type SyncProviderStatus = 'idle' | 'syncing' | 'suspended' | 'notStarted';
 
-/** Event emitted by the CKSyncEngine listener. */
-export interface SyncEngineEvent {
-  type: SyncEngineEventType;
-  /** Present for 'fetchedRecordChanges'. */
-  changedRecords?: CloudKitRecord[];
-  /** Present for 'fetchedRecordChanges'. */
-  deletedRecordNames?: string[];
-  /** Present for 'sentRecordChanges'. */
-  savedRecords?: SavedRecord[];
-  /** Present for 'sentRecordChanges'. */
-  failedRecordNames?: string[];
-  /** Present for 'syncEngineError'. */
-  error?: {
-    code: string;
-    message: string;
-  };
+/**
+ * Snapshot returned by the synchronous `getSyncState()` call.
+ *
+ * Reflects in-memory state; updated immediately as state transitions occur.
+ * Subscribe to `addSyncEngineListener` for real-time state change events.
+ */
+export interface SyncState {
+  /**
+   * Whether CKSyncEngine (iOS 17+) is active.
+   * `false` means the iOS 16 manual-fetch fallback is running.
+   */
+  usesSyncEngine: boolean;
+  /** Current lifecycle state of the sync provider. */
+  status: SyncProviderStatus;
 }
 
-/** A queued change for the sync engine to process. */
+/**
+ * Discriminated-union type for all events emitted by `addSyncEngineListener`.
+ * Filter by `event.type` to handle each case.
+ */
+export type SyncEngineEventType =
+  | 'stateChanged'
+  | 'recordsFetched'
+  | 'recordsSent'
+  | 'syncError';
+
+/**
+ * Event emitted when the sync provider's lifecycle state changes.
+ * Fired on transitions such as idle → syncing → idle, or when account changes.
+ */
+export interface SyncStateChangedEvent {
+  type: 'stateChanged';
+  /** The updated sync state. */
+  state: SyncState;
+}
+
+/**
+ * Event emitted after records are fetched from the server.
+ * One event is emitted per zone per sync cycle.
+ */
+export interface RecordsFetchedEvent {
+  type: 'recordsFetched';
+  /** Records that were inserted or modified on the server. */
+  changedRecords: CloudKitRecord[];
+  /** Identifiers of records deleted on the server since the last sync. */
+  deletedRecordIDs: RecordIdentifier[];
+}
+
+/**
+ * Event emitted after the sync provider attempts to push local changes.
+ * Contains both successful saves and any failures with optional server versions.
+ */
+export interface RecordsSentEvent {
+  type: 'recordsSent';
+  /** Records successfully saved to the server. */
+  savedRecords: SavedRecord[];
+  /**
+   * Records that failed to save.
+   * For CONFLICT failures, `serverRecord` contains the current server version
+   * so the caller can perform a custom merge before re-enqueuing.
+   */
+  failedRecords: Array<{
+    recordIdentifier: RecordIdentifier;
+    error: { code: string; message: string };
+    /** Present for CONFLICT errors — the current server version of the record. */
+    serverRecord?: CloudKitRecord;
+  }>;
+}
+
+/**
+ * Event emitted when the sync provider encounters an unrecoverable error.
+ * After this event, call `stopSyncEngine()` and inspect `error.code`.
+ */
+export interface SyncErrorEvent {
+  type: 'syncError';
+  error: { code: string; message: string };
+}
+
+/**
+ * Union of all possible sync engine events.
+ * Narrowed by the `type` discriminant field.
+ *
+ * @example
+ * ```typescript
+ * addSyncEngineListener((event) => {
+ *   if (event.type === 'recordsFetched') {
+ *     console.log(event.changedRecords);
+ *   }
+ * });
+ * ```
+ */
+export type SyncEngineEvent =
+  | SyncStateChangedEvent
+  | RecordsFetchedEvent
+  | RecordsSentEvent
+  | SyncErrorEvent;
+
+/** A queued change for the sync engine to process on its next send cycle. */
 export interface PendingRecordChange {
   type: 'save' | 'delete';
+  /** Required when type is 'save'. The record to save. */
   record?: RecordToSave;
+  /** Required when type is 'delete'. The record to delete. */
   recordIdentifier?: RecordIdentifier;
 }

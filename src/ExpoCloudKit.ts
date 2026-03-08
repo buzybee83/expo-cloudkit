@@ -26,6 +26,7 @@ import type {
   Subscription,
   SyncEngineConfig,
   SyncEngineEvent,
+  SyncState,
   Zone,
   ZoneChanges,
 } from './types';
@@ -38,12 +39,18 @@ import type {
  * Attempts to acquire the native module. On Android or web this will throw,
  * which we catch and replace with a stub that throws CloudKitError on every call.
  */
-let NativeModule: ReturnType<typeof requireNativeModule> | null = null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let NativeModule: Record<string, any> | null = null;
 let emitter: EventEmitter | null = null;
 
 try {
-  NativeModule = requireNativeModule('ExpoCloudKit');
-  emitter = new EventEmitter(NativeModule);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mod = requireNativeModule<Record<string, any>>('ExpoCloudKit');
+  NativeModule = mod;
+  // EventEmitter expects { __expo_module_name__?, startObserving?, stopObserving?, ... }
+  // The return value of requireNativeModule satisfies this at runtime.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  emitter = new EventEmitter(mod as any);
 } catch {
   // Platform does not support CloudKit. All calls will produce a clear error.
 }
@@ -277,14 +284,54 @@ export function isSyncEngineAvailable(): boolean {
 
 /**
  * Initializes CKSyncEngine for the specified zones.
- * Requires iOS 17+. Rejects on older OS versions.
+ *
+ * On iOS 17+, delegates scheduling to CKSyncEngine (automatic, system-managed).
+ * On iOS 16, starts a polling timer (default 30s interval) using
+ * `CKFetchRecordZoneChangesOperation` as the fallback.
+ *
+ * @param config - Zones, database scope, and scheduling preferences.
+ * @throws {CloudKitError} code NOT_AUTHENTICATED if the user is not signed in.
  */
 export function startSyncEngine(config: SyncEngineConfig): Promise<void> {
   return callAsync(() => NativeModule!.startSyncEngine(config));
 }
 
 /**
+ * Returns the current state of the sync provider.
+ *
+ * This is a synchronous call that reads in-memory state — it never touches
+ * the network. Subscribe to `addSyncEngineListener` for real-time updates
+ * via `stateChanged` events.
+ *
+ * Returns `{ usesSyncEngine: false, status: 'notStarted' }` when
+ * `startSyncEngine()` has not been called.
+ *
+ * @example
+ * ```typescript
+ * const { status } = getSyncState();
+ * if (status === 'syncing') {
+ *   // Show a loading indicator
+ * }
+ * ```
+ */
+export function getSyncState(): SyncState {
+  if (!NativeModule) {
+    return { usesSyncEngine: false, status: 'notStarted' };
+  }
+  try {
+    return NativeModule.getSyncState() as SyncState;
+  } catch {
+    return { usesSyncEngine: false, status: 'notStarted' };
+  }
+}
+
+/**
  * Manually triggers a sync cycle.
+ *
+ * On iOS 17+, asks CKSyncEngine to fetch and send changes immediately.
+ * On iOS 16, runs one fetch + push cycle synchronously outside the timer.
+ *
+ * @throws {CloudKitError} code SYNC_ENGINE_NOT_RUNNING if the engine is not started.
  */
 export function triggerSync(): Promise<void> {
   return callAsync(() => NativeModule!.triggerSync());
@@ -303,7 +350,35 @@ export function enqueuePendingChange(change: PendingRecordChange): void {
 }
 
 /**
- * Listens for CKSyncEngine events (fetched changes, sent changes, errors).
+ * Listens for all CKSyncEngine events through the single `onSyncEngineEvent` channel.
+ *
+ * All sync events are dispatched to all active listeners; filter by `event.type`
+ * to handle specific cases. Typically there will be 1–2 active listeners per app.
+ *
+ * Event types:
+ * - `'stateChanged'`   — Sync provider state transitioned (idle/syncing/suspended).
+ * - `'recordsFetched'` — New or modified records arrived from the server.
+ * - `'recordsSent'`    — Local changes were pushed; includes failures with server versions.
+ * - `'syncError'`      — An unrecoverable error occurred.
+ *
+ * @param callback - Called on the main thread whenever a sync event fires.
+ * @returns A Subscription; call `.remove()` to stop receiving events.
+ *
+ * @example
+ * ```typescript
+ * const sub = addSyncEngineListener((event) => {
+ *   switch (event.type) {
+ *     case 'recordsFetched':
+ *       applyChanges(event.changedRecords, event.deletedRecordIDs);
+ *       break;
+ *     case 'recordsSent':
+ *       handleFailures(event.failedRecords);
+ *       break;
+ *   }
+ * });
+ * // Later:
+ * sub.remove();
+ * ```
  */
 export function addSyncEngineListener(
   callback: (event: SyncEngineEvent) => void
@@ -315,6 +390,11 @@ export function addSyncEngineListener(
 
 /**
  * Stops the sync engine and releases its resources.
+ *
+ * After this call, `getSyncState()` returns `{ status: 'notStarted' }`.
+ * Call `startSyncEngine()` again to resume syncing.
+ *
+ * @throws {CloudKitError} code SYNC_ENGINE_NOT_RUNNING if the engine is not started.
  */
 export function stopSyncEngine(): Promise<void> {
   return callAsync(() => NativeModule!.stopSyncEngine());
