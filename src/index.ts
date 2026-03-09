@@ -88,6 +88,13 @@ export type {
   // Phase C — CKRecord.Reference deep linking
   FetchWithReferencesOptions,
   ResolvedRecord,
+  // Phase C — Offline Queue
+  OfflineQueueEntryStatus,
+  OfflineQueueEntry,
+  OfflineQueueStatus,
+  OfflineQueueDrainResult,
+  QueuedResult,
+  OfflineQueueEvent,
 } from './types';
 
 // Errors
@@ -174,3 +181,13 @@ export {
 
 // Phase C — CKRecord.Reference deep linking
 export { fetchRecordWithReferences } from './ExpoCloudKit';
+
+// Phase C — Offline Queue
+export {
+  enqueueOfflineOperation,
+  drainOfflineQueue,
+  getOfflineQueueStatus,
+  clearOfflineQueue,
+  retryFailedOperations,
+  addOfflineQueueListener,
+} from './ExpoCloudKit';
