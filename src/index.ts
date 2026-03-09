@@ -80,6 +80,8 @@ export type {
   QuerySubscriptionEvent,
   DatabaseSubscriptionEvent,
   SubscriptionEvent,
+  // Phase C — Batch Progress
+  BatchProgress,
 } from './types';
 
 // Errors
@@ -110,6 +112,9 @@ export {
   addSyncEngineListener,
   stopSyncEngine,
 } from './ExpoCloudKit';
+
+// Phase C — Batch Progress
+export { addBatchProgressListener } from './ExpoCloudKit';
 
 // Phase D — CKAsset
 export { downloadAsset, addAssetProgressListener } from './ExpoCloudKit';

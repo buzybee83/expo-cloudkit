@@ -17,6 +17,7 @@ import type {
   AcceptShareOptions,
   AccountStatus,
   AssetProgress,
+  BatchProgress,
   CloudKitRecord,
   CloudKitSubscription,
   CreateShareOptions,
@@ -447,6 +448,38 @@ export function addAssetProgressListener(
   if (!isIOS) return noopSubscription;
   assertNativeAvailable();
   const subscription = emitter!.addListener('onAssetProgress', callback);
+  return { remove: () => subscription.remove() };
+}
+
+// ---------------------------------------------------------------------------
+// Batch progress (Phase C)
+// ---------------------------------------------------------------------------
+
+/**
+ * Listens for per-record progress events emitted during a `saveRecords` batch.
+ *
+ * The native side emits `onBatchProgress` once for each record processed by
+ * `CKModifyRecordsOperation`, allowing callers to show incremental progress UI
+ * during large batch saves.
+ *
+ * @param callback - Called on the main thread for each record processed.
+ * @returns A Subscription handle; call `.remove()` to stop receiving events.
+ *
+ * @example
+ * ```typescript
+ * const sub = addBatchProgressListener((progress) => {
+ *   console.log(`${progress.completed}/${progress.total} — ${progress.recordName}`);
+ * });
+ * // Later:
+ * sub.remove();
+ * ```
+ */
+export function addBatchProgressListener(
+  callback: (progress: BatchProgress) => void
+): Subscription {
+  if (!isIOS) return noopSubscription;
+  assertNativeAvailable();
+  const subscription = emitter!.addListener('onBatchProgress', callback);
   return { remove: () => subscription.remove() };
 }
 

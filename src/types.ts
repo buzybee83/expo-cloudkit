@@ -260,6 +260,32 @@ export interface AssetProgress {
 }
 
 // ---------------------------------------------------------------------------
+// Batch Progress (Phase C)
+// ---------------------------------------------------------------------------
+
+/**
+ * Progress event emitted during a `saveRecords` batch operation.
+ *
+ * One event is emitted per record as the underlying
+ * `CKModifyRecordsOperation` reports per-record completion.
+ *
+ * @example
+ * ```typescript
+ * addBatchProgressListener((progress) => {
+ *   console.log(`${progress.completed}/${progress.total} — ${progress.recordName}`);
+ * });
+ * ```
+ */
+export interface BatchProgress {
+  /** Number of records completed so far in this batch (1-based). */
+  completed: number;
+  /** Total number of records in this batch. */
+  total: number;
+  /** The `recordName` of the record that was just processed. */
+  recordName: string;
+}
+
+// ---------------------------------------------------------------------------
 // Sharing — CKShare (Phase C)
 // ---------------------------------------------------------------------------
 
@@ -586,6 +612,50 @@ export type PendingRecordChange =
 // Push Subscriptions (Phase B)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Phase C — Debug / Dashboard helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Snapshot of the CloudKit container's identity and current account status.
+ *
+ * Returned by `__debugDumpContainerInfo()`. Intended for use in developer
+ * tooling (e.g. a CloudKit Dashboard screen) and should not be surfaced to
+ * end users in production builds.
+ *
+ * @internal
+ */
+export interface ContainerInfo {
+  /** The container identifier, e.g. "iCloud.com.example.myapp". */
+  containerID: string;
+  /** The current iCloud account status at the time of the call. */
+  accountStatus: AccountStatus;
+}
+
+/**
+ * A CloudKit record with all server-assigned metadata fields included.
+ *
+ * Extends `CloudKitRecord` with fields that are always present on the server
+ * but may be omitted from normal record responses for bandwidth reasons.
+ * Returned by `__debugFetchRawRecord()`.
+ *
+ * All date fields are ISO 8601 strings to match `CloudKitRecord`.
+ *
+ * @internal
+ */
+export interface RawRecord extends CloudKitRecord {
+  /** ISO 8601 creation date. Alias for `CloudKitRecord.creationDate` — always non-null here. */
+  creationDate: string;
+  /** ISO 8601 modification date. Alias for `CloudKitRecord.modificationDate` — always non-null here. */
+  modificationDate: string;
+  /** CKRecord.ID.recordName of the user who created the record, if available. */
+  creatorUserRecordID?: string;
+  /** CKRecord.ID.recordName of the user who last modified the record, if available. */
+  lastModifiedUserRecordID?: string;
+  /** CKRecord.recordChangeTag — opaque server version tag used for conflict detection. */
+  recordChangeTag?: string;
+}
+
 /**
  * Discriminates between a CKQuerySubscription ('query') and a
  * CKDatabaseSubscription ('database').
@@ -689,3 +759,72 @@ export interface DatabaseSubscriptionEvent {
  * ```
  */
 export type SubscriptionEvent = QuerySubscriptionEvent | DatabaseSubscriptionEvent;
+
+// ---------------------------------------------------------------------------
+// Phase C — CKRecord.Reference deep linking
+// ---------------------------------------------------------------------------
+
+/**
+ * Options for `fetchRecordWithReferences()`.
+ *
+ * Controls which record to fetch and how deeply to follow CKRecord.Reference
+ * fields during resolution. Depth 1 resolves direct references; depth 2
+ * follows references-of-references; and so on up to the maximum of 3.
+ *
+ * @example
+ * ```typescript
+ * const resolved = await fetchRecordWithReferences('abc123', {
+ *   recordType: 'Note',
+ *   zoneName: 'MyZone',
+ *   depth: 2,
+ * });
+ * ```
+ */
+export interface FetchWithReferencesOptions {
+  /** CKRecord.recordType of the root record to fetch. */
+  recordType: string;
+  /** Zone the root record lives in. Omit for the default zone. */
+  zoneName?: string;
+  /** Which database to query. Default: 'private'. */
+  database?: DatabaseScope;
+  /**
+   * Maximum reference resolution depth.
+   * 1 resolves the direct reference fields on the root record.
+   * 2 also resolves references on those referenced records, and so on.
+   * Default: 1. Maximum: 3.
+   */
+  depth?: number;
+}
+
+/**
+ * A record returned by `fetchRecordWithReferences()`.
+ *
+ * Extends `CloudKitRecord` with a `resolvedReferences` map that replaces
+ * reference fields with their full nested record data, resolved up to the
+ * requested depth.
+ *
+ * Fields that are NOT reference fields remain in `fields` unchanged.
+ * Reference fields whose target record could not be fetched are absent from
+ * `resolvedReferences` but their `ReferenceValue` entry remains in `fields`.
+ *
+ * @example
+ * ```typescript
+ * const note = await fetchRecordWithReferences('abc123', {
+ *   recordType: 'Note',
+ *   zoneName: 'MyZone',
+ *   depth: 1,
+ * });
+ * const author = note.resolvedReferences['author']; // ResolvedRecord | undefined
+ * ```
+ */
+export interface ResolvedRecord extends CloudKitRecord {
+  /**
+   * Map of field name to fully resolved record for each CKRecord.Reference
+   * field that was successfully resolved at the requested depth.
+   *
+   * Keys match the field names in `CloudKitRecord.fields`. Each value is
+   * itself a ResolvedRecord, so nested references are recursively resolved
+   * up to the depth specified in `FetchWithReferencesOptions.depth`.
+   */
+  resolvedReferences: Record<string, ResolvedRecord>;
+}
