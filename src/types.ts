@@ -828,3 +828,160 @@ export interface ResolvedRecord extends CloudKitRecord {
    */
   resolvedReferences: Record<string, ResolvedRecord>;
 }
+
+// ---------------------------------------------------------------------------
+// Phase C — Offline Queue
+// ---------------------------------------------------------------------------
+
+/**
+ * Lifecycle status of a single entry in the offline operation queue.
+ *
+ * - `'pending'`  — Waiting for connectivity or the next drain cycle.
+ * - `'retrying'` — A previous attempt failed; will be retried automatically.
+ * - `'failed'`   — Exhausted all retry attempts; manual intervention required.
+ */
+export type OfflineQueueEntryStatus = 'pending' | 'retrying' | 'failed';
+
+/**
+ * A single operation persisted in the offline queue.
+ *
+ * Entries are created by `enqueueOfflineOperation()` and are processed
+ * automatically on the next `drainOfflineQueue()` call or when connectivity
+ * is restored.
+ */
+export interface OfflineQueueEntry {
+  /** Opaque identifier for this queued operation. */
+  queueId: string;
+  /** Whether this entry is a record save or delete operation. */
+  operation: 'save' | 'delete';
+  /** The database scope this operation targets. */
+  database: DatabaseScope;
+  /** Current lifecycle status of the entry. */
+  status: OfflineQueueEntryStatus;
+  /** Number of failed attempts so far (0 on first enqueue). */
+  retryCount: number;
+  /** ISO 8601 timestamp when the entry was first enqueued. */
+  createdAt: string;
+  /** ISO 8601 timestamp of the next scheduled retry attempt. */
+  nextRetryAt: string;
+  /** CloudKitErrorCode string from the most recent failed attempt, if any. */
+  lastErrorCode?: string;
+  /**
+   * The record data for this operation.
+   * `RecordToSave` for 'save' operations; `RecordIdentifier` for 'delete' operations.
+   */
+  recordData: RecordToSave | RecordIdentifier;
+}
+
+/**
+ * Aggregate status snapshot of the offline operation queue.
+ *
+ * Returned by `getOfflineQueueStatus()`. Pass `{ includeEntries: true }` to
+ * populate the `entries` array with full entry details.
+ */
+export interface OfflineQueueStatus {
+  /** Number of entries currently waiting to be attempted. */
+  pending: number;
+  /** Number of entries that are being retried after a failed attempt. */
+  retrying: number;
+  /** Number of entries that have exhausted all retry attempts. */
+  failed: number;
+  /** Total number of entries across all statuses. */
+  total: number;
+  /**
+   * Full list of queue entries, populated only when
+   * `getOfflineQueueStatus({ includeEntries: true })` is called.
+   */
+  entries?: OfflineQueueEntry[];
+}
+
+/**
+ * Summary of a completed `drainOfflineQueue()` run.
+ *
+ * Reports how many operations succeeded, failed, or were skipped
+ * (e.g. due to being gated behind failed prerequisites).
+ */
+export interface OfflineQueueDrainResult {
+  /** Number of operations that completed successfully in this drain. */
+  succeeded: number;
+  /** Number of operations that failed and remain in the queue for retry. */
+  failed: number;
+  /** Number of operations that were skipped (e.g. dependency not resolved). */
+  skipped: number;
+}
+
+/**
+ * Returned by `enqueueOfflineOperation()` to confirm the operation was
+ * persisted to the queue.
+ */
+export interface QueuedResult {
+  /** Confirms the operation was queued (always `true`). */
+  queued: true;
+  /** Opaque identifier for the newly created queue entry. */
+  queueId: string;
+}
+
+/**
+ * Discriminated union of all events emitted by `addOfflineQueueListener`.
+ *
+ * Filter by `event.type` to handle individual event kinds:
+ *
+ * - `'operationCompleted'`     — An operation drained successfully.
+ * - `'operationFailed'`        — An operation attempt failed; may be retried.
+ * - `'operationMovedToFailed'` — An operation exhausted all retries and is now `'failed'`.
+ * - `'queueDrained'`           — A full drain cycle completed.
+ * - `'queueStatusChanged'`     — The aggregate queue counts changed.
+ *
+ * @example
+ * ```typescript
+ * addOfflineQueueListener((event) => {
+ *   if (event.type === 'operationCompleted') {
+ *     console.log('Saved:', event.queueId, event.result);
+ *   } else if (event.type === 'operationMovedToFailed') {
+ *     console.warn('Permanently failed:', event.queueId, event.errorCode);
+ *   }
+ * });
+ * ```
+ */
+export type OfflineQueueEvent =
+  | {
+      type: 'operationCompleted';
+      /** The queue entry that completed. */
+      queueId: string;
+      /** The saved records returned by CloudKit, or `null` for delete operations. */
+      result: SavedRecord[] | null;
+    }
+  | {
+      type: 'operationFailed';
+      /** The queue entry that failed this attempt. */
+      queueId: string;
+      /** CloudKitErrorCode string for the failure reason. */
+      errorCode: string;
+      /** How many total attempts have been made (including this one). */
+      retryCount: number;
+      /** Whether the queue will schedule another retry automatically. */
+      willRetry: boolean;
+    }
+  | {
+      type: 'operationMovedToFailed';
+      /** The queue entry that permanently failed. */
+      queueId: string;
+      /** CloudKitErrorCode string for the last failure reason. */
+      errorCode: string;
+      /** Total number of attempts made before giving up. */
+      retryCount: number;
+    }
+  | {
+      type: 'queueDrained';
+      /** Number of operations that succeeded in this drain cycle. */
+      succeeded: number;
+      /** Number of operations that failed in this drain cycle. */
+      failed: number;
+      /** Number of operations that were skipped in this drain cycle. */
+      skipped: number;
+    }
+  | {
+      type: 'queueStatusChanged';
+      /** The updated aggregate queue status after the change. */
+      status: OfflineQueueStatus;
+    };
