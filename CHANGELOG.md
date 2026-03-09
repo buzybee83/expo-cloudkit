@@ -11,6 +11,23 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.3.0] - 2026-03-09
+
+### Added
+- **Offline queue** — persist CloudKit operations for offline-first apps (`enqueueOfflineOperation`, `drainOfflineQueue`, `clearOfflineQueue`, `getOfflineQueueStatus`, `retryFailedOperations`, `addOfflineQueueListener`). JSON-backed at `Library/Application Support/expo-cloudkit/offline-queue.json`. NWPathMonitor drain on connectivity restore, exponential backoff (5·2ⁿ s, capped at 300 s), 500-entry cap, 10-retry max, `onOfflineQueueEvent` discriminated-union events.
+- **React hooks** — `useCloudKitRecord`, `useCloudKitQuery`, `useCloudKitSync` with stale-fetch guard and `fetchMore` cursor pagination.
+- **Android stub** — All public APIs return `CloudKitNotSupportedError` on non-iOS; no crash.
+- **CloudKit Dashboard helpers** — `__debugDumpContainerInfo`, `__debugListZones`, `__debugFetchRawRecord`, `__debugClearZone` dev-only introspection utilities.
+- **Batch operations** — `saveRecords`/`deleteRecords` auto-chunk at 400 (CloudKit hard limit); `addBatchProgressListener` / `onBatchProgress` event with `{ completed, total, recordName }`.
+- **`CKRecord.Reference` deep linking** — `fetchRecordWithReferences(recordName, { depth })` recursively resolves reference fields up to depth 3, with parallel fetch via `DispatchGroup` and fallback to shallow stub on error.
+- **Jest infrastructure** — 41 unit tests for React hooks (`useCloudKitRecord`, `useCloudKitQuery`, `useCloudKitSync`).
+- **GitHub Actions CI** — typecheck → lint → Jest → expo build on every PR and push to `main`.
+
+### Changed
+- `saveRecords` accepts new `queueOnFailure` option: on retryable `CKError`, each record is individually enqueued and resolves with `{ queued: true, queueId }`.
+
+---
+
 ## [0.2.0] — 2026-03-08
 
 ### Added

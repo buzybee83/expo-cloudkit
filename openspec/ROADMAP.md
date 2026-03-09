@@ -39,11 +39,11 @@
 - [x] Automatic capability detection — use CKSyncEngine on 17+, fallback on 16
 - [x] Graceful degradation surface in JS API (returns `syncEngine: false` in status)
 
-## Phase C — Advanced (planned)
+## Phase C — Advanced (complete)
 
-- [ ] Offline queue with automatic retry (exponential backoff, persist across app restarts)
-- [ ] React hooks: `useCloudKitRecord`, `useCloudKitQuery`, `useCloudKitSync`
-- [ ] Android stub — all APIs return a `CloudKitNotSupportedError` gracefully
-- [ ] CloudKit Dashboard helper tooling (for development/debug)
-- [ ] Batch record operations with progress reporting
-- [ ] `CKRecord.Reference` deep linking support
+- [x] Offline queue with automatic retry (exponential backoff, persist across app restarts)
+- [x] React hooks: `useCloudKitRecord`, `useCloudKitQuery`, `useCloudKitSync`
+- [x] Android stub — all APIs return a `CloudKitNotSupportedError` gracefully
+- [x] CloudKit Dashboard helper tooling (for development/debug)
+- [x] Batch record operations with progress reporting
+- [x] `CKRecord.Reference` deep linking support
