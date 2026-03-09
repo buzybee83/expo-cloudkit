@@ -333,6 +333,60 @@ public class ExpoCloudKitModule: Module {
     }
 
     // -------------------------------------------------------------------------
+    // Reference Deep Linking — Phase C
+    // -------------------------------------------------------------------------
+
+    /// Fetches a record and recursively resolves all CKRecord.Reference fields
+    /// up to `depth` levels (clamped to 1...3).
+    ///
+    /// Options keys:
+    ///   - recordName (String, required)
+    ///   - zoneName   (String, optional — defaults to the default zone)
+    ///   - database   (String, optional — "private"|"shared"|"public", default "private")
+    ///   - depth      (Int, optional — 1...3, default 1)
+    ///
+    /// On success resolves with a fully-resolved record dictionary where every
+    /// reference-typed field has been replaced with a complete record dict.
+    /// References that cannot be fetched retain their original shallow stub.
+    ///
+    /// - Rejects with `CloudKitModuleError.notConfigured` if `configure()` has not been called.
+    /// - Rejects with `CloudKitModuleError.invalidArgument` if `recordName` is missing.
+    AsyncFunction("fetchRecordWithReferences") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self, let recordManager = self.recordManager else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+      guard let recordName = options["recordName"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("recordName is required"))
+        return
+      }
+      let zoneName = options["zoneName"] as? String
+      let dbString = options["database"] as? String ?? "private"
+      let scope = Converters.toDatabaseScope(dbString)
+      let depth: Int
+      if let d = options["depth"] as? Int {
+        depth = d
+      } else if let d = options["depth"] as? Double {
+        depth = Int(d)
+      } else {
+        depth = 1
+      }
+      recordManager.fetchRecordWithReferences(
+        recordName: recordName,
+        zoneName: zoneName,
+        database: scope,
+        depth: depth
+      ) { result in
+        switch result {
+        case .success(let dict):
+          promise.resolve(dict)
+        case .failure(let error):
+          promise.reject(Converters.toExpoError(error))
+        }
+      }
+    }
+
+    // -------------------------------------------------------------------------
     // CKSyncEngine — Phase B (iOS 17+)
     // -------------------------------------------------------------------------
 
