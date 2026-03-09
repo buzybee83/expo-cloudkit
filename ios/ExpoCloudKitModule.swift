@@ -35,6 +35,13 @@ public class ExpoCloudKitModule: Module {
   /// Lazily initialised after `configure()` is called.
   private var shareManager: CloudKitShareManager?
 
+  // MARK: - Debug helper (Phase C)
+
+  /// Dev-time introspection utilities. Lazily initialised after `configure()`.
+  /// Never call these from production code paths — see `__debug` prefix on all
+  /// exported JS methods.
+  private var debugHelper: CloudKitDebugHelper?
+
   // MARK: - Cursor cache for queryRecords pagination
 
   /// In-memory store of CKQueryOperation.Cursor objects, keyed by opaque UUID token.
@@ -86,6 +93,7 @@ public class ExpoCloudKitModule: Module {
       self.recordManager = CloudKitRecordManager(ckContainer: ck)
       self.subscriptionManager = CloudKitSubscriptionManager(ckContainer: ck)
       self.shareManager = CloudKitShareManager(ckContainer: ck)
+      self.debugHelper = CloudKitDebugHelper(container: ck)
 
       // Start listening for account status changes and forward to JS
       container.startAccountStatusObserver { [weak self] status in
@@ -916,6 +924,120 @@ public class ExpoCloudKitModule: Module {
         self?.sendEvent("onShareAccepted", [
           "shareURL": urlString
         ])
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // Debug Helpers — Phase C (dev-only, never call from production)
+    // -------------------------------------------------------------------------
+
+    /// Returns container metadata: containerID, accountStatus, environments.
+    ///
+    /// - Rejects with `CloudKitNotConfiguredException` if `configure()` has not been called.
+    AsyncFunction("__debugDumpContainerInfo") { [weak self] (promise: Promise) in
+      guard let self = self, let debugHelper = self.debugHelper else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+      debugHelper.dumpContainerInfo { result in
+        switch result {
+        case .success(let info):
+          promise.resolve(info)
+        case .failure(let error):
+          promise.reject(Converters.toExpoError(error))
+        }
+      }
+    }
+
+    /// Lists all zones in the private and shared databases.
+    ///
+    /// Returns `[{ zoneName, ownerName, capabilities, database }]`.
+    ///
+    /// - Rejects with `CloudKitNotConfiguredException` if `configure()` has not been called.
+    AsyncFunction("__debugListZones") { [weak self] (promise: Promise) in
+      guard let self = self, let debugHelper = self.debugHelper else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+      debugHelper.listZones { result in
+        switch result {
+        case .success(let zones):
+          promise.resolve(zones)
+        case .failure(let error):
+          promise.reject(Converters.toExpoError(error))
+        }
+      }
+    }
+
+    /// Fetches a single record with all user-defined fields and full system metadata.
+    ///
+    /// Options keys:
+    ///   - `recordName` (String, required)
+    ///   - `zoneName`   (String, optional — defaults to the default zone)
+    ///   - `database`   (String, optional — "private"|"shared"|"public", default "private")
+    ///
+    /// - Rejects with `CloudKitInvalidArgumentException` if `recordName` is missing.
+    AsyncFunction("__debugFetchRawRecord") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self, let debugHelper = self.debugHelper, let container = self.container else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+
+      guard let recordName = options["recordName"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("recordName is required"))
+        return
+      }
+
+      let zoneName = options["zoneName"] as? String
+      let dbString = options["database"] as? String ?? "private"
+      let scope = Converters.toDatabaseScope(dbString)
+      let db = container.ckContainer.database(with: scope)
+
+      debugHelper.fetchRawRecord(
+        recordName: recordName,
+        zoneName: zoneName,
+        database: db
+      ) { result in
+        switch result {
+        case .success(let dict):
+          promise.resolve(dict)
+        case .failure(let error):
+          promise.reject(Converters.toExpoError(error))
+        }
+      }
+    }
+
+    /// Deletes all records in the named zone, then recreates it empty.
+    ///
+    /// This is destructive and permanent — use only in test/dev environments.
+    ///
+    /// Options keys:
+    ///   - `zoneName`  (String, required)
+    ///   - `database`  (String, optional — "private"|"shared"|"public", default "private")
+    ///
+    /// - Rejects with `CloudKitInvalidArgumentException` if `zoneName` is missing.
+    AsyncFunction("__debugClearZone") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self, let debugHelper = self.debugHelper, let container = self.container else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+
+      guard let zoneName = options["zoneName"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("zoneName is required"))
+        return
+      }
+
+      let dbString = options["database"] as? String ?? "private"
+      let scope = Converters.toDatabaseScope(dbString)
+      let db = container.ckContainer.database(with: scope)
+
+      debugHelper.clearZone(zoneName: zoneName, database: db) { result in
+        switch result {
+        case .success:
+          promise.resolve(nil)
+        case .failure(let error):
+          promise.reject(Converters.toExpoError(error))
+        }
       }
     }
 
