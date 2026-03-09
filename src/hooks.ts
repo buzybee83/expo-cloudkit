@@ -463,7 +463,7 @@ export function useCloudKitQuery(
   useEffect(() => {
     if (!subscribe || !recordType || !enabled) return;
 
-    const subscription = addSubscriptionListener((_event: SubscriptionEvent) => {
+    const subscription = addSubscriptionListener(() => {
       void refetch();
     });
 

@@ -65,7 +65,7 @@ export function ExpoCloudKitMockFactory() {
  * Call after jest.mock('../ExpoCloudKit', ...) has been declared.
  */
 export function getMocks() {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const mod = require('../ExpoCloudKit') as jest.Mocked<typeof ExpoCloudKitModule>;
   return {
     mockFetchRecord: mod.fetchRecord as jest.MockedFunction<typeof mod.fetchRecord>,

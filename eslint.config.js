@@ -1,6 +1,7 @@
 // @ts-check
 const tseslint = require('@typescript-eslint/eslint-plugin');
 const tsParser = require('@typescript-eslint/parser');
+const reactHooks = require('eslint-plugin-react-hooks');
 
 /** @type {import('eslint').Linter.Config[]} */
 module.exports = [
@@ -14,9 +15,12 @@ module.exports = [
     },
     plugins: {
       '@typescript-eslint': tseslint,
+      'react-hooks': reactHooks,
     },
     rules: {
       ...tseslint.configs.recommended.rules,
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'warn',
     },
   },
 ];
