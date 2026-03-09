@@ -40,7 +40,7 @@ expo-cloudkit is a TypeScript-first Expo native module over Apple's CloudKit fra
 
 ## Requirements
 
-- iOS 16.0+ for all Phase A operations (zones, record CRUD, delta fetch)
+- iOS 16.0+ for all Phase A operations (zones, record CRUD, delta fetch, assets)
 - iOS 17.0+ for CKSyncEngine (`startSyncEngine` / `useCloudKitSync`)
 - Expo SDK 51+
 - `expo-modules-core` 1.12+
@@ -110,8 +110,8 @@ configure('iCloud.com.yourcompany.yourapp');
 // 2. Check iCloud account before any operation
 const status = await getAccountStatus();
 if (status !== 'available') {
-  // 'noAccount'    — user is not signed into iCloud
-  // 'restricted'   — parental controls or MDM prevents iCloud
+  // 'noAccount'              — user is not signed into iCloud
+  // 'restricted'             — parental controls or MDM prevents iCloud
   // 'temporarilyUnavailable' — transient; retry after a delay
   console.warn('iCloud not available:', status);
   return;
@@ -173,10 +173,10 @@ Returns the current iCloud account status. Always call this before performing Cl
 
 ```typescript
 type AccountStatus =
-  | 'available'             // User is signed in and CloudKit is reachable
-  | 'noAccount'             // No iCloud account on the device
-  | 'restricted'            // Parental controls or MDM restriction
-  | 'couldNotDetermine'     // Status could not be determined (retry)
+  | 'available'               // User is signed in and CloudKit is reachable
+  | 'noAccount'               // No iCloud account on the device
+  | 'restricted'              // Parental controls or MDM restriction
+  | 'couldNotDetermine'       // Status could not be determined (retry)
   | 'temporarilyUnavailable'; // Transient — retry after a short delay
 
 const status = await getAccountStatus();
@@ -263,7 +263,7 @@ const [updated] = await saveRecords([
     recordType: 'Note',
     recordName: saved.recordName,
     zoneName: 'Notes',
-    changeTag: saved.changeTag, // fails with CONFLICT if server has newer version
+    changeTag: saved.changeTag, // fails with CONFLICT if server has a newer version
     fields: {
       title: { type: 'string', value: 'Updated Title' },
     },
@@ -380,9 +380,10 @@ Receives upload and download progress for `CKAsset` operations.
 
 ```typescript
 const sub = addAssetProgressListener((progress) => {
-  console.log(
-    `${progress.direction} ${progress.fieldName}: ${Math.round(progress.fraction * 100)}%`
-  );
+  // progress.direction  — 'upload' | 'download'
+  // progress.fieldName  — the asset field name
+  // progress.fraction   — 0.0 to 1.0 (-1 if unknown)
+  console.log(`${progress.direction} ${progress.fieldName}: ${Math.round(progress.fraction * 100)}%`);
 });
 sub.remove();
 ```
@@ -391,13 +392,13 @@ sub.remove();
 
 ### CKSyncEngine (iOS 17+)
 
-CKSyncEngine provides automatic, system-managed sync scheduling. On iOS 16, the module falls back to a polling loop using `CKFetchRecordZoneChangesOperation` — the API is identical in both cases.
+CKSyncEngine provides automatic, system-managed sync scheduling. On iOS 16, the module falls back to a polling loop using `CKFetchRecordZoneChangesOperation` — the JS API is identical in both cases.
 
 **iOS version requirement:** `startSyncEngine` requires iOS 16+. CKSyncEngine delegation (automatic scheduling) requires iOS 17+. On iOS 16, `getSyncState()` returns `{ usesSyncEngine: false }`.
 
 #### `isSyncEngineAvailable(): boolean`
 
-Returns `true` if `CKSyncEngine` (iOS 17+) is active. Use this to show UI that depends on true real-time sync.
+Returns `true` if `CKSyncEngine` (iOS 17+) is active on this device. Use this to show UI that depends on real-time sync capability.
 
 ```typescript
 if (isSyncEngineAvailable()) {
@@ -409,13 +410,13 @@ if (isSyncEngineAvailable()) {
 
 #### `startSyncEngine(config): Promise<void>`
 
-Initializes the sync provider for the specified zones. On iOS 17+, delegates scheduling to CKSyncEngine. On iOS 16, starts a polling timer.
+Initializes the sync provider for the specified zones. On iOS 17+, delegates scheduling to CKSyncEngine. On iOS 16, starts a 30-second polling timer.
 
 ```typescript
 await startSyncEngine({
   zones: ['Notes', 'Tasks'],
   database: 'private',
-  automaticallySync: true, // default; false = manual triggerSync() only
+  automaticallySync: true, // default; set false for manual triggerSync() only
 });
 ```
 
@@ -440,14 +441,14 @@ try {
   await triggerSync();
 } catch (err) {
   if (err instanceof CloudKitError && err.code === CloudKitErrorCode.SYNC_ENGINE_NOT_RUNNING) {
-    // Call startSyncEngine first
+    // Call startSyncEngine() first
   }
 }
 ```
 
 #### `enqueuePendingChange(change): void`
 
-Queues a save or delete for the engine to push on its next cycle.
+Queues a save or delete for the engine to push on its next cycle. Discriminated union — `type: 'save'` requires `record`; `type: 'delete'` requires `recordIdentifier`.
 
 ```typescript
 // Queue a save
@@ -478,12 +479,14 @@ const sub = addSyncEngineListener((event) => {
     case 'stateChanged':
       console.log('Sync state:', event.state.status);
       break;
+
     case 'recordsFetched':
-      // Apply server changes to local state
+      // Apply server changes to local state — one event per zone per cycle
       applyChanges(event.changedRecords, event.deletedRecordIDs);
       break;
+
     case 'recordsSent':
-      // Handle any conflicts
+      // Handle any push failures (e.g. conflicts)
       event.failedRecords.forEach(({ recordIdentifier, error, serverRecord }) => {
         if (error.code === 'CONFLICT' && serverRecord) {
           const merged = mergeRecords(serverRecord, localVersion(recordIdentifier));
@@ -491,8 +494,10 @@ const sub = addSyncEngineListener((event) => {
         }
       });
       break;
+
     case 'syncError':
-      console.error('Unrecoverable sync error:', event.error.code, event.error.message);
+      // Unrecoverable — call stopSyncEngine() and inspect error.code
+      console.error('Sync error:', event.error.code, event.error.message);
       break;
   }
 });
@@ -514,7 +519,7 @@ await stopSyncEngine();
 
 ### Push Subscriptions
 
-Push subscriptions use APNs silent push to wake the app when CloudKit records change. The config plugin adds the required background mode entitlement automatically.
+Push subscriptions use APNs silent push to notify the app when CloudKit records change. The config plugin adds the required background mode entitlement automatically.
 
 #### `saveQuerySubscription(options): Promise<string>`
 
@@ -533,9 +538,11 @@ const subscriptionId = await saveQuerySubscription({
 // Store subscriptionId to delete later
 ```
 
+Throws `CloudKitError` with code `NOT_AUTHENTICATED` if the user is not signed in, or `NETWORK_UNAVAILABLE` if offline.
+
 #### `saveDatabaseSubscription(database?): Promise<string>`
 
-Creates a `CKDatabaseSubscription`. Fires whenever anything changes in the database. The push payload does not include record data — call `fetchRecordZoneChanges` on receipt.
+Creates a `CKDatabaseSubscription`. Fires whenever anything changes in the database. The push payload does not include record data — call `fetchRecordZoneChanges` on receipt to get the actual deltas.
 
 ```typescript
 const id = await saveDatabaseSubscription('private');
@@ -568,8 +575,10 @@ Receives push notification events from active subscriptions. Events arrive when 
 const sub = addSubscriptionListener((event) => {
   if (event.type === 'query') {
     // A specific record changed
-    console.log(event.notificationType, event.recordID);
-    void fetchRecord('Note', event.recordID!, 'Notes').then(update);
+    // event.notificationType: 'created' | 'updated' | 'deleted'
+    if (event.recordID) {
+      void fetchRecord('Note', event.recordID, 'Notes').then(update);
+    }
   } else {
     // event.type === 'database' — something changed; fetch deltas
     void fetchRecordZoneChanges(['Notes']).then(applyChanges);
@@ -586,7 +595,7 @@ CKShare lets you share a record (and its zone) with other iCloud users. The shar
 
 #### `createShare(options): Promise<Share>`
 
-Creates a new `CKShare` for a root record. A record can only be the root of one share at a time.
+Creates a new `CKShare` for a root record using `CKModifyRecordsOperation`. A record can only be the root of one share at a time.
 
 ```typescript
 try {
@@ -599,7 +608,7 @@ try {
   // Send share.shareURL to your participants
 } catch (err) {
   if (err instanceof CloudKitError && err.code === CloudKitErrorCode.ALREADY_SHARED) {
-    // Record is already shared — fetch the existing share instead
+    // Record is already shared — call fetchShareParticipants instead
   }
 }
 ```
@@ -635,7 +644,7 @@ console.log('Shared zone:', accepted.zoneName, 'owner:', accepted.ownerName);
 
 #### `addShareAcceptedListener(callback): Subscription`
 
-Fires when the system routes a CloudKit share URL to the app (via universal link or the Sharing sheet). The share has not been accepted yet — pass `event.shareURL` to `acceptShare()`.
+Fires when the system routes a CloudKit share URL to the app (via universal link or the Sharing sheet). The share has not been accepted yet at this point — pass `event.shareURL` to `acceptShare()` to complete the flow.
 
 ```typescript
 const sub = addShareAcceptedListener(async (event) => {
@@ -650,7 +659,10 @@ sub.remove();
 Returns the current list of participants on a share.
 
 ```typescript
-const participants = await fetchShareParticipants({ shareRecordName: 'share-uuid', zoneName: 'Notes' });
+const participants = await fetchShareParticipants({
+  shareRecordName: 'share-uuid',
+  zoneName: 'Notes',
+});
 participants.forEach(p => {
   console.log(p.participantRecordName, p.role, p.acceptanceStatus);
   // role: 'owner' | 'privateUser' | 'publicUser' | 'unknown'
@@ -660,13 +672,13 @@ participants.forEach(p => {
 
 #### `updateSharePermission(options): Promise<Share>`
 
-Changes a participant's permission level.
+Changes a participant's permission level. The owner's permission cannot be changed.
 
 ```typescript
 const updated = await updateSharePermission({
   shareRecordName: 'share-uuid',
   participantRecordName: 'participant-uuid',
-  permission: 'readWrite',
+  permission: 'readWrite', // 'none' | 'readOnly' | 'readWrite'
   zoneName: 'Notes',
 });
 ```
@@ -707,13 +719,13 @@ sharedZones.forEach(zone => {
 
 ### Offline Queue
 
-The offline queue persists CloudKit operations to disk and retries them when connectivity is restored. Operations are stored at `Library/Application Support/expo-cloudkit/offline-queue.json`.
+The offline queue persists CloudKit operations to disk and retries them automatically when connectivity is restored. Operations are stored at `Library/Application Support/expo-cloudkit/offline-queue.json`.
 
 **Automatic drain triggers:**
 - Connectivity restored (NWPathMonitor)
 - App comes to foreground
 
-**Retry policy:** Exponential backoff starting at 5 seconds, capped at 300 seconds. Maximum 10 retries per entry. Queue capacity: 500 entries.
+**Retry policy:** Exponential backoff starting at 5 seconds, doubling each attempt, capped at 300 seconds. Maximum 10 retries per entry. Queue capacity: 500 entries.
 
 #### `enqueueOfflineOperation(options): Promise<{ queueId: string }>`
 
@@ -738,16 +750,16 @@ await enqueueOfflineOperation({
 });
 ```
 
-You can also use `saveRecords` with the `queueOnFailure` option to automatically fall back to the queue on a retryable error:
+You can also use `saveRecords` with `queueOnFailure: true` to fall back to the queue on any retryable CloudKit error:
 
 ```typescript
 const results = await saveRecords(records, 'private', { queueOnFailure: true });
-// For queued entries, result is { queued: true, queueId: '...' }
+// For entries that got queued: result is { queued: true, queueId: '...' }
 ```
 
 #### `drainOfflineQueue(): Promise<OfflineQueueDrainResult>`
 
-Attempts to flush all pending and retrying entries immediately.
+Attempts to flush all pending and retrying entries immediately. Returns a summary.
 
 ```typescript
 const { succeeded, failed, skipped } = await drainOfflineQueue();
@@ -774,7 +786,7 @@ Removes entries by status. Clears everything by default.
 
 ```typescript
 await clearOfflineQueue({ status: 'failed' }); // failed entries only
-await clearOfflineQueue({ status: 'all' });     // everything (including pending)
+await clearOfflineQueue({ status: 'all' });     // everything, including pending (permanent)
 ```
 
 #### `retryFailedOperations(): Promise<void>`
@@ -795,12 +807,14 @@ Receives all offline queue lifecycle events.
 const sub = addOfflineQueueListener((event) => {
   switch (event.type) {
     case 'operationCompleted':
-      console.log('Saved:', event.queueId);
+      console.log('Saved to iCloud:', event.queueId);
       break;
     case 'operationFailed':
-      console.warn(`Attempt ${event.retryCount} failed:`, event.errorCode, event.willRetry ? '(will retry)' : '(giving up)');
+      // event.willRetry is true if another attempt will be scheduled
+      console.warn(`Attempt ${event.retryCount} failed:`, event.errorCode);
       break;
     case 'operationMovedToFailed':
+      // All retries exhausted — requires manual intervention
       console.error('Permanently failed:', event.queueId, event.errorCode);
       notifyUser('Some changes could not be saved to iCloud');
       break;
@@ -808,6 +822,7 @@ const sub = addOfflineQueueListener((event) => {
       console.log(`Drain complete: ${event.succeeded} ok, ${event.failed} failed`);
       break;
     case 'queueStatusChanged':
+      // event.status has pending, retrying, failed, total counts
       updateBadge(event.status.pending + event.status.retrying);
       break;
   }
@@ -819,7 +834,7 @@ sub.remove();
 
 ### React Hooks
 
-React hooks wrap the imperative API with loading/error/refetch state management.
+React hooks wrap the imperative API with loading, error, and refetch state management. Import from `'expo-cloudkit'`.
 
 #### `useCloudKitRecord(recordName, options)`
 
@@ -829,10 +844,10 @@ Fetches a single record and keeps it up to date.
 import { useCloudKitRecord } from 'expo-cloudkit';
 
 function NoteScreen({ recordName }: { recordName: string }) {
-  const { data, loading, error, refetch } = useCloudKitRecord(recordName, {
+  const { data, loading, fetching, error, refetch } = useCloudKitRecord(recordName, {
     recordType: 'Note',
     zoneName: 'Notes',
-    subscribe: true, // Re-fetches on push notification for this record
+    subscribe: true, // re-fetches on push notification for this record
   });
 
   if (loading) return <ActivityIndicator />;
@@ -848,9 +863,11 @@ function NoteScreen({ recordName }: { recordName: string }) {
 ```
 
 **Returns:** `{ data, loading, fetching, error, refetch }`
-- `loading` — `true` only on the first fetch (before `data` has ever been set)
+
+- `loading` — `true` only before `data` has ever been set (initial load spinner)
 - `fetching` — `true` during any in-flight fetch, including re-fetches
-- `error` — preserves the previous `data` on refetch failure (stale-while-revalidate)
+- `error` — preserves previous `data` on refetch failure (stale-while-revalidate)
+- Pass `recordName: undefined` to suspend fetching without unmounting
 
 #### `useCloudKitQuery(recordType, options)`
 
@@ -860,12 +877,12 @@ Queries records with predicates, sorting, and cursor-based pagination.
 import { useCloudKitQuery } from 'expo-cloudkit';
 
 function NoteList() {
-  const { data, loading, error, hasMore, fetchMore, refetch } = useCloudKitQuery('Note', {
+  const { data, loading, fetching, error, hasMore, fetchMore, refetch } = useCloudKitQuery('Note', {
     predicate: { field: 'archived', comparator: '=', value: 0 },
     sortDescriptors: [{ field: 'createdAt', ascending: false }],
     zoneName: 'Notes',
     resultsLimit: 25,
-    subscribe: true, // Re-fetches on any matching push notification
+    subscribe: true, // re-fetches on any matching push notification
   });
 
   if (loading) return <ActivityIndicator />;
@@ -876,7 +893,7 @@ function NoteList() {
       keyExtractor={item => item.recordName}
       renderItem={({ item }) => <NoteRow record={item} />}
       onEndReached={hasMore ? fetchMore : undefined}
-      refreshing={false}
+      refreshing={fetching && !loading}
       onRefresh={refetch}
     />
   );
@@ -885,9 +902,11 @@ function NoteList() {
 
 **Returns:** `{ data, loading, fetching, error, hasMore, fetchMore, refetch }`
 
+`predicate` and `sortDescriptors` are JSON-stringified in the effect dependency array — you do not need to memoize them.
+
 #### `useCloudKitSync(options)`
 
-Manages the CKSyncEngine lifecycle inside a component.
+Manages the CKSyncEngine lifecycle inside a component. Starts the engine on mount; stops it on unmount.
 
 ```typescript
 import { useCloudKitSync } from 'expo-cloudkit';
@@ -898,6 +917,7 @@ function SyncProvider({ children }: { children: React.ReactNode }) {
     database: 'private',
     automaticallySync: true,
     onRecordsFetched: (event) => {
+      // Called once per zone per sync cycle
       applyChanges(event.changedRecords, event.deletedRecordIDs);
     },
     onSyncError: (event) => {
@@ -906,7 +926,7 @@ function SyncProvider({ children }: { children: React.ReactNode }) {
   });
 
   return (
-    <SyncContext.Provider value={{ state, triggerSync, error }}>
+    <SyncContext.Provider value={{ state, isRunning, triggerSync, error }}>
       {children}
     </SyncContext.Provider>
   );
@@ -915,22 +935,24 @@ function SyncProvider({ children }: { children: React.ReactNode }) {
 
 **Returns:** `{ state, isRunning, triggerSync, enqueuePendingChange, error }`
 
-The engine starts on mount and stops on unmount. Flipping `enabled` to `false` stops the engine; flipping it back starts it.
+- `isRunning` — derived from `state.status !== 'notStarted'`
+- `triggerSync` — stable reference; safe to pass as a prop or callback without memoization
+- Flip `enabled: false` to stop the engine without unmounting the component
 
 ---
 
 ### Batch Operations
 
-`saveRecords` and `deleteRecords` automatically split oversized batches to stay within CloudKit's 400-record limit. Each chunk is sent as a separate `CKModifyRecordsOperation`.
+`saveRecords` and `deleteRecords` automatically split oversized arrays to stay within CloudKit's 400-record limit. Each chunk is sent as a separate `CKModifyRecordsOperation`.
 
 #### `addBatchProgressListener(callback): Subscription`
 
-Receives per-record progress events during a `saveRecords` call. Useful for showing a progress bar during large imports.
+Receives per-record progress events during a `saveRecords` call. One event fires per record as `CKModifyRecordsOperation` reports per-record completion. Useful for progress bars during large imports.
 
 ```typescript
 const sub = addBatchProgressListener((progress) => {
-  // progress.completed — records done so far (1-based)
-  // progress.total     — total records in this batch
+  // progress.completed  — records done so far (1-based)
+  // progress.total      — total records in this batch operation
   // progress.recordName — the record just processed
   setProgress(progress.completed / progress.total);
 });
@@ -945,9 +967,9 @@ sub.remove();
 
 #### `fetchRecordWithReferences(recordName, options): Promise<ResolvedRecord>`
 
-Fetches a record and recursively resolves its `CKRecord.Reference` fields. Resolved records appear in `resolvedReferences`, keyed by field name. Unresolvable references remain as `ReferenceValue` entries in `fields` without crashing the call.
+Fetches a record and recursively resolves its `CKRecord.Reference` fields up to the specified depth. Resolved records appear in `resolvedReferences`, keyed by field name. Reference fields whose target record cannot be fetched remain as `ReferenceValue` entries in `fields` — they do not cause the call to fail.
 
-Internally issues a `CKFetchRecordsOperation` per depth level. Depth 1 = 2 round trips max; depth 2 = 3 round trips max; depth 3 = 4 round trips max.
+Internally issues a `CKFetchRecordsOperation` per depth level, with parallel fetching via `DispatchGroup`. Depth 1 = 2 round trips max; depth 2 = 3; depth 3 = 4.
 
 ```typescript
 const note = await fetchRecordWithReferences('abc-123', {
@@ -957,7 +979,7 @@ const note = await fetchRecordWithReferences('abc-123', {
 });
 
 const author = note.resolvedReferences['author']; // ResolvedRecord | undefined
-const org    = author?.resolvedReferences['organization'];
+const org    = author?.resolvedReferences['organization']; // depth 2
 
 console.log(author?.fields.name.value);
 console.log(org?.fields.displayName.value);
@@ -967,7 +989,7 @@ console.log(org?.fields.displayName.value);
 
 ### Dashboard Helpers (dev-only)
 
-These functions are prefixed `__debug` to signal they are for developer tooling only. Do not call them in production user-facing code.
+These functions are prefixed `__debug` to signal they are for developer tooling only. Do not call them in production user-facing code. All four throw `CloudKitNotSupportedError` on non-iOS platforms.
 
 #### `__debugDumpContainerInfo(): Promise<ContainerInfo>`
 
@@ -980,7 +1002,7 @@ console.log(info.containerID, info.accountStatus);
 
 #### `__debugListZones(database?): Promise<Zone[]>`
 
-Lists all custom zones directly from the server, bypassing the in-memory cache.
+Lists all custom zones directly from the server, bypassing any in-memory zone cache.
 
 ```typescript
 const zones = await __debugListZones('private');
@@ -1003,10 +1025,10 @@ console.log(raw.creatorUserRecordID, raw.recordChangeTag);
 
 Deletes all records in a zone without deleting the zone itself.
 
-**Warning:** Permanent and irreversible. All records are deleted immediately from the server.
+**Warning: permanent and irreversible.** All records are deleted from the server immediately.
 
 ```typescript
-// Only call during development/testing
+// Only call during development or testing
 await __debugClearZone({ zoneName: 'Notes', database: 'private' });
 ```
 
@@ -1036,8 +1058,8 @@ try {
 
       case CloudKitErrorCode.CONFLICT:
         // Server record changed since last fetch
-        // err.serverRecord contains the current server version
-        const merged = mergeWithServer(localRecord, err.serverRecord);
+        // err.serverRecord contains the current server version for merge resolution
+        const merged = mergeWithServer(localRecord, err.serverRecord!);
         await saveRecords([merged]);
         break;
 
@@ -1051,7 +1073,6 @@ try {
         break;
 
       case CloudKitErrorCode.QUOTA_EXCEEDED:
-        // User's iCloud storage is full
         showStorageFullAlert();
         break;
 
@@ -1062,20 +1083,29 @@ try {
 }
 ```
 
-**Error codes:**
+**`CloudKitError` properties:**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `code` | `CloudKitErrorCode` | Stable string code for programmatic handling |
+| `message` | `string` | Human-readable description |
+| `retryAfterSeconds` | `number \| undefined` | Seconds to wait before retrying (rate-limit cases) |
+| `serverRecord` | `CloudKitRecord \| undefined` | Current server record (CONFLICT cases only) |
+
+**All error codes:**
 
 | Code | When |
 |------|------|
 | `NOT_AUTHENTICATED` | User is not signed into iCloud |
 | `NETWORK_UNAVAILABLE` | No network connectivity |
 | `QUOTA_EXCEEDED` | User's iCloud storage is full |
-| `ZONE_NOT_FOUND` | Zone does not exist — create it first |
+| `ZONE_NOT_FOUND` | Zone does not exist — call `createZone` first |
 | `RECORD_NOT_FOUND` | Record ID does not exist |
 | `CONFLICT` | Server record changed since last fetch — see `err.serverRecord` |
 | `PERMISSION_DENIED` | User lacks permission for this operation |
 | `SERVER_REJECTED` | CloudKit server rejected the request |
 | `ASSET_TOO_LARGE` | CKAsset file exceeds size limit |
-| `LIMIT_EXCEEDED` | Batch exceeds 400 records — split and retry |
+| `LIMIT_EXCEEDED` | Batch exceeds 400 records — auto-chunked by `saveRecords` |
 | `SYNC_ENGINE_NOT_RUNNING` | `startSyncEngine()` not called, or engine was stopped |
 | `TOKEN_EXPIRED` | Sync token expired — full re-sync will follow automatically |
 | `ACCOUNT_CHANGED` | iCloud account changed — tokens reset, re-sync will follow |
@@ -1084,19 +1114,10 @@ try {
 | `SHARE_NOT_FOUND` | CKShare record does not exist |
 | `PARTICIPANT_NOT_FOUND` | Participant is not on this share |
 | `PARTICIPANT_NEEDS_VERIFICATION` | Participant must verify identity before being added |
-| `SHARING_UI_UNAVAILABLE` | UICloudSharingController could not be presented |
-| `REFERENCE_VIOLATION` | Operation would violate a CKRecord.Reference integrity constraint |
-| `NOT_SUPPORTED` | CloudKit is unavailable on this platform (Android, web) |
+| `SHARING_UI_UNAVAILABLE` | `UICloudSharingController` could not be presented |
+| `REFERENCE_VIOLATION` | Operation would violate a `CKRecord.Reference` integrity constraint |
+| `NOT_SUPPORTED` | CloudKit unavailable on this platform (Android, web) |
 | `UNKNOWN` | Unexpected error — check `err.message` |
-
-**`CloudKitError` properties:**
-
-```typescript
-err.code               // CloudKitErrorCode string
-err.message            // Human-readable description
-err.retryAfterSeconds  // Seconds to wait before retrying (rate limit cases)
-err.serverRecord       // Current server record (CONFLICT cases only)
-```
 
 ---
 
@@ -1104,12 +1125,12 @@ err.serverRecord       // Current server record (CONFLICT cases only)
 
 | Platform | Support |
 |----------|---------|
-| iOS 16+ | Full Phase A support (zones, records, delta fetch, assets) |
-| iOS 17+ | Phase B CKSyncEngine (automatic sync scheduling) |
+| iOS 16+ | Full: zones, records, delta fetch, assets, subscriptions, sharing, offline queue |
+| iOS 17+ | CKSyncEngine automatic scheduling via `startSyncEngine` / `useCloudKitSync` |
 | Android | All calls return `CloudKitNotSupportedError` — no crash |
 | Web | All calls return `CloudKitNotSupportedError` — no crash |
 
-No Android or web support is planned. CloudKit is an Apple service, and providing a cross-platform abstraction is outside the scope of this module.
+No Android or web support is planned. CloudKit is an Apple service, and a cross-platform abstraction is outside the scope of this module.
 
 ---
 
