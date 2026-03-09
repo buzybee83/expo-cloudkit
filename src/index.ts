@@ -82,6 +82,12 @@ export type {
   SubscriptionEvent,
   // Phase C — Batch Progress
   BatchProgress,
+  // Phase C — Debug / Dashboard helpers
+  ContainerInfo,
+  RawRecord,
+  // Phase C — CKRecord.Reference deep linking
+  FetchWithReferencesOptions,
+  ResolvedRecord,
 } from './types';
 
 // Errors
@@ -157,3 +163,14 @@ export type {
   UseCloudKitSyncReturn,
   CloudKitHookState,
 } from './hooks';
+
+// Phase C — Debug Helpers (dev-only, prefixed __debug)
+export {
+  __debugDumpContainerInfo,
+  __debugListZones,
+  __debugFetchRawRecord,
+  __debugClearZone,
+} from './ExpoCloudKit';
+
+// Phase C — CKRecord.Reference deep linking
+export { fetchRecordWithReferences } from './ExpoCloudKit';

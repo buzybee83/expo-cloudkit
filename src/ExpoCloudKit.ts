@@ -20,6 +20,7 @@ import type {
   BatchProgress,
   CloudKitRecord,
   CloudKitSubscription,
+  ContainerInfo,
   CreateShareOptions,
   DatabaseScope,
   DeleteShareOptions,
@@ -28,6 +29,7 @@ import type {
   PresentSharingOptions,
   QueryPredicate,
   QueryResult,
+  RawRecord,
   RecordIdentifier,
   RecordToSave,
   RemoveParticipantOptions,
@@ -47,6 +49,8 @@ import type {
   UpdatePermissionOptions,
   Zone,
   ZoneChanges,
+  FetchWithReferencesOptions,
+  ResolvedRecord,
 } from './types';
 
 // ---------------------------------------------------------------------------
@@ -852,4 +856,133 @@ export function addShareAcceptedListener(
   assertNativeAvailable();
   const subscription = emitter!.addListener('onShareAccepted', callback);
   return { remove: () => subscription.remove() };
+}
+
+// ---------------------------------------------------------------------------
+// Phase C — CKRecord.Reference deep linking
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetches a single record by its ID and recursively resolves all
+ * CKRecord.Reference fields up to the specified depth.
+ *
+ * Resolved references are returned in `resolvedReferences`, keyed by field
+ * name. Unresolvable references remain as `ReferenceValue` entries in `fields`
+ * and are absent from `resolvedReferences`.
+ *
+ * Internally issues a `CKFetchRecordsOperation` for each depth level,
+ * collecting all referenced record IDs from the previous level's reference
+ * fields and batch-fetching them. A depth of 1 requires at most 2 round trips
+ * (root + referenced records); depth 2 requires at most 3 round trips.
+ *
+ * @param recordName - The `CKRecord.ID.recordName` of the root record to fetch.
+ * @param options    - Record type, zone, database scope, and resolution depth.
+ * @returns The root record with `resolvedReferences` populated up to `options.depth`.
+ * @throws {CloudKitNotSupportedError} On non-iOS platforms.
+ * @throws {CloudKitError} code NOT_AUTHENTICATED if the user is not signed in.
+ * @throws {CloudKitError} code NETWORK_UNAVAILABLE if the device is offline.
+ * @throws {CloudKitError} code RECORD_NOT_FOUND if the root record does not exist.
+ *
+ * @example
+ * ```typescript
+ * const note = await fetchRecordWithReferences('abc123', {
+ *   recordType: 'Note',
+ *   zoneName: 'MyZone',
+ *   depth: 2,
+ * });
+ * const author = note.resolvedReferences['author'];
+ * const authorOrg = author?.resolvedReferences['organization'];
+ * ```
+ */
+export function fetchRecordWithReferences(
+  recordName: string,
+  options: FetchWithReferencesOptions
+): Promise<ResolvedRecord> {
+  return callAsync(() =>
+    NativeModule!.fetchRecordWithReferences(recordName, options)
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Phase C — Debug / Dashboard helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the container identifier and current account status.
+ *
+ * Intended for use in developer tooling and CloudKit Dashboard screens.
+ * Do not call in production user-facing code.
+ *
+ * @internal
+ * @returns A snapshot of the container's identity and iCloud account state.
+ * @throws {CloudKitError} code NOT_AUTHENTICATED if the user is not signed in.
+ * @throws {CloudKitNotSupportedError} on non-iOS platforms.
+ *
+ * @example
+ * ```typescript
+ * const info = await __debugDumpContainerInfo();
+ * console.log(info.containerID, info.accountStatus);
+ * ```
+ */
+export function __debugDumpContainerInfo(): Promise<ContainerInfo> {
+  return callAsync(() => NativeModule!.__debugDumpContainerInfo());
+}
+
+/**
+ * Lists all custom zones in the specified database, bypassing the in-memory
+ * zone cache used by fetchZones().
+ *
+ * Useful for inspecting zone state directly from the server in dashboard tools.
+ *
+ * @internal
+ * @param database - Which database to inspect. Default: 'private'.
+ * @returns Array of Zone objects currently on the server.
+ * @throws {CloudKitError} code NOT_AUTHENTICATED if the user is not signed in.
+ * @throws {CloudKitNotSupportedError} on non-iOS platforms.
+ */
+export function __debugListZones(database: DatabaseScope = 'private'): Promise<Zone[]> {
+  return callAsync(() => NativeModule!.__debugListZones(database));
+}
+
+/**
+ * Fetches a single record with all server-assigned metadata fields included.
+ *
+ * @internal
+ * @param options.recordName - CKRecord.ID.recordName of the record to fetch.
+ * @param options.recordType - CKRecord.recordType string.
+ * @param options.zoneName   - Zone the record lives in. Omit for the default zone.
+ * @param options.database   - Which database to query. Default: 'private'.
+ * @returns The full record with all metadata populated.
+ * @throws {CloudKitError} code RECORD_NOT_FOUND if no matching record exists.
+ * @throws {CloudKitError} code NOT_AUTHENTICATED if the user is not signed in.
+ * @throws {CloudKitNotSupportedError} on non-iOS platforms.
+ */
+export function __debugFetchRawRecord(options: {
+  recordName: string;
+  recordType: string;
+  zoneName?: string;
+  database?: DatabaseScope;
+}): Promise<RawRecord> {
+  return callAsync(() => NativeModule!.__debugFetchRawRecord(options));
+}
+
+/**
+ * Deletes all records within the specified zone without deleting the zone itself.
+ *
+ * WARNING: This is a destructive, permanent operation. All records in the zone
+ * are deleted from the server immediately. There is no undo.
+ *
+ * @internal
+ * @param options.zoneName  - The zone to clear.
+ * @param options.database  - Which database the zone lives in. Default: 'private'.
+ * @returns Resolves when all records have been deleted.
+ * @throws {CloudKitError} code ZONE_NOT_FOUND if the zone does not exist.
+ * @throws {CloudKitError} code NOT_AUTHENTICATED if the user is not signed in.
+ * @throws {CloudKitNotSupportedError} on non-iOS platforms.
+ */
+export function __debugClearZone(options: {
+  zoneName: string;
+  database?: DatabaseScope;
+}): Promise<void> {
+  return callAsync(() => NativeModule!.__debugClearZone(options));
 }
