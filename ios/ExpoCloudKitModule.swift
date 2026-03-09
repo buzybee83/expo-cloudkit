@@ -35,6 +35,13 @@ public class ExpoCloudKitModule: Module {
   /// Lazily initialised after `configure()` is called.
   private var shareManager: CloudKitShareManager?
 
+  // MARK: - Debug helper (Phase C)
+
+  /// Dev-time introspection utilities. Lazily initialised after `configure()`.
+  /// Never call these from production code paths — see `__debug` prefix on all
+  /// exported JS methods.
+  private var debugHelper: CloudKitDebugHelper?
+
   // MARK: - Cursor cache for queryRecords pagination
 
   /// In-memory store of CKQueryOperation.Cursor objects, keyed by opaque UUID token.
@@ -65,7 +72,8 @@ public class ExpoCloudKitModule: Module {
       "onSyncEngineEvent",
       "onSubscriptionEvent",
       "onAssetProgress",
-      "onShareAccepted"
+      "onShareAccepted",
+      "onBatchProgress"
     )
 
     // -------------------------------------------------------------------------
@@ -86,6 +94,7 @@ public class ExpoCloudKitModule: Module {
       self.recordManager = CloudKitRecordManager(ckContainer: ck)
       self.subscriptionManager = CloudKitSubscriptionManager(ckContainer: ck)
       self.shareManager = CloudKitShareManager(ckContainer: ck)
+      self.debugHelper = CloudKitDebugHelper(container: ck)
 
       // Start listening for account status changes and forward to JS
       container.startAccountStatusObserver { [weak self] status in
@@ -171,6 +180,10 @@ public class ExpoCloudKitModule: Module {
     // -------------------------------------------------------------------------
 
     /// Saves one or more records. Inserts new records, updates existing ones.
+    ///
+    /// Automatically chunked at 400 records per CKModifyRecordsOperation.
+    /// Fires `onBatchProgress` after each individual record is confirmed saved
+    /// by CloudKit, with `{ completed, total, recordName }`.
     AsyncFunction("saveRecords") { [weak self] (recordDicts: [[String: Any]], database: String, promise: Promise) in
       guard let self = self, let recordManager = self.recordManager else {
         promise.reject(CloudKitModuleError.notConfigured)
@@ -179,7 +192,17 @@ public class ExpoCloudKitModule: Module {
       let scope = Converters.toDatabaseScope(database)
       do {
         let records = try recordDicts.map { try Converters.toCKRecord(from: $0) }
-        recordManager.saveRecords(records, in: scope) { result in
+        recordManager.saveRecords(
+          records,
+          in: scope,
+          progressHandler: { [weak self] completed, total, recordName in
+            self?.sendEvent("onBatchProgress", [
+              "completed": completed,
+              "total": total,
+              "recordName": recordName
+            ])
+          }
+        ) { result in
           switch result {
           case .success(let saved):
             promise.resolve(saved.map { Converters.toDictionary($0) })
