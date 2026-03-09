@@ -61,6 +61,13 @@ public class ExpoCloudKitModule: Module {
   /// Lazily created on first `startSyncEngine()` call.
   private var tokenStore: ChangeTokenStore?
 
+  // MARK: - Offline queue (Phase C)
+
+  /// Persists and retries CloudKit save/delete operations while offline.
+  /// Wired up in `configure()` after the record manager is ready.
+  /// Nil until `configure()` is called.
+  private var offlineQueue: OfflineQueue?
+
   // MARK: - Module Definition
 
   public func definition() -> ModuleDefinition {
@@ -73,7 +80,8 @@ public class ExpoCloudKitModule: Module {
       "onSubscriptionEvent",
       "onAssetProgress",
       "onShareAccepted",
-      "onBatchProgress"
+      "onBatchProgress",
+      "onOfflineQueueEvent"
     )
 
     // -------------------------------------------------------------------------
@@ -91,10 +99,21 @@ public class ExpoCloudKitModule: Module {
       let container = CloudKitContainer(ckContainer: ck)
       self.container = container
       self.zoneManager = CloudKitZoneManager(ckContainer: ck)
-      self.recordManager = CloudKitRecordManager(ckContainer: ck)
       self.subscriptionManager = CloudKitSubscriptionManager(ckContainer: ck)
       self.shareManager = CloudKitShareManager(ckContainer: ck)
       self.debugHelper = CloudKitDebugHelper(container: ck)
+
+      // Single RecordManager instance shared by the module and the offline queue.
+      let rm = CloudKitRecordManager(ckContainer: ck)
+      self.recordManager = rm
+      self.offlineQueue = OfflineQueue(
+        container: ck,
+        containerID: containerId,
+        recordManager: rm,
+        sendEvent: { [weak self] payload in
+          DispatchQueue.main.async { self?.sendEvent("onOfflineQueueEvent", payload) }
+        }
+      )
 
       // Start listening for account status changes and forward to JS
       container.startAccountStatusObserver { [weak self] status in
@@ -183,13 +202,17 @@ public class ExpoCloudKitModule: Module {
     ///
     /// Automatically chunked at 400 records per CKModifyRecordsOperation.
     /// Fires `onBatchProgress` after each individual record is confirmed saved
-    /// by CloudKit, with `{ completed, total, recordName }`.
-    AsyncFunction("saveRecords") { [weak self] (recordDicts: [[String: Any]], database: String, promise: Promise) in
+    /// Saves one or more records. Inserts new records, updates existing ones.
+    ///
+    /// Pass options["queueOnFailure"] = true to enqueue offline on retryable errors.
+    /// Fires onBatchProgress after each record is confirmed saved.
+    AsyncFunction("saveRecords") { [weak self] (recordDicts: [[String: Any]], database: String, options: [String: Any]?, promise: Promise) in
       guard let self = self, let recordManager = self.recordManager else {
         promise.reject(CloudKitModuleError.notConfigured)
         return
       }
       let scope = Converters.toDatabaseScope(database)
+      let shouldQueueOnFailure = options?["queueOnFailure"] as? Bool ?? false
       do {
         let records = try recordDicts.map { try Converters.toCKRecord(from: $0) }
         recordManager.saveRecords(
@@ -202,12 +225,33 @@ public class ExpoCloudKitModule: Module {
               "recordName": recordName
             ])
           }
-        ) { result in
+        ) { [weak self] result in
           switch result {
           case .success(let saved):
             promise.resolve(saved.map { Converters.toDictionary($0) })
           case .failure(let error):
-            promise.reject(Converters.toExpoError(error))
+            guard shouldQueueOnFailure, let queue = self?.offlineQueue else {
+              promise.reject(Converters.toExpoError(error))
+              return
+            }
+            let bridgeError = Converters.toExpoError(error) as? ExpoCloudKitBridgeError
+            let code = bridgeError?.code ?? "UNKNOWN"
+            let retryableCodes: Set<String> = ["NETWORK_UNAVAILABLE", "SERVER_REJECTED", "UNKNOWN"]
+            guard retryableCodes.contains(code) else {
+              promise.reject(Converters.toExpoError(error))
+              return
+            }
+            var queueResults: [[String: Any]] = []
+            for recordDict in recordDicts {
+              if let queueId = try? queue.enqueue(
+                operation: "save",
+                database: database,
+                recordData: recordDict
+              ) {
+                queueResults.append(["queued": true, "queueId": queueId])
+              }
+            }
+            promise.resolve(queueResults)
           }
         }
       } catch {
@@ -1117,6 +1161,75 @@ public class ExpoCloudKitModule: Module {
     AsyncFunction("downloadAsset") { (_: String, _: String, _: String, _: String, _: String?, _: String, promise: Promise) in
       promise.reject(CloudKitModuleError.notImplemented("downloadAsset (Phase D)"))
     }
+
+    // ---------------------------------------------------------------
+    // Offline Queue — Phase C
+    // ---------------------------------------------------------------
+
+    /// Enqueues a CloudKit op for offline execution.
+    /// Options: operation ("save"|"delete"), database, recordData.
+    AsyncFunction("enqueueOfflineOperation") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let queue = self?.offlineQueue else {
+        promise.reject(CloudKitModuleError.notConfigured); return
+      }
+      guard let operation = options["operation"] as? String,
+            operation == "save" || operation == "delete" else {
+        promise.reject(CloudKitModuleError.invalidArgument("operation must be 'save' or 'delete'"))
+        return
+      }
+      guard let database = options["database"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("database is required")); return
+      }
+      guard let recordData = options["recordData"] as? [String: Any] else {
+        promise.reject(CloudKitModuleError.invalidArgument("recordData is required")); return
+      }
+      do {
+        let queueId = try queue.enqueue(
+          operation: operation, database: database, recordData: recordData
+        )
+        promise.resolve(["id": queueId])
+      } catch OfflineQueueError.queueFull {
+        promise.reject(OfflineQueueFullException())
+      } catch {
+        promise.reject(error)
+      }
+    }
+
+    /// Processes all pending entries. Returns status dict.
+    AsyncFunction("drainOfflineQueue") { [weak self] (promise: Promise) in
+      guard let queue = self?.offlineQueue else {
+        promise.reject(CloudKitModuleError.notConfigured); return
+      }
+      promise.resolve(queue.drain())
+    }
+
+    /// Returns queue status. Pass { includeEntries: true } for full list.
+    AsyncFunction("getOfflineQueueStatus") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let queue = self?.offlineQueue else {
+        promise.reject(CloudKitModuleError.notConfigured); return
+      }
+      promise.resolve(
+        queue.getStatus(includeEntries: options["includeEntries"] as? Bool ?? false)
+      )
+    }
+
+    /// Removes entries by status ("pending"|"retrying"|"failed"|"all").
+    AsyncFunction("clearOfflineQueue") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let queue = self?.offlineQueue else {
+        promise.reject(CloudKitModuleError.notConfigured); return
+      }
+      queue.clear(status: options["status"] as? String ?? "all")
+      promise.resolve(nil)
+    }
+
+    /// Resets all failed entries to pending and immediately triggers a drain.
+    AsyncFunction("retryFailedOperations") { [weak self] (promise: Promise) in
+      guard let queue = self?.offlineQueue else {
+        promise.reject(CloudKitModuleError.notConfigured); return
+      }
+      queue.retryFailed()
+      promise.resolve(nil)
+    }
   }
 }
 
@@ -1256,6 +1369,12 @@ class ParticipantNotFoundException: Exception {
 class SharingUIUnavailableException: Exception {
   override var reason: String {
     "Cannot present sharing UI: no active view controller is available."
+  }
+}
+
+class OfflineQueueFullException: Exception {
+  override var reason: String {
+    "Offline queue is full (500 entries). Clear failed operations before enqueuing more."
   }
 }
 
