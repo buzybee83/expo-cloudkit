@@ -23,6 +23,10 @@ import type {
   DatabaseScope,
   DeleteShareOptions,
   FetchParticipantsOptions,
+  OfflineQueueDrainResult,
+  OfflineQueueEntryStatus,
+  OfflineQueueEvent,
+  OfflineQueueStatus,
   PendingRecordChange,
   PresentSharingOptions,
   QueryPredicate,
@@ -818,5 +822,172 @@ export function addShareAcceptedListener(
   if (!isIOS) return noopSubscription;
   assertNativeAvailable();
   const subscription = emitter!.addListener('onShareAccepted', callback);
+  return { remove: () => subscription.remove() };
+}
+
+// ---------------------------------------------------------------------------
+// Phase C — Offline Queue
+// ---------------------------------------------------------------------------
+
+/**
+ * Persists a CloudKit operation to the offline queue for deferred execution.
+ *
+ * The operation is durably stored and will be retried automatically when
+ * connectivity is restored or `drainOfflineQueue()` is called. Use this
+ * instead of `saveRecords` / `deleteRecords` when the device may be offline.
+ *
+ * @param options.type             - The kind of operation: 'save' or 'delete'.
+ * @param options.record           - The record to save. Required when `type` is 'save'.
+ * @param options.recordIdentifier - The record to delete. Required when `type` is 'delete'.
+ * @param options.database         - Target database. Default: 'private'.
+ * @returns An object containing the assigned `queueId`.
+ * @throws {CloudKitError} code QUEUE_FULL if the queue is at capacity.
+ * @throws {CloudKitNotSupportedError} on non-iOS platforms.
+ *
+ * @example
+ * ```typescript
+ * const { queueId } = await enqueueOfflineOperation({
+ *   type: 'save',
+ *   record: { recordType: 'Note', fields: { title: { type: 'string', value: 'Hello' } } },
+ * });
+ * console.log('Queued as:', queueId);
+ * ```
+ */
+export function enqueueOfflineOperation(options: {
+  type: 'save' | 'delete';
+  record?: RecordToSave;
+  recordIdentifier?: RecordIdentifier;
+  database?: DatabaseScope;
+}): Promise<{ queueId: string }> {
+  return callAsync(() => NativeModule!.enqueueOfflineOperation(options));
+}
+
+/**
+ * Attempts to flush all pending and retrying entries in the offline queue.
+ *
+ * Processes entries sequentially; failures are left in the queue for the
+ * next drain cycle. Returns a summary of how many operations succeeded,
+ * failed, or were skipped.
+ *
+ * @returns A drain result with `succeeded`, `failed`, and `skipped` counts.
+ * @throws {CloudKitNotSupportedError} on non-iOS platforms.
+ *
+ * @example
+ * ```typescript
+ * const result = await drainOfflineQueue();
+ * console.log(`${result.succeeded} saved, ${result.failed} failed`);
+ * ```
+ */
+export function drainOfflineQueue(): Promise<OfflineQueueDrainResult> {
+  return callAsync(() => NativeModule!.drainOfflineQueue());
+}
+
+/**
+ * Returns the current aggregate status of the offline operation queue.
+ *
+ * Pass `{ includeEntries: true }` to also receive the full list of queue
+ * entries in the `entries` field of the result. Omit for a lightweight
+ * count-only snapshot.
+ *
+ * @param options.includeEntries - If `true`, populates `status.entries`. Default: `false`.
+ * @returns The current queue counts and, optionally, the full entries list.
+ * @throws {CloudKitNotSupportedError} on non-iOS platforms.
+ *
+ * @example
+ * ```typescript
+ * const { pending, failed } = await getOfflineQueueStatus();
+ * if (failed > 0) {
+ *   console.warn(`${failed} operations permanently failed`);
+ * }
+ * ```
+ */
+export function getOfflineQueueStatus(options?: {
+  includeEntries?: boolean;
+}): Promise<OfflineQueueStatus> {
+  return callAsync(() => NativeModule!.getOfflineQueueStatus(options ?? {}));
+}
+
+/**
+ * Removes entries from the offline queue by status.
+ *
+ * Pass `{ status: 'failed' }` to clear only permanently-failed entries.
+ * Pass `{ status: 'all' }` (or omit `status`) to clear the entire queue,
+ * including pending and retrying entries.
+ *
+ * WARNING: Clearing pending or retrying entries permanently discards those
+ * operations — they will not be sent to CloudKit.
+ *
+ * @param options.status - Which entries to remove. Default: 'all'.
+ * @throws {CloudKitNotSupportedError} on non-iOS platforms.
+ *
+ * @example
+ * ```typescript
+ * // Clear only permanently failed entries
+ * await clearOfflineQueue({ status: 'failed' });
+ * ```
+ */
+export function clearOfflineQueue(options?: {
+  status?: OfflineQueueEntryStatus | 'all';
+}): Promise<void> {
+  return callAsync(() => NativeModule!.clearOfflineQueue(options ?? {}));
+}
+
+/**
+ * Immediately reschedules all permanently-failed entries for retry.
+ *
+ * Resets each `'failed'` entry's `retryCount` to 0 and moves it back to
+ * `'pending'` so the next `drainOfflineQueue()` call will attempt it again.
+ *
+ * @throws {CloudKitNotSupportedError} on non-iOS platforms.
+ *
+ * @example
+ * ```typescript
+ * await retryFailedOperations();
+ * const { pending } = await getOfflineQueueStatus();
+ * console.log(`${pending} operations rescheduled`);
+ * ```
+ */
+export function retryFailedOperations(): Promise<void> {
+  return callAsync(() => NativeModule!.retryFailedOperations());
+}
+
+/**
+ * Registers a listener for all offline queue lifecycle events.
+ *
+ * All event types are dispatched on the single `onOfflineQueueEvent` channel.
+ * Filter by `event.type` to handle specific cases.
+ *
+ * Event types:
+ * - `'operationCompleted'`     — An operation drained successfully.
+ * - `'operationFailed'`        — An attempt failed; `willRetry` indicates if another will follow.
+ * - `'operationMovedToFailed'` — An entry exhausted all retries and became permanently failed.
+ * - `'queueDrained'`           — A full drain cycle completed with totals.
+ * - `'queueStatusChanged'`     — The aggregate counts changed.
+ *
+ * @param callback - Called on the main thread whenever a queue event fires.
+ * @returns A Subscription; call `.remove()` to stop receiving events.
+ *
+ * @example
+ * ```typescript
+ * const sub = addOfflineQueueListener((event) => {
+ *   switch (event.type) {
+ *     case 'queueDrained':
+ *       console.log(`Drain: ${event.succeeded} ok, ${event.failed} failed`);
+ *       break;
+ *     case 'operationMovedToFailed':
+ *       console.warn('Permanent failure:', event.queueId, event.errorCode);
+ *       break;
+ *   }
+ * });
+ * // Later:
+ * sub.remove();
+ * ```
+ */
+export function addOfflineQueueListener(
+  callback: (event: OfflineQueueEvent) => void
+): Subscription {
+  if (!isIOS) return noopSubscription;
+  assertNativeAvailable();
+  const subscription = emitter!.addListener('onOfflineQueueEvent', callback);
   return { remove: () => subscription.remove() };
 }

@@ -80,6 +80,13 @@ export type {
   QuerySubscriptionEvent,
   DatabaseSubscriptionEvent,
   SubscriptionEvent,
+  // Phase C — Offline Queue
+  OfflineQueueEntryStatus,
+  OfflineQueueEntry,
+  OfflineQueueStatus,
+  OfflineQueueDrainResult,
+  QueuedResult,
+  OfflineQueueEvent,
 } from './types';
 
 // Errors
@@ -134,6 +141,16 @@ export {
   acceptShare,
   fetchSharedDatabaseZones,
   addShareAcceptedListener,
+} from './ExpoCloudKit';
+
+// Phase C — Offline Queue
+export {
+  enqueueOfflineOperation,
+  drainOfflineQueue,
+  getOfflineQueueStatus,
+  clearOfflineQueue,
+  retryFailedOperations,
+  addOfflineQueueListener,
 } from './ExpoCloudKit';
 
 // Phase C — React Hooks
