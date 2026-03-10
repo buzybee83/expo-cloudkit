@@ -75,8 +75,8 @@ describe('useCloudKitRecord', () => {
     expect(result.current.fetching).toBe(false);
     expect(result.current.error).toBeUndefined();
     expect(mocks.mockFetchRecord).toHaveBeenCalledTimes(1);
-    // database defaults are applied by fetchRecord itself; hook passes undefined when not specified
-    expect(mocks.mockFetchRecord).toHaveBeenCalledWith('Note', 'rec-1', undefined, undefined);
+    // hook defaults database to 'private' when not specified
+    expect(mocks.mockFetchRecord).toHaveBeenCalledWith('Note', 'rec-1', undefined, 'private');
   });
 
   it('passes zoneName and database to fetchRecord', async () => {
@@ -201,14 +201,14 @@ describe('useCloudKitRecord', () => {
     );
 
     await waitFor(() => expect(result.current.data).toEqual(mockRecord));
-    // database default is applied by fetchRecord; hook passes undefined when not specified
-    expect(mocks.mockFetchRecord).toHaveBeenCalledWith('Note', 'rec-1', undefined, undefined);
+    // hook defaults database to 'private' when not specified
+    expect(mocks.mockFetchRecord).toHaveBeenCalledWith('Note', 'rec-1', undefined, 'private');
 
     mocks.mockFetchRecord.mockResolvedValue(mockRecord2);
     rerender({ recordName: 'rec-2' });
 
     await waitFor(() => expect(result.current.data).toEqual(mockRecord2));
-    expect(mocks.mockFetchRecord).toHaveBeenCalledWith('Note', 'rec-2', undefined, undefined);
+    expect(mocks.mockFetchRecord).toHaveBeenCalledWith('Note', 'rec-2', undefined, 'private');
     expect(mocks.mockFetchRecord).toHaveBeenCalledTimes(2);
   });
 

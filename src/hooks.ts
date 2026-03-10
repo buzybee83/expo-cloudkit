@@ -161,13 +161,8 @@ export function useCloudKitRecord(
 ): UseCloudKitRecordReturn {
   const { recordType, zoneName, enabled = true, subscribe = false } = options;
 
-  // Phase D: consume context for defaultDatabase and QueryCache.
-  // When no Provider is present, pass options.database through as-is (may be undefined)
-  // so that fetchRecord's own default parameter applies — preserving existing behaviour.
   const context = useCloudKitContext();
-  const database = context !== undefined
-    ? (options.database ?? context.defaultDatabase)
-    : options.database;
+  const database = options.database ?? context?.defaultDatabase ?? 'private';
 
   const [state, setState] = useState<CloudKitHookState<CloudKitRecord>>(inertRecordState);
   const versionRef = useRef(0);
@@ -483,14 +478,8 @@ export function useCloudKitQuery(
     subscribe = false,
   } = options ?? {};
 
-  // Phase D: consume context for defaultDatabase and QueryCache.
-  // When no Provider is present, pass options?.database through as-is (may be undefined)
-  // so that queryRecords' own default parameter applies — preserving existing behaviour.
-  // When a Provider is present, apply its defaultDatabase if the hook has no explicit value.
   const context = useCloudKitContext();
-  const database = context !== undefined
-    ? (options?.database ?? context.defaultDatabase)
-    : options?.database;
+  const database = options?.database ?? context?.defaultDatabase ?? 'private';
 
   const [state, setState] = useState<CloudKitHookState<CloudKitRecord[]>>(inertQueryState);
   const [hasMore, setHasMore] = useState(false);
@@ -722,27 +711,10 @@ export function useCloudKitQuery(
       const [saved] = await saveRecords([{ ...record, recordName: tempName }], database);
 
       // 5. Replace temp record with server response
-      setState((prev) => {
-        if (!prev.data) return prev;
-        return {
-          ...prev,
-          data: prev.data.map((r) =>
-            r.recordName === tempName
-              ? {
-                  ...saved,
-                  recordType: saved.recordType,
-                  recordName: saved.recordName,
-                  zoneName: saved.zoneName,
-                  ownerName: saved.ownerName,
-                  modificationDate: saved.modificationDate,
-                  creationDate: saved.creationDate,
-                  changeTag: saved.changeTag,
-                  fields: saved.fields,
-                }
-              : r
-          ),
-        };
-      });
+      setState((prev) => ({
+        ...prev,
+        data: prev.data?.map((r) => r.recordName === tempName ? (saved as CloudKitRecord) : r),
+      }));
       setPendingRecordNames((prev) => {
         const next = new Set(prev);
         next.delete(tempName);
@@ -750,7 +722,7 @@ export function useCloudKitQuery(
       });
 
       // Propagate to other hooks
-      const committedRecord: CloudKitRecord = { ...saved };
+      const committedRecord = saved as CloudKitRecord;
       context?.queryCache.updateRecord(committedRecord);
 
       return committedRecord;
@@ -776,53 +748,36 @@ export function useCloudKitQuery(
   const optimisticRemove = useCallback(async (
     recordName: string
   ): Promise<boolean> => {
-    // 1. Find and remove the record from local state
-    let removedRecord: CloudKitRecord | undefined;
-    let removedIndex = -1;
+    const current = state.data;
+    if (!current) return false;
 
-    setState((prev) => {
-      if (!prev.data) return prev;
-      const idx = prev.data.findIndex((r) => r.recordName === recordName);
-      if (idx === -1) return prev;
-      removedIndex = idx;
-      removedRecord = prev.data[idx];
-      return { ...prev, data: prev.data.filter((r) => r.recordName !== recordName) };
-    });
+    const removedIndex = current.findIndex((r) => r.recordName === recordName);
+    if (removedIndex === -1) return false;
+    const removedRecord = current[removedIndex];
 
-    if (removedRecord === undefined) {
-      // Record not found in local state — nothing to do
-      return false;
-    }
-
+    // Optimistically remove from local state
+    setState((prev) => ({
+      ...prev,
+      data: prev.data?.filter((r) => r.recordName !== recordName),
+    }));
     setPendingRecordNames((prev) => new Set([...prev, recordName]));
 
-    const zoneName = removedRecord.zoneName;
-
     try {
-      // 2. Delete from CloudKit
-      await deleteRecords([{ recordName, zoneName: zoneName || undefined }], database);
-
-      // 3. Remove from pending
+      await deleteRecords([{ recordName, zoneName: removedRecord.zoneName || undefined }], database);
       setPendingRecordNames((prev) => {
         const next = new Set(prev);
         next.delete(recordName);
         return next;
       });
-
-      // Propagate to other hooks
       if (recordType) {
         context?.queryCache.removeRecord(recordType, recordName);
       }
-
       return true;
     } catch (err) {
-      // 4. Rollback: restore the record at its original position
-      const capturedRecord = removedRecord;
-      const capturedIndex = removedIndex;
+      // Restore record at its original position
       setState((prev) => {
-        if (!prev.data) return prev;
-        const updated = [...prev.data];
-        updated.splice(capturedIndex, 0, capturedRecord);
+        const updated = [...(prev.data ?? [])];
+        updated.splice(removedIndex, 0, removedRecord);
         return { ...prev, data: updated };
       });
       setPendingRecordNames((prev) => {
@@ -830,12 +785,11 @@ export function useCloudKitQuery(
         next.delete(recordName);
         return next;
       });
-      const cloudKitError =
-        err instanceof CloudKitError ? err : CloudKitError.fromNativeError(err);
+      const cloudKitError = err instanceof CloudKitError ? err : CloudKitError.fromNativeError(err);
       setOptimisticErrors((prev) => new Map([...prev, [recordName, cloudKitError]]));
       return false;
     }
-  }, [database, recordType, context]);
+  }, [state.data, database, recordType, context]);
 
   return {
     data: state.data,
@@ -987,10 +941,7 @@ export function useCloudKitSync(options: UseCloudKitSyncOptions): UseCloudKitSyn
           onRecordsSentRef.current?.(event);
           break;
         case 'syncError': {
-          const syncError = new CloudKitError(
-            CloudKitError.fromNativeError({ code: event.error.code, message: event.error.message }).code,
-            event.error.message
-          );
+          const syncError = CloudKitError.fromNativeError(event.error);
           setError(syncError);
           onSyncErrorRef.current?.(event);
           break;

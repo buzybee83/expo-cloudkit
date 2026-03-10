@@ -11,7 +11,7 @@
  * and the onNotification callback still fires.
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 import { useCloudKitContext } from './CloudKitProvider';
 import { CloudKitError } from './errors';
@@ -156,22 +156,12 @@ export function useCloudKitSubscription(
   // Stable JSON for predicate so callers don't need to memoize
   const predicateJson = JSON.stringify(predicate);
 
-  const deleteSubscriptionById = useCallback(
-    (id: string): void => {
-      // Fire-and-forget: do not block on network, do not surface errors
-      void deleteSubscription(id, effectiveDatabase).catch(() => {
-        // Ignore SUBSCRIPTION_NOT_FOUND and network errors on cleanup
-      });
-    },
-    [effectiveDatabase]
-  );
-
   // Subscription lifecycle: create on mount, recreate on key changes, delete on unmount
   useEffect(() => {
     if (!enabled) {
       setSubscriptionId((prev) => {
         if (prev !== undefined) {
-          deleteSubscriptionById(prev);
+          void deleteSubscription(prev, effectiveDatabase).catch(() => {});
         }
         return undefined;
       });
@@ -196,7 +186,7 @@ export function useCloudKitSubscription(
       .then((id) => {
         if (cancelled) {
           // Component unmounted before save resolved — delete the subscription
-          deleteSubscriptionById(id);
+          void deleteSubscription(id, effectiveDatabase).catch(() => {});
           return;
         }
         createdId = id;
@@ -214,7 +204,7 @@ export function useCloudKitSubscription(
     return () => {
       cancelled = true;
       if (createdId !== undefined) {
-        deleteSubscriptionById(createdId);
+        void deleteSubscription(createdId, effectiveDatabase).catch(() => {});
         createdId = undefined;
       }
       setSubscriptionId(undefined);

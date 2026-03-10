@@ -15,7 +15,7 @@ import React from 'react';
 
 import { configure, getAccountStatus, addAccountStatusListener } from './ExpoCloudKit';
 import { QueryCache } from './QueryCache';
-import type { AccountStatus, DatabaseScope, SyncState } from './types';
+import type { AccountStatus, DatabaseScope } from './types';
 
 // ---------------------------------------------------------------------------
 // Context value shape (internal)
@@ -33,12 +33,6 @@ export interface CloudKitContextValue {
 
   /** Default database scope for all hooks in the tree. */
   defaultDatabase: DatabaseScope;
-
-  /**
-   * Current sync state. Initialized as notStarted; updated by useCloudKitSync
-   * when mounted within the tree. The Provider does not start sync itself.
-   */
-  syncState: SyncState;
 
   /** The query cache instance shared across all hooks in the tree. */
   queryCache: QueryCache;
@@ -119,11 +113,6 @@ export function CloudKitProvider({
     [containerId]
   );
 
-  const defaultSyncState = React.useMemo<SyncState>(
-    () => ({ usesSyncEngine: false, status: 'notStarted' }),
-    []
-  );
-
   // configure() + optional account status observation
   React.useEffect(() => {
     // 1. Configure the container
@@ -162,10 +151,9 @@ export function CloudKitProvider({
       containerId,
       accountStatus,
       defaultDatabase,
-      syncState: defaultSyncState,
       queryCache,
     }),
-    [containerId, accountStatus, defaultDatabase, defaultSyncState, queryCache]
+    [containerId, accountStatus, defaultDatabase, queryCache]
   );
 
   return (
