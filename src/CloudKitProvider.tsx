@@ -12,10 +12,11 @@
  */
 
 import React from 'react';
+import { Platform } from 'react-native';
 
 import { configure, getAccountStatus, addAccountStatusListener } from './ExpoCloudKit';
 import { QueryCache } from './QueryCache';
-import type { AccountStatus, DatabaseScope } from './types';
+import type { AccountStatus, DatabaseScope, WebConfigOptions } from './types';
 
 // ---------------------------------------------------------------------------
 // Context value shape (internal)
@@ -72,6 +73,26 @@ export interface CloudKitProviderProps {
    */
   observeAccountStatus?: boolean;
 
+  /**
+   * Configuration for CloudKit Web Services.
+   * Required when running on web. Ignored on native.
+   *
+   * Provide an `apiToken` obtained from CloudKit Dashboard to enable web access.
+   * The token grants public database read access without user sign-in.
+   * Call `authenticateWeb()` separately to enable private database access.
+   *
+   * @example
+   * ```tsx
+   * <CloudKitProvider
+   *   containerId="iCloud.com.example.myapp"
+   *   webConfig={{ apiToken: 'your-token', environment: 'production' }}
+   * >
+   *   <App />
+   * </CloudKitProvider>
+   * ```
+   */
+  webConfig?: WebConfigOptions;
+
   children: React.ReactNode;
 }
 
@@ -102,6 +123,7 @@ export function CloudKitProvider({
   containerId,
   defaultDatabase = 'private',
   observeAccountStatus = true,
+  webConfig,
   children,
 }: CloudKitProviderProps): React.ReactElement {
   const [accountStatus, setAccountStatus] = React.useState<AccountStatus | 'loading'>('loading');
@@ -115,12 +137,25 @@ export function CloudKitProvider({
 
   // configure() + optional account status observation
   React.useEffect(() => {
-    // 1. Configure the container
-    try {
-      configure(containerId);
-    } catch {
-      // configure() throws synchronously on non-iOS — swallow so the Provider
-      // renders normally (hooks will individually fail with CloudKitNotSupportedError).
+    // 1. Configure the container (platform-specific)
+    if (Platform.OS === 'web') {
+      // On web: use configureWeb() from the web implementation.
+      // We import dynamically to avoid touching the native module on web.
+      // The `.web.ts` extension ensures Metro resolves the web implementation.
+      if (webConfig) {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { configureWeb } = require('./ExpoCloudKit') as typeof import('./ExpoCloudKit.web');
+        configureWeb(containerId, webConfig).catch(() => {
+          // configureWeb failure is surfaced through getAccountStatus() returning couldNotDetermine
+        });
+      }
+    } else {
+      try {
+        configure(containerId);
+      } catch {
+        // configure() throws synchronously on non-iOS — swallow so the Provider
+        // renders normally (hooks will individually fail with CloudKitNotSupportedError).
+      }
     }
 
     if (!observeAccountStatus) return;
@@ -144,7 +179,7 @@ export function CloudKitProvider({
     return () => {
       subscription.remove();
     };
-  }, [containerId, observeAccountStatus]);
+  }, [containerId, observeAccountStatus, webConfig]);
 
   const contextValue = React.useMemo<CloudKitContextValue>(
     () => ({

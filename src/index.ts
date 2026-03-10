@@ -26,6 +26,8 @@
 export type {
   AccountStatus,
   OptimisticStatus,
+  // Web
+  WebConfigOptions,
   AssetField,
   AssetProgress,
   AssetReadValue,
@@ -102,7 +104,11 @@ export type {
 export { CloudKitError, CloudKitErrorCode, CloudKitNotSupportedError } from './errors';
 
 // Phase A — Container & Account
-export { configure, getAccountStatus, addAccountStatusListener } from './ExpoCloudKit';
+export { configure, getAccountStatus, addAccountStatusListener, isCloudKitAvailable } from './ExpoCloudKit';
+
+// Web — CloudKit Web Services (exported from the platform barrel so Metro resolves
+// ExpoCloudKit.web.ts on web and ExpoCloudKit.native.ts on iOS/native)
+export { configureWeb, authenticateWeb, signOutWeb, isWebAuthenticated } from './ExpoCloudKit';
 
 // Phase A — Zone Management
 export { createZone, deleteZone, fetchZones } from './ExpoCloudKit';

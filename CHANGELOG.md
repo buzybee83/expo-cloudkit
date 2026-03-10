@@ -9,6 +9,24 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+**CloudKit Web Services (web platform target)**
+
+- `ExpoCloudKit.web.ts` — Metro `.web.ts` platform override implementing 20 of 44 CloudKit operations via CloudKit JS (`tsl-apple-cloudkit` optional peer dependency)
+- `configureWeb(containerId, options)` — configures CloudKit JS with an API token; no-op on native
+- `authenticateWeb()` — triggers Apple ID sign-in popup on web; delegates to `getAccountStatus()` on native
+- `signOutWeb()` — clears the web auth session; no-op on native
+- `isWebAuthenticated()` — synchronous check for a valid CloudKit JS session; always `false` on native
+- `isCloudKitAvailable()` — returns `true` once `configureWeb()` succeeds on web; relies on native module on iOS
+- `WebConfigOptions` type — `{ apiToken, environment?, persistSession? }`
+- `CloudKitProvider` gains a `webConfig` prop that automatically calls `configureWeb()` on web when provided
+- `src/web/` sub-package: `cloudkit-loader.ts`, `converters.ts`, `errors.ts`, `auth.ts`, `database.ts` — all SSR-safe, no `expo-modules-core` or `react-native` imports
+
+**Supported on web**: zones, record CRUD, query, zone changes, subscriptions (server-side only — APNs not delivered on web), share data operations, reference deep linking
+
+**Not supported on web** (throws `CloudKitNotSupportedError`): CKSyncEngine, asset download, offline queue, `UICloudSharingController`, share permission mutation
+
 ---
 
 ## [0.4.0] — 2026-03-10

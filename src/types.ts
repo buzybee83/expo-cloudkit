@@ -922,6 +922,45 @@ export interface QueuedResult {
 }
 
 // ---------------------------------------------------------------------------
+// Web — CloudKit Web Services configuration
+// ---------------------------------------------------------------------------
+
+/**
+ * Configuration options for `configureWeb()`.
+ *
+ * These options are only relevant on web. On iOS/native, `configureWeb()` is
+ * a no-op and these values are ignored.
+ */
+export interface WebConfigOptions {
+  /**
+   * API token from CloudKit Dashboard.
+   * Required for any web access — grants public database read access without
+   * user sign-in, and is included in all authenticated requests.
+   *
+   * Obtain at: https://developer.apple.com/documentation/cloudkit/obtaining-an-api-token-for-an-icloud-container
+   */
+  apiToken: string;
+
+  /**
+   * CloudKit environment to connect to.
+   * Use 'development' during development and 'production' for shipping apps.
+   * Default: 'production'.
+   */
+  environment?: 'development' | 'production';
+
+  /**
+   * When `true`, the CloudKit JS auth session (ckWebAuthToken) is persisted
+   * to `localStorage` so it survives page reloads.
+   *
+   * Expiry is controlled by Apple: ~30 minutes for normal sessions, up to 2
+   * weeks when the user chooses "Keep me signed in".
+   *
+   * Default: `true`.
+   */
+  persistSession?: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // Phase D — Optimistic updates
 // ---------------------------------------------------------------------------
 
