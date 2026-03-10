@@ -29,12 +29,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/atlas-ledger/expo-cloudkit"
+    "url": "https://github.com/buzybee83/expo-cloudkit"
   },
   "bugs": {
-    "url": "https://github.com/atlas-ledger/expo-cloudkit/issues"
+    "url": "https://github.com/buzybee83/expo-cloudkit/issues"
   },
-  "homepage": "https://github.com/atlas-ledger/expo-cloudkit#readme",
+  "homepage": "https://github.com/buzybee83/expo-cloudkit#readme",
   "peerDependencies": {
     "expo": ">=51.0.0",
     "expo-modules-core": ">=1.12.0",
