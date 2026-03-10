@@ -1216,12 +1216,7 @@ export async function signOutWeb(): Promise<void> {
  * On web, returns `true` if a valid CloudKit JS session exists.
  */
 export function isWebAuthenticated(): boolean {
-  if (!NativeModule) return false;
-  try {
-    // We cannot call native getAccountStatus() synchronously, so return false
-    // as a conservative default on native when not yet determined.
-    return false;
-  } catch {
-    return false;
-  }
+  // On native there is no CloudKit JS auth session; always false.
+  // Auth is handled by the OS — use getAccountStatus() to check account availability.
+  return false;
 }

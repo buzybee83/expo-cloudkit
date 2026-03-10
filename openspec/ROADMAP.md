@@ -56,3 +56,17 @@
 - [x] `useCloudKitSubscription` — manages `CKQuerySubscription` lifecycle (create/delete/listener), invalidates `QueryCache` on push
 - [x] Optimistic updates in `useCloudKitRecord` — `update(fields)` with `optimisticStatus` / `optimisticError` state machine
 - [x] Optimistic mutations in `useCloudKitQuery` — `optimisticAdd(record)` / `optimisticRemove(recordName)` with `pendingCount`, `pendingRecordNames`, `optimisticErrors`
+
+## Phase E — Web Platform (complete)
+
+- [x] `src/ExpoCloudKit.web.ts` — Metro `.web.ts` platform override; 20/44 functions implemented via CloudKit JS
+- [x] `configureWeb(containerId, options)` — lazy-loads `tsl-apple-cloudkit`, calls `CloudKit.configure()`
+- [x] `authenticateWeb()` / `signOutWeb()` / `isWebAuthenticated()` — web auth lifecycle; native stubs for parity
+- [x] `isCloudKitAvailable()` — cross-platform availability check
+- [x] `CloudKitProvider.webConfig` prop — auto-calls `configureWeb()` on `Platform.OS === 'web'`
+- [x] `src/web/cloudkit-loader.ts` — singleton dynamic import with retry and clear install error
+- [x] `src/web/converters.ts` — bidirectional CloudKit JS ↔ `CloudKitRecord`/`RecordField` conversion
+- [x] `src/web/errors.ts` — `serverErrorCode` string → `CloudKitErrorCode` mapping
+- [x] `src/web/auth.ts` — in-memory + localStorage auth state with SSR guard and pub/sub
+- [x] `src/web/database.ts` — `DatabaseScope` → CloudKit JS database resolver
+- [x] `tsl-apple-cloudkit` added as optional peer dependency (`>=0.2.0`)
