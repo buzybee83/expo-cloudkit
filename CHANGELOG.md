@@ -11,6 +11,47 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.4.0] — 2026-03-10
+
+### Added
+
+**React context and account status**
+
+- `CloudKitProvider` — opt-in React context provider; calls `configure()` on mount, observes account status reactively, and owns a `QueryCache` instance shared across all hooks in the tree
+- `useAccountStatus()` — reads reactive iCloud account status from the nearest `CloudKitProvider`; updates automatically on account state changes
+- `useContainerId()` — reads the container ID from the nearest `CloudKitProvider`
+
+**Push subscription hook**
+
+- `useCloudKitSubscription(recordType, options)` — manages `CKQuerySubscription` lifecycle (creates subscription on mount, deletes on unmount); automatically invalidates `useCloudKitQuery` hooks via `QueryCache` when push notifications arrive
+
+**Optimistic updates for `useCloudKitRecord`**
+
+- `update(fields)` method — applies field updates optimistically to local state and rolls back automatically if the CloudKit write fails
+- `optimisticStatus` field — reflects current optimistic operation state (`'idle' | 'pending' | 'committed' | 'rolled-back'`)
+- `optimisticError` field — holds the error from the most recent failed optimistic update
+
+**Optimistic updates for `useCloudKitQuery`**
+
+- `optimisticAdd(record)` — adds a record to the local query result immediately, with automatic rollback on save failure
+- `optimisticRemove(recordName)` — removes a record from the local query result immediately, with automatic rollback on delete failure
+- `pendingCount` field — number of in-flight optimistic operations
+- `pendingRecordNames` field — array of record names currently in an optimistic state
+- `optimisticErrors` field — array of errors from rolled-back optimistic operations
+
+**New TypeScript types**
+
+- `OptimisticStatus` — `'idle' | 'pending' | 'committed' | 'rolled-back'`
+- `CloudKitProviderProps` — props for `CloudKitProvider`
+- `UseCloudKitSubscriptionOptions` — options for `useCloudKitSubscription`
+- `UseCloudKitSubscriptionReturn` — return shape of `useCloudKitSubscription`
+
+> Note: `QueryCache` is an internal pub/sub registry enabling cross-hook invalidation and is not part of the public API.
+
+> All changes in this release are purely additive TypeScript/React additions. No Swift or iOS changes were made.
+
+---
+
 ## [0.3.0] - 2026-03-09
 
 ### Added
@@ -111,4 +152,6 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 [0.1.0]: https://github.com/atlas-ledger/expo-cloudkit/releases/tag/v0.1.0
 [0.2.0]: https://github.com/atlas-ledger/expo-cloudkit/compare/v0.1.0...v0.2.0
-[Unreleased]: https://github.com/atlas-ledger/expo-cloudkit/compare/v0.2.0...HEAD
+[0.3.0]: https://github.com/atlas-ledger/expo-cloudkit/compare/v0.2.0...v0.3.0
+[0.4.0]: https://github.com/atlas-ledger/expo-cloudkit/compare/v0.3.0...v0.4.0
+[Unreleased]: https://github.com/atlas-ledger/expo-cloudkit/compare/v0.4.0...HEAD
