@@ -147,6 +147,11 @@ export function useCloudKitSubscription(
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<CloudKitError | undefined>(undefined);
 
+  // Mirror subscriptionId in a ref so the lifecycle effect can read it without
+  // adding it to the dependency array (which would cause unnecessary re-registrations).
+  const subscriptionIdRef = useRef<string | undefined>(undefined);
+  subscriptionIdRef.current = subscriptionId;
+
   // Stable ref for onNotification so the listener effect doesn't re-run on callback change
   const onNotificationRef = useRef(onNotification);
   useEffect(() => {
@@ -159,12 +164,13 @@ export function useCloudKitSubscription(
   // Subscription lifecycle: create on mount, recreate on key changes, delete on unmount
   useEffect(() => {
     if (!enabled) {
-      setSubscriptionId((prev) => {
-        if (prev !== undefined) {
-          void deleteSubscription(prev, effectiveDatabase).catch(() => {});
-        }
-        return undefined;
-      });
+      // Delete the existing subscription if one was active, then clear state.
+      // Read from the ref (not state) to keep setState callbacks pure.
+      const existing = subscriptionIdRef.current;
+      if (existing !== undefined) {
+        void deleteSubscription(existing, effectiveDatabase).catch(() => {});
+      }
+      setSubscriptionId(undefined);
       return;
     }
 

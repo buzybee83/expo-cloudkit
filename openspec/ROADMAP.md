@@ -47,3 +47,12 @@
 - [x] CloudKit Dashboard helper tooling (for development/debug)
 - [x] Batch record operations with progress reporting
 - [x] `CKRecord.Reference` deep linking support
+
+## Phase D — DX Improvements (complete)
+
+- [x] `CloudKitProvider` — opt-in React context sharing `containerId`, reactive `accountStatus`, `defaultDatabase`, and `QueryCache`
+- [x] `useAccountStatus()` / `useContainerId()` — convenience hooks requiring a Provider ancestor
+- [x] `QueryCache` — internal pub/sub registry for cross-hook invalidation without a full data cache
+- [x] `useCloudKitSubscription` — manages `CKQuerySubscription` lifecycle (create/delete/listener), invalidates `QueryCache` on push
+- [x] Optimistic updates in `useCloudKitRecord` — `update(fields)` with `optimisticStatus` / `optimisticError` state machine
+- [x] Optimistic mutations in `useCloudKitQuery` — `optimisticAdd(record)` / `optimisticRemove(recordName)` with `pendingCount`, `pendingRecordNames`, `optimisticErrors`

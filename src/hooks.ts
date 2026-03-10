@@ -501,6 +501,10 @@ export function useCloudKitQuery(
   const refetch = useCallback(async (): Promise<CloudKitRecord[] | undefined> => {
     if (!recordType || !enabled) return undefined;
 
+    // Reset optimistic state on refetch so stale errors don't persist
+    setPendingRecordNames(new Set());
+    setOptimisticErrors(new Map());
+
     cursorRef.current = undefined;
     const version = ++versionRef.current;
     setState((prev) => ({ ...prev, fetching: true, error: undefined }));
@@ -713,7 +717,7 @@ export function useCloudKitQuery(
       // 5. Replace temp record with server response
       setState((prev) => ({
         ...prev,
-        data: prev.data?.map((r) => r.recordName === tempName ? (saved as CloudKitRecord) : r),
+        data: prev.data?.map((r) => r.recordName === tempName ? saved : r),
       }));
       setPendingRecordNames((prev) => {
         const next = new Set(prev);
@@ -722,10 +726,9 @@ export function useCloudKitQuery(
       });
 
       // Propagate to other hooks
-      const committedRecord = saved as CloudKitRecord;
-      context?.queryCache.updateRecord(committedRecord);
+      context?.queryCache.updateRecord(saved);
 
-      return committedRecord;
+      return saved;
     } catch (err) {
       // 6. Rollback: remove temp record
       setState((prev) => ({
