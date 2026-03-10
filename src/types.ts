@@ -921,6 +921,23 @@ export interface QueuedResult {
   queueId: string;
 }
 
+// ---------------------------------------------------------------------------
+// Phase D — Optimistic updates
+// ---------------------------------------------------------------------------
+
+/**
+ * Status of an optimistic mutation on a single record.
+ *
+ * State machine:
+ *   idle → pending (update called) → committed (save succeeded) → idle
+ *                                  → rolled-back (save failed)  → idle
+ *
+ * The status resets to `'idle'` on the next `update()` or `refetch()` call.
+ */
+export type OptimisticStatus = 'idle' | 'pending' | 'committed' | 'rolled-back';
+
+// ---------------------------------------------------------------------------
+
 /**
  * Discriminated union of all events emitted by `addOfflineQueueListener`.
  *

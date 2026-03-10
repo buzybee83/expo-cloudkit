@@ -10,12 +10,15 @@
  * listener cleanup on unmount.
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useId } from 'react';
 
+import { useCloudKitContext } from './CloudKitProvider';
 import { CloudKitError } from './errors';
 import {
   fetchRecord,
   queryRecords,
+  saveRecords,
+  deleteRecords,
   startSyncEngine,
   getSyncState,
   stopSyncEngine,
@@ -27,10 +30,13 @@ import {
 import type {
   CloudKitRecord,
   DatabaseScope,
+  OptimisticStatus,
   PendingRecordChange,
   QueryPredicate,
+  RecordField,
   RecordsFetchedEvent,
   RecordsSentEvent,
+  RecordToSave,
   SortDescriptor,
   SyncErrorEvent,
   SyncState,
@@ -96,6 +102,27 @@ export interface UseCloudKitRecordReturn extends CloudKitHookState<CloudKitRecor
    * `undefined` if the fetch fails.
    */
   refetch: () => Promise<CloudKitRecord | undefined>;
+
+  /**
+   * Optimistically updates the record's fields in local state, then persists
+   * to CloudKit via `saveRecords()`. On error, rolls back to the previous
+   * local state and sets `optimisticError`.
+   *
+   * Only the provided fields are merged — omitted fields are untouched.
+   * Requires `data` to be loaded (`data !== undefined`).
+   *
+   * @returns The saved record on success, or `undefined` on failure.
+   */
+  update: (fields: Record<string, RecordField>) => Promise<CloudKitRecord | undefined>;
+
+  /** Current optimistic update status. */
+  optimisticStatus: OptimisticStatus;
+
+  /**
+   * Error from the most recent failed optimistic update.
+   * Cleared on the next successful update or refetch.
+   */
+  optimisticError: CloudKitError | undefined;
 }
 
 const inertRecordState: CloudKitHookState<CloudKitRecord> = {
@@ -132,14 +159,33 @@ export function useCloudKitRecord(
   recordName: string | undefined,
   options: UseCloudKitRecordOptions
 ): UseCloudKitRecordReturn {
-  const { recordType, zoneName, database, enabled = true, subscribe = false } = options;
+  const { recordType, zoneName, enabled = true, subscribe = false } = options;
+
+  // Phase D: consume context for defaultDatabase and QueryCache.
+  // When no Provider is present, pass options.database through as-is (may be undefined)
+  // so that fetchRecord's own default parameter applies — preserving existing behaviour.
+  const context = useCloudKitContext();
+  const database = context !== undefined
+    ? (options.database ?? context.defaultDatabase)
+    : options.database;
 
   const [state, setState] = useState<CloudKitHookState<CloudKitRecord>>(inertRecordState);
   const versionRef = useRef(0);
   const hasDataRef = useRef(false);
 
+  // Phase D: optimistic update state
+  const [optimisticStatus, setOptimisticStatus] = useState<OptimisticStatus>('idle');
+  const [optimisticError, setOptimisticError] = useState<CloudKitError | undefined>(undefined);
+
+  // Phase D: stable unique ID for cache registration
+  const hookId = useId();
+
   const refetch = useCallback(async (): Promise<CloudKitRecord | undefined> => {
     if (!recordName || !enabled) return undefined;
+
+    // Reset optimistic state on refetch
+    setOptimisticStatus('idle');
+    setOptimisticError(undefined);
 
     const version = ++versionRef.current;
     setState((prev) => ({ ...prev, fetching: true, error: undefined }));
@@ -218,12 +264,92 @@ export function useCloudKitRecord(
     };
   }, [subscribe, recordName, enabled, refetch]);
 
+  // Phase D: register in QueryCache so cross-hook updates can patch this record
+  useEffect(() => {
+    const queryCache = context?.queryCache;
+    if (!queryCache || !recordName || !enabled) return;
+
+    const unregister = queryCache.register({
+      id: hookId,
+      recordType: undefined, // single-record hooks don't watch a type
+      refetch: () => { void refetch(); },
+      patchRecord: (record: CloudKitRecord) => {
+        if (record.recordName !== recordName) return false;
+        setState((prev) => ({ ...prev, data: record }));
+        return true;
+      },
+    });
+
+    return unregister;
+  }, [hookId, recordName, enabled, context, refetch]);
+
+  // Phase D: optimistic update method
+  const update = useCallback(async (
+    fields: Record<string, RecordField>
+  ): Promise<CloudKitRecord | undefined> => {
+    if (!state.data) return undefined;
+
+    const previousData = state.data;
+    const mergedFields = { ...previousData.fields, ...fields };
+
+    // 1. Optimistic: update local state immediately
+    setState((prev) => ({
+      ...prev,
+      data: { ...previousData, fields: mergedFields },
+    }));
+    setOptimisticStatus('pending');
+    setOptimisticError(undefined);
+
+    try {
+      // 2. Persist to CloudKit
+      const recordToSave: RecordToSave = {
+        recordType: previousData.recordType,
+        recordName: previousData.recordName,
+        zoneName: previousData.zoneName,
+        changeTag: previousData.changeTag ?? undefined,
+        fields: mergedFields,
+      };
+      const [saved] = await saveRecords([recordToSave], database);
+
+      // 3. Commit: replace local data with server response (has updated changeTag)
+      const committed: CloudKitRecord = {
+        ...previousData,
+        ...saved,
+        fields: saved.fields,
+      };
+      setState((prev) => ({
+        ...prev,
+        data: committed,
+      }));
+      setOptimisticStatus('committed');
+
+      // Propagate to other hooks via QueryCache
+      context?.queryCache.updateRecord(committed);
+
+      return committed;
+    } catch (err) {
+      // 4. Rollback: restore previous data
+      setState((prev) => ({
+        ...prev,
+        data: previousData,
+      }));
+      const cloudKitError =
+        err instanceof CloudKitError ? err : CloudKitError.fromNativeError(err);
+      setOptimisticError(cloudKitError);
+      setOptimisticStatus('rolled-back');
+      return undefined;
+    }
+  }, [state.data, database, context]);
+
   return {
     data: state.data,
     loading: state.loading,
     fetching: state.fetching,
     error: state.error,
     refetch,
+    update,
+    optimisticStatus,
+    optimisticError,
   };
 }
 
@@ -273,6 +399,43 @@ export interface UseCloudKitQueryReturn extends CloudKitHookState<CloudKitRecord
   fetchMore: () => Promise<void>;
   /** `true` when the server has more pages available. */
   hasMore: boolean;
+
+  /**
+   * Optimistically prepends a record to the local result set, then saves it
+   * to CloudKit. On failure, removes it from the local set.
+   *
+   * If no `recordName` is provided, a temporary ID is assigned locally and
+   * replaced with the server-assigned name on commit.
+   *
+   * @returns The saved record on success, or `undefined` on failure.
+   */
+  optimisticAdd: (record: RecordToSave) => Promise<CloudKitRecord | undefined>;
+
+  /**
+   * Optimistically removes a record from the local result set, then deletes
+   * it from CloudKit. On failure, restores it to its original position.
+   *
+   * @returns `true` on success, `false` on failure (record is restored).
+   */
+  optimisticRemove: (recordName: string) => Promise<boolean>;
+
+  /**
+   * Number of records currently in a pending optimistic state (being saved or deleted).
+   * `0` means all displayed records are committed.
+   */
+  pendingCount: number;
+
+  /**
+   * Set of recordNames currently in a pending optimistic state.
+   * Use this to render per-record "saving..." indicators.
+   */
+  pendingRecordNames: ReadonlySet<string>;
+
+  /**
+   * Errors from failed optimistic operations, keyed by recordName.
+   * Cleared on the next successful operation or refetch.
+   */
+  optimisticErrors: ReadonlyMap<string, CloudKitError>;
 }
 
 const inertQueryState: CloudKitHookState<CloudKitRecord[]> = {
@@ -315,17 +478,32 @@ export function useCloudKitQuery(
     predicate,
     sortDescriptors,
     zoneName,
-    database,
     resultsLimit = 100,
     enabled = true,
     subscribe = false,
   } = options ?? {};
+
+  // Phase D: consume context for defaultDatabase and QueryCache.
+  // When no Provider is present, pass options?.database through as-is (may be undefined)
+  // so that queryRecords' own default parameter applies — preserving existing behaviour.
+  // When a Provider is present, apply its defaultDatabase if the hook has no explicit value.
+  const context = useCloudKitContext();
+  const database = context !== undefined
+    ? (options?.database ?? context.defaultDatabase)
+    : options?.database;
 
   const [state, setState] = useState<CloudKitHookState<CloudKitRecord[]>>(inertQueryState);
   const [hasMore, setHasMore] = useState(false);
   const versionRef = useRef(0);
   const hasDataRef = useRef(false);
   const cursorRef = useRef<string | undefined>(undefined);
+
+  // Phase D: optimistic state
+  const [pendingRecordNames, setPendingRecordNames] = useState<ReadonlySet<string>>(new Set());
+  const [optimisticErrors, setOptimisticErrors] = useState<ReadonlyMap<string, CloudKitError>>(new Map());
+
+  // Phase D: stable unique ID for cache registration
+  const hookId = useId();
 
   // Stable JSON strings for effect dependency arrays so callers need not memoize
   const predicateJson = JSON.stringify(predicate);
@@ -344,7 +522,7 @@ export function useCloudKitQuery(
         predicate,
         sortDescriptors,
         zoneName,
-        database ?? 'private',
+        database,
         resultsLimit,
         undefined
       );
@@ -381,7 +559,7 @@ export function useCloudKitQuery(
         predicate,
         sortDescriptors,
         zoneName,
-        database ?? 'private',
+        database,
         resultsLimit,
         cursorRef.current
       );
@@ -434,7 +612,7 @@ export function useCloudKitQuery(
       predicate,
       sortDescriptors,
       zoneName,
-      database ?? 'private',
+      database,
       resultsLimit,
       undefined
     )
@@ -472,6 +650,193 @@ export function useCloudKitQuery(
     };
   }, [subscribe, recordType, enabled, refetch]);
 
+  // Phase D: register in QueryCache for cross-hook invalidation and patching
+  useEffect(() => {
+    const queryCache = context?.queryCache;
+    if (!queryCache || !recordType || !enabled) return;
+
+    const unregister = queryCache.register({
+      id: hookId,
+      recordType,
+      refetch: () => { void refetch(); },
+      patchRecord: (record: CloudKitRecord) => {
+        if (record.recordType !== recordType) return false;
+        let found = false;
+        setState((prev) => {
+          if (!prev.data) return prev;
+          const idx = prev.data.findIndex((r) => r.recordName === record.recordName);
+          if (idx === -1) return prev;
+          found = true;
+          const updated = [...prev.data];
+          updated[idx] = record;
+          return { ...prev, data: updated };
+        });
+        return found;
+      },
+      removeRecord: (recordName: string) => {
+        let found = false;
+        setState((prev) => {
+          if (!prev.data) return prev;
+          const idx = prev.data.findIndex((r) => r.recordName === recordName);
+          if (idx === -1) return prev;
+          found = true;
+          return { ...prev, data: prev.data.filter((r) => r.recordName !== recordName) };
+        });
+        return found;
+      },
+    });
+
+    return unregister;
+  }, [hookId, recordType, enabled, context, refetch]);
+
+  // Phase D: optimisticAdd
+  const optimisticAdd = useCallback(async (
+    record: RecordToSave
+  ): Promise<CloudKitRecord | undefined> => {
+    if (!recordType) return undefined;
+
+    // 1. Assign temp recordName if not provided
+    const tempName = record.recordName ?? `__temp_${Math.random().toString(36).slice(2)}`;
+
+    // 2. Build a temporary CloudKitRecord
+    const tempRecord: CloudKitRecord = {
+      recordType: record.recordType,
+      recordName: tempName,
+      zoneName: record.zoneName ?? '',
+      ownerName: '',
+      modificationDate: null,
+      creationDate: null,
+      changeTag: null,
+      fields: record.fields,
+    };
+
+    // 3. Optimistically prepend to local state
+    setState((prev) => ({
+      ...prev,
+      data: [tempRecord, ...(prev.data ?? [])],
+    }));
+    setPendingRecordNames((prev) => new Set([...prev, tempName]));
+
+    try {
+      // 4. Save to CloudKit
+      const [saved] = await saveRecords([{ ...record, recordName: tempName }], database);
+
+      // 5. Replace temp record with server response
+      setState((prev) => {
+        if (!prev.data) return prev;
+        return {
+          ...prev,
+          data: prev.data.map((r) =>
+            r.recordName === tempName
+              ? {
+                  ...saved,
+                  recordType: saved.recordType,
+                  recordName: saved.recordName,
+                  zoneName: saved.zoneName,
+                  ownerName: saved.ownerName,
+                  modificationDate: saved.modificationDate,
+                  creationDate: saved.creationDate,
+                  changeTag: saved.changeTag,
+                  fields: saved.fields,
+                }
+              : r
+          ),
+        };
+      });
+      setPendingRecordNames((prev) => {
+        const next = new Set(prev);
+        next.delete(tempName);
+        return next;
+      });
+
+      // Propagate to other hooks
+      const committedRecord: CloudKitRecord = { ...saved };
+      context?.queryCache.updateRecord(committedRecord);
+
+      return committedRecord;
+    } catch (err) {
+      // 6. Rollback: remove temp record
+      setState((prev) => ({
+        ...prev,
+        data: (prev.data ?? []).filter((r) => r.recordName !== tempName),
+      }));
+      setPendingRecordNames((prev) => {
+        const next = new Set(prev);
+        next.delete(tempName);
+        return next;
+      });
+      const cloudKitError =
+        err instanceof CloudKitError ? err : CloudKitError.fromNativeError(err);
+      setOptimisticErrors((prev) => new Map([...prev, [tempName, cloudKitError]]));
+      return undefined;
+    }
+  }, [recordType, database, context]);
+
+  // Phase D: optimisticRemove
+  const optimisticRemove = useCallback(async (
+    recordName: string
+  ): Promise<boolean> => {
+    // 1. Find and remove the record from local state
+    let removedRecord: CloudKitRecord | undefined;
+    let removedIndex = -1;
+
+    setState((prev) => {
+      if (!prev.data) return prev;
+      const idx = prev.data.findIndex((r) => r.recordName === recordName);
+      if (idx === -1) return prev;
+      removedIndex = idx;
+      removedRecord = prev.data[idx];
+      return { ...prev, data: prev.data.filter((r) => r.recordName !== recordName) };
+    });
+
+    if (removedRecord === undefined) {
+      // Record not found in local state — nothing to do
+      return false;
+    }
+
+    setPendingRecordNames((prev) => new Set([...prev, recordName]));
+
+    const zoneName = removedRecord.zoneName;
+
+    try {
+      // 2. Delete from CloudKit
+      await deleteRecords([{ recordName, zoneName: zoneName || undefined }], database);
+
+      // 3. Remove from pending
+      setPendingRecordNames((prev) => {
+        const next = new Set(prev);
+        next.delete(recordName);
+        return next;
+      });
+
+      // Propagate to other hooks
+      if (recordType) {
+        context?.queryCache.removeRecord(recordType, recordName);
+      }
+
+      return true;
+    } catch (err) {
+      // 4. Rollback: restore the record at its original position
+      const capturedRecord = removedRecord;
+      const capturedIndex = removedIndex;
+      setState((prev) => {
+        if (!prev.data) return prev;
+        const updated = [...prev.data];
+        updated.splice(capturedIndex, 0, capturedRecord);
+        return { ...prev, data: updated };
+      });
+      setPendingRecordNames((prev) => {
+        const next = new Set(prev);
+        next.delete(recordName);
+        return next;
+      });
+      const cloudKitError =
+        err instanceof CloudKitError ? err : CloudKitError.fromNativeError(err);
+      setOptimisticErrors((prev) => new Map([...prev, [recordName, cloudKitError]]));
+      return false;
+    }
+  }, [database, recordType, context]);
+
   return {
     data: state.data,
     loading: state.loading,
@@ -480,6 +845,11 @@ export function useCloudKitQuery(
     refetch,
     fetchMore,
     hasMore,
+    optimisticAdd,
+    optimisticRemove,
+    pendingCount: pendingRecordNames.size,
+    pendingRecordNames,
+    optimisticErrors,
   };
 }
 
