@@ -9,6 +9,10 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+---
+
+## [0.5.0] — 2026-03-10
+
 ### Added
 
 **CloudKit Web Services (web platform target)**
@@ -172,4 +176,5 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 [0.2.0]: https://github.com/atlas-ledger/expo-cloudkit/compare/v0.1.0...v0.2.0
 [0.3.0]: https://github.com/atlas-ledger/expo-cloudkit/compare/v0.2.0...v0.3.0
 [0.4.0]: https://github.com/atlas-ledger/expo-cloudkit/compare/v0.3.0...v0.4.0
-[Unreleased]: https://github.com/atlas-ledger/expo-cloudkit/compare/v0.4.0...HEAD
+[0.5.0]: https://github.com/atlas-ledger/expo-cloudkit/compare/v0.4.0...v0.5.0
+[Unreleased]: https://github.com/atlas-ledger/expo-cloudkit/compare/v0.5.0...HEAD
