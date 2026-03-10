@@ -25,6 +25,7 @@
 // Types — re-export everything so consumers don't need to import from sub-paths
 export type {
   AccountStatus,
+  OptimisticStatus,
   AssetField,
   AssetProgress,
   AssetReadValue,
@@ -191,3 +192,12 @@ export {
   retryFailedOperations,
   addOfflineQueueListener,
 } from './ExpoCloudKit';
+
+// Phase D — DX Improvements
+export { CloudKitProvider, useAccountStatus, useContainerId } from './CloudKitProvider';
+export type { CloudKitProviderProps } from './CloudKitProvider';
+export { useCloudKitSubscription } from './useCloudKitSubscription';
+export type {
+  UseCloudKitSubscriptionOptions,
+  UseCloudKitSubscriptionReturn,
+} from './useCloudKitSubscription';
