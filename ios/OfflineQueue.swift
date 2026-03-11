@@ -1,7 +1,11 @@
 import CloudKit
 import Foundation
 import Network
-import UIKit
+#if canImport(UIKit)
+  import UIKit
+#elseif canImport(AppKit)
+  import AppKit
+#endif
 
 // MARK: - OfflineQueueError
 
@@ -87,7 +91,9 @@ final class OfflineQueue {
 
     loadQueue()
     setupPathMonitor()
-    setupForegroundObserver()
+    #if canImport(UIKit) || canImport(AppKit)
+      setupForegroundObserver()
+    #endif
   }
 
   deinit {
@@ -400,6 +406,7 @@ final class OfflineQueue {
 
   // MARK: - Foreground Observer
 
+  #if canImport(UIKit)
   private func setupForegroundObserver() {
     foregroundObserver = NotificationCenter.default.addObserver(
       forName: UIApplication.didBecomeActiveNotification,
@@ -407,4 +414,13 @@ final class OfflineQueue {
       queue: nil
     ) { [weak self] _ in _ = self?.drain() }
   }
+  #elseif canImport(AppKit)
+  private func setupForegroundObserver() {
+    foregroundObserver = NotificationCenter.default.addObserver(
+      forName: NSApplication.didBecomeActiveNotification,
+      object: nil,
+      queue: nil
+    ) { [weak self] _ in _ = self?.drain() }
+  }
+  #endif
 }

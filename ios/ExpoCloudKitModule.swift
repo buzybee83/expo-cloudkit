@@ -1,6 +1,8 @@
 import ExpoModulesCore
 import CloudKit
-import UIKit
+#if canImport(UIKit)
+  import UIKit
+#endif
 
 /// Main Expo module entry point for expo-cloudkit.
 ///
@@ -435,7 +437,7 @@ public class ExpoCloudKitModule: Module {
     // -------------------------------------------------------------------------
 
     Function("isSyncEngineAvailable") {
-      if #available(iOS 17.0, *) {
+      if #available(iOS 17.0, macOS 14.0, *) {
         return true
       }
       return false
@@ -474,7 +476,7 @@ public class ExpoCloudKitModule: Module {
       self.syncProvider = nil
 
       let provider: CloudKitSyncProvider
-      if #available(iOS 17.0, *) {
+      if #available(iOS 17.0, macOS 14.0, *) {
         provider = CloudKitSyncEngineAdapter(
           ckContainer: container.ckContainer,
           tokenStore: store
@@ -979,6 +981,7 @@ public class ExpoCloudKitModule: Module {
     ///   - zoneName (String, optional)
     ///   - database (String, default "private")
     AsyncFunction("presentSharingUI") { [weak self] (options: [String: Any], promise: Promise) in
+      #if canImport(UIKit)
       guard let self = self, let shareManager = self.shareManager, let container = self.container else {
         promise.reject(CloudKitModuleError.notConfigured)
         return
@@ -1014,6 +1017,13 @@ public class ExpoCloudKitModule: Module {
           promise.reject(Converters.toExpoError(error))
         }
       }
+      #else
+      promise.reject(NSError(
+        domain: "ExpoCloudKit",
+        code: -1,
+        userInfo: [NSLocalizedDescriptionKey: "presentSharingUI is not supported on macOS"]
+      ))
+      #endif
     }
 
     // Listen for CloudKit share URL opens and emit onShareAccepted.
