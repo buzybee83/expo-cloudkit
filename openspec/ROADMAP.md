@@ -74,5 +74,5 @@
 ## Phase F — Platform Expansion (in progress)
 
 - [x] Mac Catalyst support — UIKit conditional compilation guards
-- [ ] Test coverage for web layer (src/web/*.ts)
+- [x] Test coverage for web layer (src/web/*.ts)
 - [ ] Web example app (Expo Router)

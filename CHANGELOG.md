@@ -11,6 +11,26 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.5.2] — 2026-03-10
+
+### Added
+
+- 186 unit tests for the web layer across 5 new test suites in `src/__tests__/web/`:
+  `errors.test.ts` (35 cases), `converters.test.ts` (52 cases), `auth.test.ts` (24 cases),
+  `database.test.ts` (6 cases), `ExpoCloudKitWeb.test.ts` (48 cases, including listener
+  functional tests, stub rejection assertions, `configureWeb`/`authenticateWeb` integration,
+  and `requireContainer` guard via `jest.isolateModulesAsync`)
+- Total test suite grows from 41 to 227 passing tests
+
+### Fixed
+
+- Corrected misleading test name in `ExpoCloudKitWeb.test.ts` (`authenticateWeb` rejection
+  handling test was titled "throws when called before configureWeb")
+- Plugged auth listener state leak in `auth.test.ts`: orphaned `jest.fn()` listeners now
+  auto-unsubscribed via `afterEach` using a `trackedSubscribe` helper
+
+---
+
 ## [0.5.1] — 2026-03-10
 
 ### Fixed
