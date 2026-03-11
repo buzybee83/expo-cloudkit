@@ -75,4 +75,4 @@
 
 - [x] Mac Catalyst support — UIKit conditional compilation guards
 - [x] Test coverage for web layer (src/web/*.ts)
-- [ ] Web example app (Expo Router)
+- [x] Web example app (Expo Router)
