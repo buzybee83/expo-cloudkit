@@ -10,7 +10,7 @@
         "expo-cloudkit",
         {
           "iCloudContainerEnvironment": "Development",
-          "iCloudContainers": ["iCloud.com.example.cloudkit-demo"]
+          "containerIds": ["iCloud.com.example.cloudkit-demo"]
         }
       ]
     ],
