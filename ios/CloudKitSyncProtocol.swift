@@ -97,7 +97,7 @@ final class ChangeTokenStore {
 
   /// Persists the CKSyncEngine state serialization blob.
   /// Must be called on every `.stateUpdate` event to keep the token current.
-  @available(iOS 17, *)
+  @available(iOS 17, macOS 14, *)
   func saveSyncEngineState(_ serialization: CKSyncEngine.State.Serialization) {
     do {
       let data = try NSKeyedArchiver.archivedData(
@@ -112,7 +112,7 @@ final class ChangeTokenStore {
 
   /// Loads the previously persisted CKSyncEngine state serialization, or nil
   /// if none exists (triggers a full re-sync on first launch or after token loss).
-  @available(iOS 17, *)
+  @available(iOS 17, macOS 14, *)
   func loadSyncEngineState() -> CKSyncEngine.State.Serialization? {
     guard let data = defaults.data(forKey: key("syncEngineState")) else { return nil }
     return try? NSKeyedUnarchiver.unarchivedObject(

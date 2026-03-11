@@ -1,6 +1,8 @@
 import CloudKit
 import Foundation
-import UIKit
+#if canImport(UIKit)
+  import UIKit
+#endif
 
 /// Manages CKShare lifecycle: creating, deleting, fetching participants,
 /// updating permissions, removing participants, accepting shares, and
@@ -400,6 +402,7 @@ final class CloudKitShareManager {
 
   // MARK: - Present Sharing UI
 
+  #if canImport(UIKit)
   /// Presents the system `UICloudSharingController` on the given view controller.
   ///
   /// If the record already has an associated share (`record.share != nil`), presents
@@ -504,6 +507,7 @@ final class CloudKitShareManager {
       }
     }
   }
+  #endif // canImport(UIKit)
 
   // MARK: - Private Helpers
 
@@ -567,6 +571,8 @@ final class CloudKitShareManager {
   }
 }
 
+#if canImport(UIKit)
+
 // MARK: - Associated Object Keys
 
 private enum AssociatedKeys {
@@ -616,6 +622,8 @@ private final class CloudKitSharingControllerDelegate: NSObject, UICloudSharingC
     completion(.success(["outcome": "shared", "share": NSNull()]))
   }
 }
+
+#endif // canImport(UIKit)
 
 // MARK: - Internal Error Types
 

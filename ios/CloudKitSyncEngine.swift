@@ -5,7 +5,7 @@ import Foundation
 
 /// CloudKit sync adapter backed by CKSyncEngine.
 ///
-/// This entire class is guarded by `@available(iOS 17, *)`. The module layer
+/// This entire class is guarded by `@available(iOS 17, macOS 14, *)`. The module layer
 /// checks availability once in `startSyncEngine()` and selects this adapter or
 /// `CloudKitSyncFallbackAdapter` accordingly. After that, all calls go through
 /// the `CloudKitSyncProvider` protocol, with no further availability checks needed.
@@ -16,7 +16,7 @@ import Foundation
 /// (a private serial DispatchQueue). The `eventHandler` closure is called from
 /// whatever queue CKSyncEngine provides; the module layer dispatches to the main
 /// queue before calling `sendEvent`.
-@available(iOS 17.0, *)
+@available(iOS 17.0, macOS 14.0, *)
 final class CloudKitSyncEngineAdapter: CloudKitSyncProvider {
 
   // MARK: - Protocol conformance
@@ -127,7 +127,7 @@ final class CloudKitSyncEngineAdapter: CloudKitSyncProvider {
 
 // MARK: - CKSyncEngineDelegate
 
-@available(iOS 17.0, *)
+@available(iOS 17.0, macOS 14.0, *)
 extension CloudKitSyncEngineAdapter: CKSyncEngineDelegate {
 
   func handleEvent(_ event: CKSyncEngine.Event, syncEngine: CKSyncEngine) async {
