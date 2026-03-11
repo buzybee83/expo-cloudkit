@@ -11,6 +11,19 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.5.1] — 2026-03-10
+
+### Fixed
+
+- Mac Catalyst support via `#if canImport(UIKit)` conditional compilation guards throughout the Swift layer
+- `UIApplication.didBecomeActiveNotification` replaced with `NSApplication.didBecomeActiveNotification` on AppKit targets in `OfflineQueue`
+- `presentSharingUI()` now throws `CloudKitNotSupportedError` on macOS native (no `UICloudSharingController` equivalent on AppKit)
+- `@available(iOS 17, macOS 14, *)` availability annotations added to the CKSyncEngine adapter and `CKSyncEngineDelegate` protocol conformance
+
+> No TypeScript or public API changes — this is a purely a Swift build fix for Mac Catalyst targets.
+
+---
+
 ## [0.5.0] — 2026-03-10
 
 ### Added

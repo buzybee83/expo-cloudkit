@@ -70,3 +70,9 @@
 - [x] `src/web/auth.ts` — in-memory + localStorage auth state with SSR guard and pub/sub
 - [x] `src/web/database.ts` — `DatabaseScope` → CloudKit JS database resolver
 - [x] `tsl-apple-cloudkit` added as optional peer dependency (`>=0.2.0`)
+
+## Phase F — Platform Expansion (in progress)
+
+- [x] Mac Catalyst support — UIKit conditional compilation guards
+- [ ] Test coverage for web layer (src/web/*.ts)
+- [ ] Web example app (Expo Router)
