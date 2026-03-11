@@ -1018,11 +1018,7 @@ public class ExpoCloudKitModule: Module {
         }
       }
       #else
-      promise.reject(NSError(
-        domain: "ExpoCloudKit",
-        code: -1,
-        userInfo: [NSLocalizedDescriptionKey: "presentSharingUI is not supported on macOS"]
-      ))
+      promise.reject(CloudKitModuleError.sharingUINotSupportedOnMacOS)
       #endif
     }
 
@@ -1382,6 +1378,12 @@ class SharingUIUnavailableException: Exception {
   }
 }
 
+class SharingUINotSupportedOnMacOSException: Exception {
+  override var reason: String {
+    "presentSharingUI is not supported on macOS."
+  }
+}
+
 class OfflineQueueFullException: Exception {
   override var reason: String {
     "Offline queue is full (500 entries). Clear failed operations before enqueuing more."
@@ -1399,6 +1401,7 @@ enum CloudKitModuleError {
   static var requiresiOS17: Exception         { CloudKitRequiresiOS17Exception() }
   static var syncEngineNotRunning: Exception  { CloudKitSyncEngineNotRunningException() }
   static var sharingUIUnavailable: Exception  { SharingUIUnavailableException() }
+  static var sharingUINotSupportedOnMacOS: Exception { SharingUINotSupportedOnMacOSException() }
   static func notImplemented(_ f: String) -> Exception  { CloudKitNotImplementedException(f) }
   static func subscriptionNotFound(_ id: String) -> Exception { CloudKitSubscriptionNotFoundException(id) }
   static func invalidArgument(_ msg: String) -> Exception    { CloudKitInvalidArgumentException(msg) }
