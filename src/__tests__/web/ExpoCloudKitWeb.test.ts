@@ -537,14 +537,11 @@ describe('authenticateWeb', () => {
     expect(status).toBe('noAccount');
   });
 
-  it('throws CloudKitError when called before configureWeb', async () => {
-    // Test this by importing a fresh instance of the module.
-    // We simulate the unconfigured state by testing the error message pattern.
-    // Since we always configure in beforeEach, we verify the guard behavior
-    // by checking the thrown error type from a mock scenario.
-    mockSetUpAuth.mockRejectedValue(new Error('Not configured'));
+  it('returns "noAccount" when setUpAuth rejects with an unexpected error', async () => {
+    // authenticateWeb is designed to never throw — any setUpAuth rejection is
+    // caught and returned as noAccount so the caller always gets a usable status.
+    mockSetUpAuth.mockRejectedValue(new Error('Unexpected internal error'));
 
-    // authenticateWeb should handle the rejection gracefully and return noAccount
     const status = await authenticateWeb();
     expect(status).toBe('noAccount');
   });

@@ -19,11 +19,27 @@ import {
 // Reset module state between tests so listeners and _state don't bleed over.
 // ---------------------------------------------------------------------------
 
-// We need to re-import the module fresh for each test to reset module-level
-// state. Jest's module registry lets us do this with jest.resetModules().
-// However, since auth.ts uses module-level `let` variables, we isolate state
-// by clearing auth between tests via clearWebAuthState() and removing all
-// listeners via subscribeToAuthState unsubscribes.
+// auth.ts uses module-level `let _listeners` (a Set) and `let _state`. Jest
+// does NOT re-evaluate module-level state between tests in the same file, so
+// listeners registered in one test would fire in every subsequent test's
+// beforeEach `clearWebAuthState()` call. We track all unsubscribe functions
+// and call them in afterEach to keep the listener set clean.
+
+const _unsubscribeFns: Array<() => void> = [];
+
+// Wrap subscribeToAuthState to auto-track unsubscribes.
+const trackedSubscribe = (listener: Parameters<typeof subscribeToAuthState>[0]) => {
+  const unsub = subscribeToAuthState(listener);
+  _unsubscribeFns.push(unsub);
+  return unsub;
+};
+
+afterEach(() => {
+  // Drain all unsubscribe functions so orphaned listeners don't accumulate.
+  while (_unsubscribeFns.length > 0) {
+    _unsubscribeFns.pop()?.();
+  }
+});
 
 beforeEach(() => {
   // Clear state and ensure persistence is disabled so localStorage isn't touched
@@ -78,7 +94,7 @@ describe('setWebAuthState', () => {
 describe('subscribeToAuthState', () => {
   it('fires callback immediately when setWebAuthState is called', () => {
     const listener = jest.fn();
-    subscribeToAuthState(listener);
+    trackedSubscribe(listener);
 
     setWebAuthState({ isAuthenticated: true, userRecordName: '_me_' });
 
@@ -88,7 +104,7 @@ describe('subscribeToAuthState', () => {
 
   it('fires callback with the new state on each setWebAuthState call', () => {
     const listener = jest.fn();
-    subscribeToAuthState(listener);
+    trackedSubscribe(listener);
 
     setWebAuthState({ isAuthenticated: true, userRecordName: '_a_' });
     setWebAuthState({ isAuthenticated: false, userRecordName: undefined });
@@ -100,7 +116,7 @@ describe('subscribeToAuthState', () => {
 
   it('returned unsubscribe function stops future callbacks', () => {
     const listener = jest.fn();
-    const unsubscribe = subscribeToAuthState(listener);
+    const unsubscribe = trackedSubscribe(listener);
 
     setWebAuthState({ isAuthenticated: true, userRecordName: '_b_' });
     expect(listener).toHaveBeenCalledTimes(1);
@@ -113,7 +129,7 @@ describe('subscribeToAuthState', () => {
   });
 
   it('unsubscribing is idempotent — calling unsubscribe twice does not throw', () => {
-    const unsubscribe = subscribeToAuthState(jest.fn());
+    const unsubscribe = trackedSubscribe(jest.fn());
     expect(() => {
       unsubscribe();
       unsubscribe();
@@ -125,9 +141,9 @@ describe('subscribeToAuthState', () => {
     const listenerB = jest.fn();
     const listenerC = jest.fn();
 
-    subscribeToAuthState(listenerA);
-    subscribeToAuthState(listenerB);
-    subscribeToAuthState(listenerC);
+    trackedSubscribe(listenerA);
+    trackedSubscribe(listenerB);
+    trackedSubscribe(listenerC);
 
     setWebAuthState({ isAuthenticated: true, userRecordName: '_x_' });
 
@@ -140,8 +156,8 @@ describe('subscribeToAuthState', () => {
     const listenerA = jest.fn();
     const listenerB = jest.fn();
 
-    const unsubscribeA = subscribeToAuthState(listenerA);
-    subscribeToAuthState(listenerB);
+    const unsubscribeA = trackedSubscribe(listenerA);
+    trackedSubscribe(listenerB);
 
     unsubscribeA();
 
@@ -157,8 +173,8 @@ describe('subscribeToAuthState', () => {
     });
     const goodListener = jest.fn();
 
-    subscribeToAuthState(badListener);
-    subscribeToAuthState(goodListener);
+    trackedSubscribe(badListener);
+    trackedSubscribe(goodListener);
 
     // Should not throw despite badListener throwing
     expect(() => {
@@ -186,7 +202,7 @@ describe('clearWebAuthState', () => {
     setWebAuthState({ isAuthenticated: true, userRecordName: '_me_' });
 
     const listener = jest.fn();
-    subscribeToAuthState(listener);
+    trackedSubscribe(listener);
 
     clearWebAuthState();
 
