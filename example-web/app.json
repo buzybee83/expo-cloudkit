@@ -1,0 +1,21 @@
+{
+  "expo": {
+    "name": "CloudKit Example",
+    "slug": "expo-cloudkit-example-web",
+    "version": "1.0.0",
+    "platforms": ["ios", "web"],
+    "scheme": "cloudkit-example",
+    "plugins": [
+      [
+        "expo-cloudkit",
+        {
+          "iCloudContainerEnvironment": "Development",
+          "iCloudContainers": ["iCloud.com.example.cloudkit-demo"]
+        }
+      ]
+    ],
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}
