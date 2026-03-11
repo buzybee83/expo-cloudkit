@@ -1,0 +1,25 @@
+{
+  "name": "expo-cloudkit-example-web",
+  "private": true,
+  "version": "1.0.0",
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start",
+    "ios": "expo run:ios",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "expo": "~52.0.0",
+    "expo-cloudkit": "*",
+    "expo-router": "~4.0.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-native": "0.76.0",
+    "react-native-web": "~0.19.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.0",
+    "@types/react": "~18.3.0",
+    "typescript": "~5.3.0"
+  }
+}
