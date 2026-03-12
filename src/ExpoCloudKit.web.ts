@@ -226,21 +226,27 @@ export async function authenticateWeb(): Promise<AccountStatus> {
       // id="apple-sign-in-button" (or the id passed in configureWeb's signInButton).
       // whenUserSignsIn() resolves when that button is clicked and auth completes.
       if (typeof _container.whenUserSignsIn === 'function') {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const identity: any = await _container.whenUserSignsIn();
-        setWebAuthState({
-          isAuthenticated: true,
-          userRecordName: identity?.userRecordName,
-        });
-        return 'available';
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const identity: any = await _container.whenUserSignsIn();
+          if (identity) {
+            setWebAuthState({
+              isAuthenticated: true,
+              userRecordName: identity?.userRecordName,
+            });
+            return 'available';
+          }
+        } catch {
+          // User dismissed sign-in or popup was blocked — fall through to noAccount
+        }
       }
     }
 
     // Fall back to checking the current auth state
     return webAuthStateToAccountStatus(getWebAuthState());
-  } catch (err) {
+  } catch {
     setWebAuthState({ isAuthenticated: false, userRecordName: undefined });
-    throw mapCKJSError(err, 'general');
+    return 'noAccount';
   }
 }
 

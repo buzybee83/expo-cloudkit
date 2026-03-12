@@ -522,8 +522,9 @@ describe('authenticateWeb', () => {
     expect(isWebAuthenticated()).toBe(true);
   });
 
-  it('returns "noAccount" when setUpAuth resolves with null (user cancelled)', async () => {
+  it('returns "noAccount" when setUpAuth resolves with null and whenUserSignsIn rejects (user dismissed)', async () => {
     mockSetUpAuth.mockResolvedValue(null);
+    mockWhenUserSignsIn.mockRejectedValue(new Error('User dismissed'));
     clearWebAuthState();
 
     const status = await authenticateWeb();
