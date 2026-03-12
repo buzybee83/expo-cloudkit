@@ -12,13 +12,11 @@
 import {
   useAccountStatus,
   useContainerId,
-  authenticateWeb,
   isCloudKitAvailable,
 } from 'expo-cloudkit';
 import { useRouter } from 'expo-router';
 import React from 'react';
 import {
-  ActivityIndicator,
   Platform,
   Pressable,
   StyleSheet,
@@ -32,22 +30,6 @@ export default function HomeScreen() {
   const accountStatus = useAccountStatus();
   const containerId = useContainerId();
   const router = useRouter();
-
-  const [isSigningIn, setIsSigningIn] = React.useState(false);
-  const [signInError, setSignInError] = React.useState<string | undefined>(undefined);
-
-  async function handleWebSignIn() {
-    setIsSigningIn(true);
-    setSignInError(undefined);
-    try {
-      await authenticateWeb();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Sign-in failed.';
-      setSignInError(message);
-    } finally {
-      setIsSigningIn(false);
-    }
-  }
 
   const available = isCloudKitAvailable();
 
@@ -78,29 +60,6 @@ export default function HomeScreen() {
           {available ? 'Yes' : 'No (web or Android)'}
         </Text>
       </View>
-
-      {/* Web sign-in — only shown on web when not yet signed in */}
-      {Platform.OS === 'web' && accountStatus !== 'available' && (
-        <View style={styles.signInSection}>
-          <Text style={styles.signInHint}>
-            On web, sign in with your Apple ID to access your private CloudKit database.
-          </Text>
-          <Pressable
-            style={[styles.signInButton, isSigningIn && styles.signInButtonDisabled]}
-            onPress={handleWebSignIn}
-            disabled={isSigningIn || accountStatus === 'loading'}
-          >
-            {isSigningIn ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.signInButtonText}>Sign in with Apple</Text>
-            )}
-          </Pressable>
-          {signInError !== undefined && (
-            <Text style={styles.signInError}>{signInError}</Text>
-          )}
-        </View>
-      )}
 
       {/* iOS — sign-in is automatic via the device iCloud account */}
       {Platform.OS !== 'web' && accountStatus !== 'available' && accountStatus !== 'loading' && (
@@ -174,25 +133,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#555',
     lineHeight: 20,
-  },
-  signInButton: {
-    backgroundColor: '#000',
-    paddingVertical: 14,
-    paddingHorizontal: 24,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  signInButtonDisabled: {
-    opacity: 0.5,
-  },
-  signInButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  signInError: {
-    color: '#c62828',
-    fontSize: 13,
   },
   notesButton: {
     marginTop: 32,
