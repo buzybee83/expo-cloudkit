@@ -42,6 +42,13 @@ export interface WithCloudKitOptions {
    * at developer.apple.com → Certificates, Identifiers & Profiles → Identifiers.
    */
   containerIds: string[];
+
+  /**
+   * The iCloud container environment for the entitlement.
+   * Use 'Development' for debug builds and 'Production' for release/EAS builds.
+   * Default: 'Production' (Xcode requires a string, not an array).
+   */
+  iCloudContainerEnvironment?: 'Development' | 'Production';
 }
 
 // ---------------------------------------------------------------------------
@@ -49,7 +56,7 @@ export interface WithCloudKitOptions {
 // ---------------------------------------------------------------------------
 
 const withCloudKitPlugin: ConfigPlugin<WithCloudKitOptions> = (config, options) => {
-  const { containerIds } = options;
+  const { containerIds, iCloudContainerEnvironment = 'Production' } = options;
 
   if (!containerIds || containerIds.length === 0) {
     throw new Error(
@@ -84,13 +91,10 @@ const withCloudKitPlugin: ConfigPlugin<WithCloudKitOptions> = (config, options) 
       ];
     }
 
-    // iCloud container environment — 'Production' or 'Development'
-    // This is set to 'Production' here; Xcode/EAS manages the actual signing.
-    // The entitlement key is required even in development builds.
-    config.modResults['com.apple.developer.icloud-container-environment'] = [
-      'Development',
-      'Production',
-    ];
+    // iCloud container environment — must be a string, not an array.
+    // Xcode requires exactly 'Development' or 'Production'.
+    config.modResults['com.apple.developer.icloud-container-environment'] =
+      iCloudContainerEnvironment;
 
     return config;
   });
