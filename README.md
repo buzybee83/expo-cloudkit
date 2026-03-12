@@ -6,9 +6,9 @@
 
 CloudKit for Expo — save and sync records with iCloud, with no Swift required.
 
-expo-cloudkit is a TypeScript-first Expo native module over Apple's CloudKit framework. It covers record CRUD, custom zones, delta sync, push subscriptions, sharing, offline queuing, and React hooks — all behind a consistent `async/await` API.
+expo-cloudkit is a TypeScript-first Expo native module over Apple's CloudKit framework. It covers record CRUD, custom zones, delta sync, push subscriptions, sharing, offline queuing, React hooks, and web support via CloudKit JS — all behind a consistent `async/await` API.
 
-**iOS only.** Android and web return `CloudKitNotSupportedError` on every call rather than crashing.
+**iOS-first.** Android returns `CloudKitNotSupportedError` on every call. Web is partially supported via `tsl-apple-cloudkit` (20 of 44 operations) — see [Web Platform (CloudKit JS)](#web-platform-cloudkit-js).
 
 ---
 
@@ -28,8 +28,11 @@ expo-cloudkit is a TypeScript-first Expo native module over Apple's CloudKit fra
   - [Sharing (CKShare)](#sharing-ckshare)
   - [Offline Queue](#offline-queue)
   - [React Hooks](#react-hooks)
+  - [CloudKitProvider](#cloudkitprovider)
+  - [Web Platform (CloudKit JS)](#web-platform-cloudkit-js)
   - [Batch Operations](#batch-operations)
   - [Reference Deep Linking](#reference-deep-linking)
+  - [Operation Configuration](#operation-configuration)
   - [Dashboard Helpers (dev-only)](#dashboard-helpers-dev-only)
   - [Error Handling](#error-handling)
 - [Platform Support](#platform-support)
@@ -72,6 +75,27 @@ Add the config plugin to `app.json` or `app.config.js`:
       ]
     ]
   }
+}
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `containerIds` | `string[]` | required | One or more `iCloud.com.*` container identifiers |
+| `iCloudContainerEnvironment` | `'Development' \| 'Production'` | `'Production'` | Maps to `com.apple.developer.icloud-container-environment` entitlement. Use `'Development'` for debug builds |
+
+```json
+{
+  "plugins": [
+    [
+      "expo-cloudkit",
+      {
+        "containerIds": ["iCloud.com.yourcompany.yourapp"],
+        "iCloudContainerEnvironment": "Development"
+      }
+    ]
+  ]
 }
 ```
 
@@ -200,6 +224,18 @@ const sub = addAccountStatusListener((status) => {
 sub.remove();
 ```
 
+#### `fetchUserRecordID(): Promise<string>`
+
+Returns the current iCloud user's CloudKit record name. This is a stable, per-container identifier that persists across app installs and can be used to associate user data with a specific iCloud account.
+
+```typescript
+const userRecordName = await fetchUserRecordID();
+// e.g. "_abc123def456..." — stable per user per container
+console.log('User record:', userRecordName);
+```
+
+Throws `CloudKitError` with code `NOT_AUTHENTICATED` if the user is not signed into iCloud.
+
 ---
 
 ### Zones
@@ -300,6 +336,14 @@ try {
 }
 ```
 
+Pass `desiredKeys` to fetch only specific fields and avoid over-fetching:
+
+```typescript
+// Fetch only the title and createdAt fields
+const note = await fetchRecord('Note', 'abc-123', 'Notes', 'private', ['title', 'createdAt']);
+console.log(note.fields.title.value); // Other fields are absent from the response
+```
+
 #### `queryRecords(recordType, predicate?, sortDescriptors?, zoneName?, database?, resultsLimit?, cursor?): Promise<QueryResult>`
 
 Queries records with an optional predicate and sort. Results are paginated via a cursor.
@@ -321,6 +365,18 @@ const page1 = await queryRecords(
 if (page1.cursor) {
   const page2 = await queryRecords('Note', undefined, undefined, 'Notes', 'private', 25, page1.cursor);
 }
+```
+
+Pass `desiredKeys` as the last parameter to limit fields returned per record:
+
+```typescript
+const page1 = await queryRecords(
+  'Note',
+  { field: 'pinned', comparator: '=', value: 1 },
+  [{ field: 'createdAt', ascending: false }],
+  'Notes', 'private', 25, undefined,
+  ['title', 'pinned'] // only fetch these fields
+);
 ```
 
 #### `deleteRecords(recordIds, database?): Promise<void>`
@@ -514,6 +570,36 @@ Stops the sync engine and releases its resources.
 await stopSyncEngine();
 // getSyncState() now returns { status: 'notStarted' }
 ```
+
+#### Custom conflict resolution
+
+By default the sync engine applies server-record-wins when a save conflict occurs. To handle conflicts yourself, set `resolveConflicts: true` in `startSyncEngine` and listen for `onSyncConflict` events:
+
+```typescript
+import { startSyncEngine, addSyncEngineListener, resolveSyncConflict } from 'expo-cloudkit';
+
+await startSyncEngine({
+  zones: ['Notes'],
+  database: 'private',
+  resolveConflicts: true, // opt-in to manual resolution
+});
+
+const sub = addSyncEngineListener((event) => {
+  if (event.type === 'conflict') {
+    // event.requestId   — opaque ID, must be passed back to resolveSyncConflict
+    // event.clientRecord — the record you tried to save
+    // event.serverRecord — the current server version
+
+    const merged = mergeRecords(event.clientRecord, event.serverRecord);
+
+    // Pass the merged record — or null to accept the server version
+    resolveSyncConflict(event.requestId, merged);
+    // resolveSyncConflict(event.requestId, null); // accept server version
+  }
+});
+```
+
+> **Important:** When `resolveConflicts: true`, you **must** call `resolveSyncConflict` for every `conflict` event. Failing to do so leaves the sync engine waiting indefinitely for that conflict to be resolved.
 
 ---
 
@@ -941,6 +1027,240 @@ function SyncProvider({ children }: { children: React.ReactNode }) {
 
 ---
 
+### CloudKitProvider
+
+`CloudKitProvider` is an opt-in React context that:
+- Calls `configure()` (or `configureWeb()` on web) on mount
+- Exposes reactive `accountStatus` across the component tree
+- Shares a single `QueryCache` instance for cross-hook push invalidation
+
+```tsx
+import { CloudKitProvider } from 'expo-cloudkit';
+
+export default function App() {
+  return (
+    <CloudKitProvider
+      containerId="iCloud.com.example.myapp"
+      observeAccountStatus
+      webConfig={{ apiToken: process.env.EXPO_PUBLIC_CLOUDKIT_API_TOKEN }}
+    >
+      <AppContent />
+    </CloudKitProvider>
+  );
+}
+```
+
+`CloudKitProvider` props:
+
+| Prop | Type | Default | Description |
+|------|------|---------|-------------|
+| `containerId` | `string` | required | CloudKit container identifier |
+| `observeAccountStatus` | `boolean` | `false` | Subscribe to account status changes |
+| `defaultDatabase` | `DatabaseScope` | `'private'` | Hooks default to this database |
+| `webConfig` | `WebConfigOptions` | `undefined` | Auto-calls `configureWeb()` on web when provided |
+
+#### `useAccountStatus(): AccountStatus`
+
+Returns the reactive account status from the nearest `CloudKitProvider`. Updates automatically on account changes.
+
+```tsx
+import { useAccountStatus } from 'expo-cloudkit';
+
+function Header() {
+  const status = useAccountStatus();
+  return <Text>{status === 'available' ? 'Signed in' : 'Not signed in'}</Text>;
+}
+```
+
+#### `useContainerId(): string`
+
+Returns the container ID from the nearest `CloudKitProvider`.
+
+#### Optimistic updates in `useCloudKitRecord`
+
+```tsx
+const { data, update, optimisticStatus, optimisticError } = useCloudKitRecord(recordName, {
+  recordType: 'Note',
+  zoneName: 'Notes',
+});
+
+// Applies update locally immediately; rolls back automatically if the CloudKit write fails
+await update({ title: { type: 'string', value: 'New Title' } });
+
+// optimisticStatus: 'idle' | 'pending' | 'committed' | 'rolled-back'
+// optimisticError: CloudKitError | null (last rollback cause)
+```
+
+#### Optimistic mutations in `useCloudKitQuery`
+
+```tsx
+const {
+  data,
+  optimisticAdd,
+  optimisticRemove,
+  pendingCount,
+  pendingRecordNames,
+  optimisticErrors,
+} = useCloudKitQuery('Note', { zoneName: 'Notes' });
+
+// Adds to result list immediately; removed automatically on save failure
+const tempRecord = { recordName: 'temp-uuid', recordType: 'Note', fields: { title: { type: 'string', value: 'Draft' } } };
+await optimisticAdd(tempRecord);
+
+// Removes from result list immediately; re-added automatically on delete failure
+await optimisticRemove('abc-123');
+```
+
+#### `useCloudKitSubscription(recordType, options)`
+
+Manages a `CKQuerySubscription` lifecycle (create on mount, delete on unmount). Automatically invalidates `useCloudKitQuery` hooks when a push notification arrives for the matching record type.
+
+```tsx
+import { useCloudKitSubscription } from 'expo-cloudkit';
+
+function NoteList() {
+  // Creates a subscription on mount; automatically triggers refetch on push
+  const { subscriptionId, error } = useCloudKitSubscription('Note', {
+    predicate: { field: 'archived', comparator: '=', value: 0 },
+    zoneName: 'Notes',
+    database: 'private',
+  });
+  // ...
+}
+```
+
+---
+
+### Web Platform (CloudKit JS)
+
+On web, 20 of 44 expo-cloudkit operations are implemented via [CloudKit JS](https://developer.apple.com/documentation/cloudkitjs) using the optional peer dependency `tsl-apple-cloudkit`.
+
+**Install the peer dependency for web support:**
+
+```bash
+npm install tsl-apple-cloudkit
+```
+
+**Supported on web:** `configureWeb`, `authenticateWeb`, `signOutWeb`, `isWebAuthenticated`, `isCloudKitAvailable`, zones (CRUD), record CRUD, query, `fetchRecordZoneChanges`, subscriptions (server-side only — APNs silent push is not delivered to web browsers).
+
+**Not supported on web** (throws `CloudKitNotSupportedError`): `CKSyncEngine`, `downloadAsset`, offline queue, `presentSharingUI`, `updateSharePermission`, `removeShareParticipant`.
+
+#### `configureWeb(containerId, options): Promise<void>`
+
+Initializes CloudKit JS. Must be called before any web CloudKit operation. No-op on native.
+
+```typescript
+import { configureWeb } from 'expo-cloudkit';
+
+await configureWeb('iCloud.com.example.myapp', {
+  apiToken: 'YOUR_CLOUDKIT_JS_API_TOKEN',   // from CloudKit Dashboard → API Access
+  environment: 'development',               // 'development' | 'production'
+  persistSession: true,                     // persist auth across page reloads
+});
+```
+
+Get an API token from [CloudKit Dashboard](https://icloud.developer.apple.com/dashboard) → your container → API Access → Tokens.
+
+#### `authenticateWeb(): Promise<AccountStatus>`
+
+Triggers the Apple ID sign-in flow on web. If the user is already signed in, resolves immediately with `'available'`. Never throws — returns `'noAccount'` on any error or user dismissal.
+
+```typescript
+const status = await authenticateWeb();
+if (status === 'available') {
+  // User is now authenticated — safe to call CloudKit operations
+}
+```
+
+**Note:** CloudKit JS injects Apple's sign-in button into a DOM element with `id="apple-sign-in-button"`. To ensure the sign-in flow works, include this element in your component tree on web:
+
+```tsx
+{Platform.OS === 'web' && (
+  // @ts-expect-error: nativeID maps to DOM id on web
+  <View nativeID="apple-sign-in-button" />
+)}
+```
+
+#### `signOutWeb(): Promise<void>`
+
+Clears the web auth session. No-op on native.
+
+```typescript
+await signOutWeb();
+```
+
+#### `isWebAuthenticated(): boolean`
+
+Synchronous check for a valid CloudKit JS session. Always returns `false` on native.
+
+```typescript
+if (isWebAuthenticated()) {
+  loadUserData();
+}
+```
+
+#### `isCloudKitAvailable(): boolean`
+
+Returns `true` once `configureWeb()` has successfully completed on web, or once the native module is initialized on iOS. Use this to gate CloudKit operations.
+
+```typescript
+if (!isCloudKitAvailable()) {
+  return <Text>CloudKit not configured</Text>;
+}
+```
+
+#### Using `CloudKitProvider` on web
+
+Pass `webConfig` to `CloudKitProvider` to handle `configureWeb()` automatically:
+
+```tsx
+<CloudKitProvider
+  containerId="iCloud.com.example.myapp"
+  webConfig={{
+    apiToken: process.env.EXPO_PUBLIC_CLOUDKIT_API_TOKEN,
+    environment: 'development',
+  }}
+>
+  <App />
+</CloudKitProvider>
+```
+
+`CloudKitProvider` awaits `configureWeb()` before calling `getAccountStatus()`, avoiding the common race condition where account status resolves as `'couldNotDetermine'` on first render.
+
+---
+
+### Operation Configuration
+
+All fetch and write operations accept an optional `operationConfig` parameter to control CloudKit's quality-of-service scheduling and network timeout.
+
+```typescript
+import { OperationConfig } from 'expo-cloudkit';
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `qos` | `'userInitiated' \| 'utility' \| 'background' \| 'default'` | `'userInitiated'` | Quality-of-service priority for the underlying `CKOperation` |
+| `timeout` | `number` | system default | Network timeout in seconds |
+
+**Use cases:**
+
+```typescript
+// User tapped "Refresh" — highest priority
+const records = await queryRecords('Note', undefined, undefined, 'Notes', 'private', 25,
+  undefined, undefined, { qos: 'userInitiated' });
+
+// Background prefetch — don't compete with user-initiated ops
+await fetchRecordZoneChanges(['Notes'], 'private', undefined,
+  { qos: 'utility', timeout: 60 });
+
+// Bulk import — lowest priority, longer timeout
+await saveRecords(largeArray, 'private', { qos: 'background', timeout: 120 });
+```
+
+Operations that omit `operationConfig` default to `.userInitiated` with no timeout override — existing behavior is unchanged.
+
+---
+
 ### Batch Operations
 
 `saveRecords` and `deleteRecords` automatically split oversized arrays to stay within CloudKit's 400-record limit. Each chunk is sent as a separate `CKModifyRecordsOperation`.
@@ -1128,9 +1448,10 @@ try {
 | iOS 16+ | Full: zones, records, delta fetch, assets, subscriptions, sharing, offline queue |
 | iOS 17+ | CKSyncEngine automatic scheduling via `startSyncEngine` / `useCloudKitSync` |
 | Android | All calls return `CloudKitNotSupportedError` — no crash |
-| Web | All calls return `CloudKitNotSupportedError` — no crash |
+| Web (via CloudKit JS) | 20 of 44 operations supported via `configureWeb()` + `tsl-apple-cloudkit`; unsupported calls throw `CloudKitNotSupportedError` |
+| macOS (Mac Catalyst) | Same as iOS 16+ — UIKit-guarded APIs unavailable on AppKit targets |
 
-No Android or web support is planned. CloudKit is an Apple service, and a cross-platform abstraction is outside the scope of this module.
+Web requires the optional peer dependency `tsl-apple-cloudkit` (`npm install tsl-apple-cloudkit`). CloudKit is an Apple service — full web support beyond what CloudKit JS exposes is outside the scope of this module. Android is not supported.
 
 ---
 
