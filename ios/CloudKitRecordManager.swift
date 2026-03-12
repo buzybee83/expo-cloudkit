@@ -557,6 +557,205 @@ final class CloudKitRecordManager {
     }
   }
 
+  // MARK: - Reference Graph Delete
+
+  /// Deletes a record and all records reachable via its CKRecord.Reference fields,
+  /// up to `maxDepth` levels deep (clamped to 1...3).
+  ///
+  /// Algorithm:
+  ///   1. Fetch the root record.
+  ///   2. Walk every field typed as `CKRecord.Reference` and collect the referenced IDs.
+  ///   3. If `maxDepth > 1`, fetch each referenced record in parallel and repeat
+  ///      step 2 for its references, continuing until the depth limit is reached.
+  ///   4. Collect all discovered record IDs into a deduplicated set (including the root).
+  ///   5. Delete the full set using the existing chunked `deleteRecords` implementation.
+  ///
+  /// Reference fetch failures (e.g. RECORD_NOT_FOUND) are silently skipped — a missing
+  /// referenced record should not block deletion of the records that do exist.
+  ///
+  /// - Parameters:
+  ///   - recordName: The recordName of the root record.
+  ///   - recordType: The CloudKit record type of the root record (used only for building
+  ///     the fetch ID; not required to match by CloudKit when fetching by ID).
+  ///   - zoneName: Optional zone name; nil resolves to the default zone.
+  ///   - database: Database scope string ("private" | "shared" | "public").
+  ///   - maxDepth: Maximum reference traversal depth. Clamped to the range 1...3.
+  ///   - completion: Called with the array of deleted recordName strings, or an error.
+  func deleteRecordWithReferences(
+    recordName: String,
+    recordType: String,
+    zoneName: String?,
+    database: String,
+    maxDepth: Int,
+    completion: @escaping (Result<[String], Error>) -> Void
+  ) {
+    let clampedDepth = min(max(maxDepth, 1), 3)
+    let scope = Converters.toDatabaseScope(database)
+    let db = self.database(for: scope)
+
+    let zoneID: CKRecordZone.ID
+    if let zoneName = zoneName {
+      zoneID = CKRecordZone.ID(zoneName: zoneName, ownerName: CKCurrentUserDefaultName)
+    } else {
+      zoneID = .default
+    }
+
+    let rootID = CKRecord.ID(recordName: recordName, zoneID: zoneID)
+
+    // Fetch the root record, then walk the reference graph.
+    fetchRecordByID(rootID, db: db) { [weak self] result in
+      guard let self = self else { return }
+      switch result {
+      case .failure(let error):
+        completion(.failure(error))
+      case .success(let rootRecord):
+        // Seed the collection with the root.
+        var collectedIDs: Set<CKRecord.ID> = [rootID]
+
+        // Collect IDs directly referenced by rootRecord.
+        let directRefs = self.referenceIDs(in: rootRecord)
+
+        if clampedDepth <= 1 || directRefs.isEmpty {
+          // No further traversal needed — delete what we have so far.
+          collectedIDs.formUnion(directRefs)
+          self.deleteRecords(Array(collectedIDs), in: scope) { deleteResult in
+            switch deleteResult {
+            case .success:
+              completion(.success(collectedIDs.map { $0.recordName }))
+            case .failure(let error):
+              completion(.failure(error))
+            }
+          }
+        } else {
+          // Traverse remaining levels (levels 2 and 3).
+          self.collectReferenceIDs(
+            startingFrom: directRefs,
+            db: db,
+            remainingDepth: clampedDepth - 1
+          ) { deepIDs in
+            collectedIDs.formUnion(directRefs)
+            collectedIDs.formUnion(deepIDs)
+            self.deleteRecords(Array(collectedIDs), in: scope) { deleteResult in
+              switch deleteResult {
+              case .success:
+                completion(.success(collectedIDs.map { $0.recordName }))
+              case .failure(let error):
+                completion(.failure(error))
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /// Fetches a CKRecord by its ID using CKFetchRecordsOperation.
+  ///
+  /// Returns only the first result block's outcome (single-record fetch).
+  /// This private helper exists so `deleteRecordWithReferences` can reuse
+  /// the same underlying operation pattern as `fetchRecord` without duplicating
+  /// the desiredKeys / operationConfig wiring that the public method carries.
+  private func fetchRecordByID(
+    _ recordID: CKRecord.ID,
+    db: CKDatabase,
+    completion: @escaping (Result<CKRecord, Error>) -> Void
+  ) {
+    let operation = CKFetchRecordsOperation(recordIDs: [recordID])
+    operation.qualityOfService = .userInitiated
+
+    // We only care about reference-typed fields during graph traversal, so
+    // fetching all keys is intentional here — we cannot know ahead of time
+    // which keys hold references without reading the full record.
+    operation.perRecordResultBlock = { _, result in
+      switch result {
+      case .success(let record):
+        completion(.success(record))
+      case .failure(let error):
+        completion(.failure(error))
+      }
+    }
+
+    db.add(operation)
+  }
+
+  /// Recursively collects all `CKRecord.ID`s reachable from `frontier` up to
+  /// `remainingDepth` additional levels.
+  ///
+  /// All records in the frontier are fetched in parallel via `DispatchGroup`.
+  /// Fetch failures for individual records are silently skipped so that a
+  /// missing referenced record never blocks collection of existing records.
+  ///
+  /// `completion` is always called exactly once, on an arbitrary background queue.
+  private func collectReferenceIDs(
+    startingFrom frontier: [CKRecord.ID],
+    db: CKDatabase,
+    remainingDepth: Int,
+    completion: @escaping (_ collected: Set<CKRecord.ID>) -> Void
+  ) {
+    guard remainingDepth > 0, !frontier.isEmpty else {
+      completion([])
+      return
+    }
+
+    let group = DispatchGroup()
+    // Serial write queue prevents data races on `nextFrontier` and `collected`
+    // when multiple CloudKit callbacks arrive concurrently.
+    let writeQueue = DispatchQueue(label: "expo.cloudkit.refdelete.\(UUID().uuidString)")
+    var nextFrontier: [CKRecord.ID] = []
+    var collected: Set<CKRecord.ID> = []
+
+    for recordID in frontier {
+      group.enter()
+      fetchRecordByID(recordID, db: db) { [weak self] result in
+        guard let self = self else { group.leave(); return }
+        switch result {
+        case .failure:
+          // Non-fatal — record may have already been deleted or never existed.
+          group.leave()
+        case .success(let record):
+          let refs = self.referenceIDs(in: record)
+          writeQueue.sync {
+            collected.formUnion(refs)
+            nextFrontier.append(contentsOf: refs)
+          }
+          group.leave()
+        }
+      }
+    }
+
+    group.notify(queue: .global(qos: .userInitiated)) { [weak self] in
+      guard let self = self else { completion(collected); return }
+      if remainingDepth <= 1 || nextFrontier.isEmpty {
+        completion(collected)
+      } else {
+        // Deduplicate before the next level to avoid redundant fetches.
+        let uniqueNextFrontier = writeQueue.sync { Array(Set(nextFrontier)) }
+        self.collectReferenceIDs(
+          startingFrom: uniqueNextFrontier,
+          db: db,
+          remainingDepth: remainingDepth - 1
+        ) { deeperIDs in
+          completion(collected.union(deeperIDs))
+        }
+      }
+    }
+  }
+
+  /// Extracts all `CKRecord.ID`s stored in reference-typed fields of a record.
+  ///
+  /// The zone for each referenced ID is inherited from the root record's zone
+  /// when the reference itself does not carry explicit zone information (which
+  /// is the normal CloudKit behaviour for same-zone references).
+  private func referenceIDs(in record: CKRecord) -> [CKRecord.ID] {
+    var ids: [CKRecord.ID] = []
+    for key in record.allKeys() {
+      if let ref = record[key] as? CKRecord.Reference {
+        ids.append(ref.recordID)
+      }
+    }
+    return ids
+  }
+
   // MARK: - Helpers
 
   private func database(for scope: CKDatabase.Scope) -> CKDatabase {

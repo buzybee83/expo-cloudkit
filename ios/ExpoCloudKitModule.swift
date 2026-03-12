@@ -514,6 +514,62 @@ public class ExpoCloudKitModule: Module {
     }
 
     // -------------------------------------------------------------------------
+    // Reference Graph Delete — Phase H.4
+    // -------------------------------------------------------------------------
+
+    /// Deletes a record and all records reachable through its CKRecord.Reference
+    /// fields, up to `maxDepth` levels deep (clamped to 1...3 on the Swift side).
+    ///
+    /// Options keys:
+    ///   - recordName  (String, required) — root record to delete
+    ///   - recordType  (String, required) — CloudKit record type of the root record
+    ///   - zoneName    (String, optional) — defaults to the default zone
+    ///   - database    (String, optional) — "private"|"shared"|"public", default "private"
+    ///   - maxDepth    (Int,    optional) — traversal depth 1...3, default 1
+    ///
+    /// Resolves with an array of deleted recordName strings.
+    /// Referenced records that do not exist are silently skipped.
+    AsyncFunction("deleteRecordWithReferences") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self, let recordManager = self.recordManager else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+      guard let recordName = options["recordName"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("recordName is required"))
+        return
+      }
+      guard let recordType = options["recordType"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("recordType is required"))
+        return
+      }
+      let zoneName = options["zoneName"] as? String
+      let dbString = options["database"] as? String ?? "private"
+      let maxDepth: Int
+      if let d = options["maxDepth"] as? Int {
+        maxDepth = d
+      } else if let d = options["maxDepth"] as? Double {
+        maxDepth = Int(d)
+      } else {
+        maxDepth = 1
+      }
+
+      recordManager.deleteRecordWithReferences(
+        recordName: recordName,
+        recordType: recordType,
+        zoneName: zoneName,
+        database: dbString,
+        maxDepth: maxDepth
+      ) { result in
+        switch result {
+        case .success(let deletedNames):
+          promise.resolve(deletedNames)
+        case .failure(let error):
+          promise.reject(Converters.toExpoError(error))
+        }
+      }
+    }
+
+    // -------------------------------------------------------------------------
     // CKSyncEngine — Phase B (iOS 17+)
     // -------------------------------------------------------------------------
 
