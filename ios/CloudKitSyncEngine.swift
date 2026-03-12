@@ -31,10 +31,19 @@ final class CloudKitSyncEngineAdapter: CloudKitSyncProvider {
   private let tokenStore: ChangeTokenStore
   private let ckContainer: CKContainer
 
-  /// Serial queue protecting all mutable state: pendingSaves, pendingDeletes, state.
+  /// When true, CONFLICT errors are forwarded to JS via `onSyncConflict` instead of
+  /// being auto-resolved with server-record-wins. Default: false.
+  var conflictResolutionEnabled = false
+
+  /// Serial queue protecting all mutable state: pendingSaves, pendingDeletes, state,
+  /// and pendingConflicts.
   private let pendingQueue = DispatchQueue(label: "expo.cloudkit.sync.pending")
   private var pendingSaves: [CKRecord] = []
   private var pendingDeletes: [CKRecord.ID] = []
+
+  /// Continuations keyed by requestId, awaiting JS resolution of a conflict.
+  /// Access only from `pendingQueue`.
+  private var pendingConflicts: [String: CheckedContinuation<[String: Any]?, Never>] = [:]
 
   // MARK: - Init
 
@@ -88,6 +97,13 @@ final class CloudKitSyncEngineAdapter: CloudKitSyncProvider {
       self.state = .notStarted
       self.pendingSaves.removeAll()
       self.pendingDeletes.removeAll()
+      // Drain any pending conflict continuations. Resuming with nil means the
+      // adapter will fall back to the server record — safe default on shutdown.
+      let drained = self.pendingConflicts
+      self.pendingConflicts.removeAll()
+      for (_, continuation) in drained {
+        continuation.resume(returning: nil)
+      }
     }
     eventHandler?(.stateChanged(.notStarted))
     eventHandler = nil
@@ -121,6 +137,18 @@ final class CloudKitSyncEngineAdapter: CloudKitSyncProvider {
       guard let self = self else { return }
       self.pendingDeletes.append(recordID)
       self.engine?.state.add(pendingRecordZoneChanges: [.deleteRecord(recordID)])
+    }
+  }
+
+  func resumeConflictResolution(requestId: String, resolvedRecord: [String: Any]?) {
+    pendingQueue.async { [weak self] in
+      guard let self = self else { return }
+      guard let continuation = self.pendingConflicts.removeValue(forKey: requestId) else {
+        // Stale or unknown requestId — log and return gracefully.
+        print("[ExpoCloudKit] resumeConflictResolution: no pending conflict for requestId '\(requestId)'")
+        return
+      }
+      continuation.resume(returning: resolvedRecord)
     }
   }
 }
@@ -175,18 +203,62 @@ extension CloudKitSyncEngineAdapter: CKSyncEngineDelegate {
         let recordID = failedSave.record.recordID
         let error = failedSave.error
 
-        // Conflict resolution: server-record-wins with client field overlay.
-        if let ckError = error as? CKError,
-           ckError.code == .serverRecordChanged,
-           let serverRecord = ckError.serverRecord {
-          let merged = resolveConflict(clientRecord: failedSave.record, serverRecord: serverRecord)
-          // Re-enqueue the merged record for the next send cycle.
+        guard let ckError = error as? CKError,
+              ckError.code == .serverRecordChanged,
+              let serverRecord = ckError.serverRecord else {
+          // Non-conflict error — surface as a failed save.
+          failed.append((recordID, error))
+          continue
+        }
+
+        let clientRecord = failedSave.record
+
+        if conflictResolutionEnabled {
+          // Custom conflict resolution: emit to JS and await the result.
+          let requestId = UUID().uuidString
+          let clientDict = Converters.toDictionary(clientRecord)
+          let serverDict = Converters.toDictionary(serverRecord)
+
+          let eventPayload: [String: Any] = [
+            "requestId": requestId,
+            "clientRecord": clientDict,
+            "serverRecord": serverDict
+          ]
+
+          // Register the continuation slot synchronously before emitting the event
+          // to JS. This prevents a race where JS calls resolveSyncConflict before
+          // the slot is available. `pendingQueue.sync` is safe here because
+          // `handleEvent` runs on CKSyncEngine's internal queue (not pendingQueue).
+          let resolvedDict: [String: Any]? = await withCheckedContinuation { continuation in
+            pendingQueue.sync { [weak self] in
+              self?.pendingConflicts[requestId] = continuation
+            }
+            // Emit the event to JS only after the slot is registered.
+            DispatchQueue.main.async { [weak self] in
+              self?.eventHandler?(.conflictPending(requestId: requestId, payload: eventPayload))
+            }
+          }
+
+          // Determine which record to re-enqueue based on JS resolution.
+          let recordToEnqueue: CKRecord
+          if let dict = resolvedDict, let resolved = try? Converters.toCKRecord(from: dict) {
+            recordToEnqueue = resolved
+          } else {
+            // JS passed null — accept server version unchanged.
+            recordToEnqueue = serverRecord
+          }
+          pendingQueue.async { [weak self] in
+            self?.pendingSaves.append(recordToEnqueue)
+          }
+          syncEngine.state.add(pendingRecordZoneChanges: [.saveRecord(recordToEnqueue.recordID)])
+
+        } else {
+          // Default: server-record-wins with client field overlay.
+          let merged = resolveConflict(clientRecord: clientRecord, serverRecord: serverRecord)
           pendingQueue.async { [weak self] in
             self?.pendingSaves.append(merged)
           }
           syncEngine.state.add(pendingRecordZoneChanges: [.saveRecord(merged.recordID)])
-        } else {
-          failed.append((recordID, error))
         }
       }
 

@@ -83,7 +83,8 @@ public class ExpoCloudKitModule: Module {
       "onAssetProgress",
       "onShareAccepted",
       "onBatchProgress",
-      "onOfflineQueueEvent"
+      "onOfflineQueueEvent",
+      "onSyncConflict"
     )
 
     // -------------------------------------------------------------------------
@@ -570,6 +571,11 @@ public class ExpoCloudKitModule: Module {
 
       self.syncProvider = provider
 
+      // G.6 — enable custom JS conflict resolution if the caller opted in.
+      if config["resolveConflicts"] as? Bool == true {
+        provider.conflictResolutionEnabled = true
+      }
+
       provider.start(
         zones: zoneIDs,
         database: scope,
@@ -580,6 +586,20 @@ public class ExpoCloudKitModule: Module {
       )
 
       promise.resolve(nil)
+    }
+
+    /// Resolves a pending conflict that was surfaced via the `onSyncConflict` event.
+    ///
+    /// - Parameters:
+    ///   - requestId: The UUID string from the `onSyncConflict` event payload.
+    ///   - resolvedRecord: The merged record dictionary to save, or nil to accept the
+    ///     server version unchanged.
+    ///
+    /// If `requestId` is not found (e.g. already resolved, timed out, or stale), this
+    /// call is a no-op — it does not reject, so callers do not need to guard against
+    /// double-resolution.
+    AsyncFunction("resolveSyncConflict") { [weak self] (requestId: String, resolvedRecord: [String: Any]?) in
+      self?.syncProvider?.resumeConflictResolution(requestId: requestId, resolvedRecord: resolvedRecord)
     }
 
     /// Returns the current sync state synchronously from in-memory provider state.
@@ -1382,6 +1402,16 @@ extension ExpoCloudKitModule {
         "type": "syncError",
         "error": Converters.toErrorDict(error)
       ]
+
+    case .conflictPending(_, let eventPayload):
+      // Route to the dedicated `onSyncConflict` channel so JS listeners can subscribe
+      // independently of the general `onSyncEngineEvent` stream.
+      // Expo requires sendEvent on the main thread; this event is already dispatched
+      // to main by the sync adapters, but we guard again for safety.
+      DispatchQueue.main.async { [weak self] in
+        self?.sendEvent("onSyncConflict", eventPayload)
+      }
+      return
     }
 
     // Expo requires sendEvent on the main thread.

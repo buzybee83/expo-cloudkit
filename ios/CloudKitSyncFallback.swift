@@ -51,6 +51,14 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
   /// Whether a sync cycle is already in-flight. Prevents overlapping cycles.
   private var isSyncInFlight = false
 
+  /// When true, CONFLICT errors are forwarded to JS via `onSyncConflict` instead of
+  /// being auto-resolved with server-record-wins. Default: false.
+  var conflictResolutionEnabled = false
+
+  /// Continuations keyed by requestId, awaiting JS resolution of a conflict.
+  /// Access only from `pendingQueue`.
+  private var pendingConflicts: [String: CheckedContinuation<[String: Any]?, Never>] = [:]
+
   // MARK: - Init
 
   init(ckContainer: CKContainer, tokenStore: ChangeTokenStore) {
@@ -104,6 +112,13 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
       self.pendingSaves.removeAll()
       self.pendingDeletes.removeAll()
       self.trackedZones = []
+      // Drain any pending conflict continuations with nil (server-record-wins)
+      // so no Task is left suspended after stop().
+      let drained = self.pendingConflicts
+      self.pendingConflicts.removeAll()
+      for (_, continuation) in drained {
+        continuation.resume(returning: nil)
+      }
     }
     eventHandler?(.stateChanged(.notStarted))
     eventHandler = nil
@@ -122,6 +137,17 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
   func enqueueDelete(_ recordID: CKRecord.ID) {
     pendingQueue.async { [weak self] in
       self?.pendingDeletes.append(recordID)
+    }
+  }
+
+  func resumeConflictResolution(requestId: String, resolvedRecord: [String: Any]?) {
+    pendingQueue.async { [weak self] in
+      guard let self = self else { return }
+      guard let continuation = self.pendingConflicts.removeValue(forKey: requestId) else {
+        print("[ExpoCloudKit] resumeConflictResolution: no pending conflict for requestId '\(requestId)'")
+        return
+      }
+      continuation.resume(returning: resolvedRecord)
     }
   }
 
@@ -199,13 +225,59 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
           return
         }
 
-        // Conflict: apply server-record-wins merge if we can find the client record.
-        if let clientRecord = saves.first(where: { $0.recordID == recordID }) {
-          conflictedRecords.append(self.resolveConflict(clientRecord: clientRecord, serverRecord: serverRecord))
-        } else {
+        guard let clientRecord = saves.first(where: { $0.recordID == recordID }) else {
           // Client record not found in saves list (shouldn't happen, but be safe).
-          // Surface the server record as a conflict failure.
           failedSaves.append((recordID, error))
+          return
+        }
+
+        if self.conflictResolutionEnabled {
+          // Custom conflict resolution: emit to JS and await the result asynchronously.
+          // The current perRecordSaveBlock is synchronous, so we spawn a Task to bridge
+          // into async. The resolved record will be enqueued for the next sync cycle.
+          let requestId = UUID().uuidString
+          let clientDict = Converters.toDictionary(clientRecord)
+          let serverDict = Converters.toDictionary(serverRecord)
+
+          let eventPayload: [String: Any] = [
+            "requestId": requestId,
+            "clientRecord": clientDict,
+            "serverRecord": serverDict
+          ]
+
+          Task { [weak self] in
+            guard let self = self else { return }
+
+            // Register the continuation slot synchronously before emitting the
+            // event to JS, preventing the race where JS calls resolveSyncConflict
+            // before the slot is available.
+            // Note: `perRecordSaveBlock` runs on a CloudKit internal queue (not
+            // pendingQueue), so `pendingQueue.sync` is safe here.
+            let resolvedDict: [String: Any]? = await withCheckedContinuation { continuation in
+              self.pendingQueue.sync {
+                self.pendingConflicts[requestId] = continuation
+              }
+              // Emit the event only after the slot is registered.
+              DispatchQueue.main.async { [weak self] in
+                self?.eventHandler?(.conflictPending(requestId: requestId, payload: eventPayload))
+              }
+            }
+
+            // Determine the record to enqueue based on JS response.
+            let recordToEnqueue: CKRecord
+            if let dict = resolvedDict, let resolved = try? Converters.toCKRecord(from: dict) {
+              recordToEnqueue = resolved
+            } else {
+              recordToEnqueue = serverRecord
+            }
+            self.enqueueSave(recordToEnqueue)
+            // Kick off a new sync cycle to send the resolved record.
+            self.runSyncCycle()
+          }
+          // Do NOT add to conflictedRecords — this conflict is handled asynchronously above.
+        } else {
+          // Default: server-record-wins with client field overlay.
+          conflictedRecords.append(self.resolveConflict(clientRecord: clientRecord, serverRecord: serverRecord))
         }
       }
     }

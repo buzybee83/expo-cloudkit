@@ -9,6 +9,9 @@ enum SyncProviderEvent {
   case recordsFetched(changed: [CKRecord], deleted: [CKRecord.ID], zoneName: String)
   case recordsSent(saved: [CKRecord], failed: [(CKRecord.ID, Error)])
   case syncError(Error)
+  /// Emitted when `conflictResolutionEnabled` is true and a CONFLICT error occurs.
+  /// The `payload` dictionary is forwarded verbatim as the `onSyncConflict` event body.
+  case conflictPending(requestId: String, payload: [String: Any])
 }
 
 // MARK: - Sync Provider State
@@ -65,6 +68,20 @@ protocol CloudKitSyncProvider: AnyObject {
 
   /// Enqueue a record deletion for the next sync cycle.
   func enqueueDelete(_ recordID: CKRecord.ID)
+
+  /// When true, conflict errors are surfaced to JS via `onSyncConflict` instead of
+  /// being resolved automatically with server-record-wins. JS must always call
+  /// `resolveSyncConflict(requestId:resolvedRecord:)` to unblock the waiting continuation.
+  var conflictResolutionEnabled: Bool { get set }
+
+  /// Resumes a pending conflict resolution continuation. Called by the module when JS
+  /// invokes `resolveSyncConflict(requestId, resolvedRecord)`.
+  ///
+  /// - Parameters:
+  ///   - requestId: The UUID string that was included in the `onSyncConflict` event.
+  ///   - resolvedRecord: A JS-bridge dictionary for the resolved record, or nil to accept
+  ///     the server version unchanged.
+  func resumeConflictResolution(requestId: String, resolvedRecord: [String: Any]?)
 }
 
 // MARK: - Change Token Store
