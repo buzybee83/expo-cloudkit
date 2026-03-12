@@ -154,6 +154,20 @@ export function getAccountStatus(): Promise<AccountStatus> {
 }
 
 /**
+ * Returns the current user's CloudKit record name (CKRecord.ID.recordName).
+ *
+ * This is a stable, opaque identifier for the signed-in iCloud account.
+ * Use it to associate CloudKit data with the current user without storing
+ * any personally identifiable information.
+ *
+ * @returns A string record name, e.g. "_abc123def456..."
+ * @throws {CloudKitError} code NOT_AUTHENTICATED if no iCloud account is signed in.
+ */
+export function fetchUserRecordID(): Promise<string> {
+  return callAsync(() => NativeModule!.fetchUserRecordID());
+}
+
+/**
  * Registers a callback that fires whenever the iCloud account status changes.
  * Returns a Subscription handle; call `.remove()` to unsubscribe.
  */
@@ -243,14 +257,16 @@ export function saveRecords(
  * @param recordId    - The CKRecord.ID.recordName string.
  * @param zoneName    - Zone the record lives in. Omit for the default zone.
  * @param database    - Which database to query. Default: 'private'.
+ * @param desiredKeys - Field names to fetch. Omit to fetch all fields.
  */
 export function fetchRecord(
   recordType: string,
   recordId: string,
   zoneName?: string,
-  database: DatabaseScope = 'private'
+  database: DatabaseScope = 'private',
+  desiredKeys?: string[]
 ): Promise<CloudKitRecord> {
-  return callAsync(() => NativeModule!.fetchRecord(recordType, recordId, zoneName ?? null, database));
+  return callAsync(() => NativeModule!.fetchRecord(recordType, recordId, zoneName ?? null, database, desiredKeys ?? null));
 }
 
 /**
@@ -264,6 +280,7 @@ export function fetchRecord(
  * @param database        - Which database to query. Default: 'private'.
  * @param resultsLimit    - Max records to return (1–200). Default: 100.
  * @param cursor          - Pagination cursor from a previous QueryResult.
+ * @param desiredKeys     - Field names to fetch. Omit to fetch all fields.
  */
 export function queryRecords(
   recordType: string,
@@ -272,7 +289,8 @@ export function queryRecords(
   zoneName?: string,
   database: DatabaseScope = 'private',
   resultsLimit?: number,
-  cursor?: string
+  cursor?: string,
+  desiredKeys?: string[]
 ): Promise<QueryResult> {
   return callAsync(() =>
     NativeModule!.queryRecords(
@@ -282,7 +300,8 @@ export function queryRecords(
       zoneName ?? null,
       database,
       resultsLimit ?? 100,
-      cursor ?? null
+      cursor ?? null,
+      desiredKeys ?? null
     )
   );
 }
@@ -307,14 +326,16 @@ export function deleteRecords(
  * If `moreComing` is true in the result, call again with the returned `syncToken`
  * until `moreComing` is false.
  *
- * @param zoneNames - Zones to fetch changes for.
- * @param database  - Which database to query. Default: 'private'.
+ * @param zoneNames   - Zones to fetch changes for.
+ * @param database    - Which database to query. Default: 'private'.
+ * @param desiredKeys - Field names to include on changed records. Omit to fetch all fields.
  */
 export function fetchRecordZoneChanges(
   zoneNames: string[],
-  database: DatabaseScope = 'private'
+  database: DatabaseScope = 'private',
+  desiredKeys?: string[]
 ): Promise<ZoneChanges> {
-  return callAsync(() => NativeModule!.fetchRecordZoneChanges(zoneNames, database));
+  return callAsync(() => NativeModule!.fetchRecordZoneChanges(zoneNames, database, desiredKeys ?? null));
 }
 
 // ---------------------------------------------------------------------------

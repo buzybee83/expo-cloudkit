@@ -104,7 +104,7 @@ export type {
 export { CloudKitError, CloudKitErrorCode, CloudKitNotSupportedError } from './errors';
 
 // Phase A — Container & Account
-export { configure, getAccountStatus, addAccountStatusListener, isCloudKitAvailable } from './ExpoCloudKit';
+export { configure, getAccountStatus, fetchUserRecordID, addAccountStatusListener, isCloudKitAvailable } from './ExpoCloudKit';
 
 // Web — CloudKit Web Services (exported from the platform barrel so Metro resolves
 // ExpoCloudKit.web.ts on web and ExpoCloudKit.native.ts on iOS/native)

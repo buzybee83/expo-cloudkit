@@ -334,6 +334,53 @@ export async function getAccountStatus(): Promise<AccountStatus> {
 }
 
 /**
+ * Returns the current user's CloudKit record name via CloudKit JS.
+ *
+ * Calls `container.fetchCurrentUserIdentity()` if available, falling back to
+ * `container.fetchUserRecordName()`. Throws `CloudKitNotSupportedError` if
+ * neither method is available in the loaded CloudKit JS version.
+ *
+ * @returns A string record name, e.g. "_abc123def456..."
+ * @throws {CloudKitNotSupportedError} If the CloudKit JS version does not support user identity fetching.
+ * @throws {CloudKitError} If the user is not authenticated or the request fails.
+ */
+export async function fetchUserRecordID(): Promise<string> {
+  const container = requireContainer();
+
+  // Prefer fetchCurrentUserIdentity — available in CloudKit JS 1.x
+  if (typeof container.fetchCurrentUserIdentity === 'function') {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const identity: any = await container.fetchCurrentUserIdentity();
+      const recordName: string | undefined = identity?.userRecordName ?? identity?.recordName;
+      if (recordName) {
+        return recordName;
+      }
+      throw new CloudKitError(
+        CloudKitErrorCode.UNKNOWN,
+        'fetchCurrentUserIdentity returned no userRecordName.'
+      );
+    } catch (err) {
+      if (err instanceof CloudKitError) throw err;
+      throw mapCKJSError(err, 'general');
+    }
+  }
+
+  // Fallback: some CloudKit JS versions expose fetchUserRecordName directly
+  if (typeof container.fetchUserRecordName === 'function') {
+    try {
+      const recordName: string = await container.fetchUserRecordName();
+      return recordName;
+    } catch (err) {
+      throw mapCKJSError(err, 'general');
+    }
+  }
+
+  // Neither method is available in this CloudKit JS version
+  throw new CloudKitNotSupportedError();
+}
+
+/**
  * Subscribes to CloudKit auth state changes on web.
  *
  * Fires when `setWebAuthState()` is called (i.e. after sign-in/sign-out).
@@ -474,16 +521,18 @@ export async function saveRecords(
 /**
  * Fetches a single record by type and ID from CloudKit.
  *
- * @param recordType - CKRecord type string.
- * @param recordId   - CKRecord.ID.recordName string.
- * @param zoneName   - Zone name. Omit for default zone.
- * @param database   - Target database. Default: 'private'.
+ * @param recordType  - CKRecord type string.
+ * @param recordId    - CKRecord.ID.recordName string.
+ * @param zoneName    - Zone name. Omit for default zone.
+ * @param database    - Target database. Default: 'private'.
+ * @param desiredKeys - Field names to fetch. Omit to fetch all fields.
  */
 export async function fetchRecord(
   _recordType: string,
   recordId: string,
   zoneName?: string,
-  database: DatabaseScope = 'private'
+  database: DatabaseScope = 'private',
+  desiredKeys?: string[]
 ): Promise<CloudKitRecord> {
   const container = requireContainer();
   const db = resolveDatabase(container, database);
@@ -494,8 +543,13 @@ export async function fetchRecord(
     zoneID: { zoneName: resolvedZone, ownerRecordName: '__defaultOwner__' },
   };
 
+  const fetchOptions: Record<string, unknown> = {};
+  if (desiredKeys && desiredKeys.length > 0) {
+    fetchOptions['desiredKeys'] = desiredKeys;
+  }
+
   try {
-    const response = await db.fetchRecords([recordID]);
+    const response = await db.fetchRecords([recordID], fetchOptions);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const records: any[] = response?.records ?? response ?? [];
     const raw = records[0];
@@ -523,6 +577,7 @@ export async function fetchRecord(
  * @param database        - Target database. Default: 'private'.
  * @param resultsLimit    - Max records to return. Default: 100.
  * @param cursor          - Pagination cursor from a previous QueryResult.
+ * @param desiredKeys     - Field names to fetch. Omit to fetch all fields.
  */
 export async function queryRecords(
   recordType: string,
@@ -531,7 +586,8 @@ export async function queryRecords(
   zoneName?: string,
   database: DatabaseScope = 'private',
   resultsLimit?: number,
-  cursor?: string
+  cursor?: string,
+  desiredKeys?: string[]
 ): Promise<QueryResult> {
   const container = requireContainer();
   const db = resolveDatabase(container, database);
@@ -568,6 +624,10 @@ export async function queryRecords(
 
   if (cursor) {
     options['continuationMarker'] = cursor;
+  }
+
+  if (desiredKeys && desiredKeys.length > 0) {
+    options['desiredKeys'] = desiredKeys;
   }
 
   try {
@@ -619,12 +679,14 @@ export async function deleteRecords(
  * be called. Otherwise, an empty result is returned (no crash) and callers
  * should fall back to a full query.
  *
- * @param zoneNames - Zone names to fetch changes for.
- * @param database  - Target database. Default: 'private'.
+ * @param zoneNames   - Zone names to fetch changes for.
+ * @param database    - Target database. Default: 'private'.
+ * @param desiredKeys - Field names to include on changed records. Omit to fetch all fields.
  */
 export async function fetchRecordZoneChanges(
   zoneNames: string[],
-  database: DatabaseScope = 'private'
+  database: DatabaseScope = 'private',
+  desiredKeys?: string[]
 ): Promise<ZoneChanges> {
   const container = requireContainer();
   const db = resolveDatabase(container, database);
@@ -645,7 +707,14 @@ export async function fetchRecordZoneChanges(
       zoneID: { zoneName, ownerRecordName: '__defaultOwner__' },
     }));
 
-    const response = await db.fetchRecordZoneChanges(zoneIDs, {});
+    const zoneChangesOptions: Record<string, unknown> = {};
+    if (desiredKeys && desiredKeys.length > 0) {
+      // desiredKeys is passed per-zone in the CloudKit JS API; we apply it globally
+      // as a best-effort — if the underlying API ignores it, fields are simply not filtered.
+      zoneChangesOptions['desiredKeys'] = desiredKeys;
+    }
+
+    const response = await db.fetchRecordZoneChanges(zoneIDs, zoneChangesOptions);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const changedRaw: any[] = response?.records ?? [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
