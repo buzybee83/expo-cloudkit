@@ -87,6 +87,10 @@ import {
   addBatchProgressListener,
   // Phase C — CKRecord.Reference deep linking
   fetchRecordWithReferences,
+  // Phase D — CloudKitProvider + hooks
+  CloudKitProvider,
+  useAccountStatus,
+  useCloudKitSubscription,
 } from 'expo-cloudkit';
 
 // ---------------------------------------------------------------------------
@@ -112,7 +116,8 @@ interface LogEntry {
 // Component
 // ---------------------------------------------------------------------------
 
-export default function App(): React.JSX.Element {
+function App(): React.JSX.Element {
+  const providerAccountStatus = useAccountStatus();
   const [accountStatus, setAccountStatus] = useState<AccountStatus | null>(null);
   const [zone, setZone] = useState<Zone | null>(null);
   const [savedRecord, setSavedRecord] = useState<SavedRecord | null>(null);
@@ -556,6 +561,9 @@ export default function App(): React.JSX.Element {
 
       {/* Account status badge */}
       <StatusBadge status={accountStatus} />
+      <Text style={styles.recordRow}>
+        CloudKitProvider status: {providerAccountStatus}
+      </Text>
 
       <ScrollView showsVerticalScrollIndicator={false}>
         {/* ------------------------------------------------------------------ */}
@@ -778,6 +786,12 @@ export default function App(): React.JSX.Element {
           />
         </View>
 
+        {/* ------------------------------------------------------------------ */}
+        {/* Phase D — CloudKitProvider + Optimistic Updates                    */}
+        {/* ------------------------------------------------------------------ */}
+        <SectionHeader title="Phase D — CloudKitProvider + Optimistic Updates" />
+        <PhaseDSection savedRecordName={savedRecord?.recordName} zoneName={ZONE_NAME} log={log} />
+
         {isLoading && <ActivityIndicator style={styles.spinner} />}
 
         {/* Log output */}
@@ -953,6 +967,163 @@ function HooksDemoSection({ savedRecordName, zoneName, log }: HooksDemoSectionPr
 }
 
 // ---------------------------------------------------------------------------
+// Phase D — CloudKitProvider + Optimistic Updates demo section
+// ---------------------------------------------------------------------------
+
+interface PhaseDSectionProps {
+  savedRecordName: string | undefined;
+  zoneName: string;
+  log: (message: string, isError?: boolean) => void;
+}
+
+function PhaseDSection({ savedRecordName, zoneName, log }: PhaseDSectionProps): React.JSX.Element {
+  // useCloudKitRecord with optimistic update
+  const {
+    data,
+    loading,
+    error,
+    update,
+    optimisticStatus,
+    optimisticError,
+  } = useCloudKitRecord(savedRecordName, {
+    recordType: RECORD_TYPE,
+    zoneName,
+    database: 'private',
+    enabled: savedRecordName !== undefined,
+    subscribe: false,
+  });
+
+  const handleOptimisticUpdate = useCallback(async () => {
+    try {
+      await update({ title: { type: 'string', value: `Updated ${Date.now()}` } });
+      log('Optimistic update applied successfully.');
+    } catch (err) {
+      log(`update() failed: ${errorMessage(err)}`, true);
+    }
+  }, [update, log]);
+
+  // useCloudKitQuery with optimisticAdd / optimisticRemove
+  const {
+    data: queryData,
+    optimisticAdd,
+    optimisticRemove,
+    pendingCount,
+  } = useCloudKitQuery(RECORD_TYPE, {
+    zoneName,
+    database: 'private',
+    resultsLimit: 5,
+    enabled: savedRecordName !== undefined,
+  });
+
+  const handleOptimisticAdd = useCallback(async () => {
+    try {
+      await optimisticAdd({
+        recordType: RECORD_TYPE,
+        zoneName,
+        fields: { title: { type: 'string', value: `Optimistic ${Date.now()}` } },
+      });
+      log('optimisticAdd() complete.');
+    } catch (err) {
+      log(`optimisticAdd() failed: ${errorMessage(err)}`, true);
+    }
+  }, [optimisticAdd, zoneName, log]);
+
+  const handleOptimisticRemove = useCallback(async () => {
+    const first = queryData?.[0]?.recordName;
+    if (!first) {
+      log('No records available to optimistically remove.', true);
+      return;
+    }
+    try {
+      await optimisticRemove(first);
+      log(`optimisticRemove(${first}) complete.`);
+    } catch (err) {
+      log(`optimisticRemove() failed: ${errorMessage(err)}`, true);
+    }
+  }, [optimisticRemove, queryData, log]);
+
+  // useCloudKitSubscription
+  const { subscriptionId, error: subError } = useCloudKitSubscription(RECORD_TYPE, {
+    zoneName,
+    database: 'private',
+    enabled: savedRecordName !== undefined,
+  });
+
+  return (
+    <View>
+      {/* useCloudKitRecord + optimistic update */}
+      <View style={styles.results}>
+        <Text style={styles.sectionTitle}>useCloudKitRecord (optimistic)</Text>
+        {savedRecordName === undefined ? (
+          <Text style={styles.moreText}>Save a record first to enable.</Text>
+        ) : loading ? (
+          <ActivityIndicator />
+        ) : error ? (
+          <Text style={[styles.recordRow, { color: '#FF6B6B' }]}>
+            Error: {error.message}
+          </Text>
+        ) : data ? (
+          <Text style={styles.recordRow} numberOfLines={1}>
+            {(data.fields['title']?.value as string) ?? data.recordName}
+          </Text>
+        ) : (
+          <Text style={styles.moreText}>No data yet.</Text>
+        )}
+        <Text style={styles.recordRow}>optimisticStatus: {optimisticStatus}</Text>
+        {optimisticError && (
+          <Text style={[styles.recordRow, { color: '#FF6B6B' }]}>
+            optimisticError: {optimisticError.message}
+          </Text>
+        )}
+        <Button
+          title="Optimistic Update Title"
+          onPress={() => { void handleOptimisticUpdate(); }}
+          disabled={savedRecordName === undefined}
+        />
+      </View>
+
+      {/* useCloudKitQuery with optimisticAdd / optimisticRemove */}
+      <View style={styles.results}>
+        <Text style={styles.sectionTitle}>useCloudKitQuery (optimistic)</Text>
+        <Text style={styles.recordRow}>
+          records loaded: {queryData?.length ?? 0} — pendingCount: {pendingCount}
+        </Text>
+        <View style={styles.rowButtons}>
+          <Button
+            title="Optimistic Add"
+            onPress={() => { void handleOptimisticAdd(); }}
+            disabled={savedRecordName === undefined}
+          />
+          <Button
+            title="Optimistic Remove first"
+            onPress={() => { void handleOptimisticRemove(); }}
+            disabled={!queryData || queryData.length === 0}
+          />
+        </View>
+      </View>
+
+      {/* useCloudKitSubscription */}
+      <View style={styles.results}>
+        <Text style={styles.sectionTitle}>useCloudKitSubscription</Text>
+        {savedRecordName === undefined ? (
+          <Text style={styles.moreText}>Save a record first to enable.</Text>
+        ) : subError ? (
+          <Text style={[styles.recordRow, { color: '#FF6B6B' }]}>
+            Error: {subError.message}
+          </Text>
+        ) : subscriptionId ? (
+          <Text style={styles.recordRow} numberOfLines={1}>
+            subscriptionId: {subscriptionId}
+          </Text>
+        ) : (
+          <Text style={styles.moreText}>Subscribing...</Text>
+        )}
+      </View>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
 
@@ -1096,3 +1267,15 @@ const styles = StyleSheet.create({
     color: '#FF6B6B',
   },
 });
+
+// ---------------------------------------------------------------------------
+// Root — wraps App with CloudKitProvider
+// ---------------------------------------------------------------------------
+
+export default function AppRoot(): React.JSX.Element {
+  return (
+    <CloudKitProvider containerId={CONTAINER_ID} observeAccountStatus>
+      <App />
+    </CloudKitProvider>
+  );
+}
