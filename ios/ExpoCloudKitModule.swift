@@ -87,6 +87,41 @@ public class ExpoCloudKitModule: Module {
     )
 
     // -------------------------------------------------------------------------
+    // G.4 — Dev Menu Integration
+    //
+    // `DevMenuExtensionProtocol` is not part of the expo-modules-core public API
+    // in the version used by this project (checked: no DevMenuExtension* symbols
+    // found under node_modules/expo-modules-core/ios/). Implementing a conformance
+    // to a non-existent protocol would be a compilation error, so we use a simpler
+    // approach:
+    //
+    //   1. Expose a `Constants` entry `debugMenuAvailable: false` so TypeScript
+    //      callers can feature-detect and render their own debug panel instead.
+    //   2. In DEBUG builds, print a startup banner that lists every `__debug*`
+    //      method available — this surfaces them in the Metro / Xcode console
+    //      without any third-party dev-menu dependency.
+    // -------------------------------------------------------------------------
+
+    Constants([
+      // Signals to JS that the native dev-menu integration is unavailable;
+      // callers should fall back to their own debug UI.
+      "debugMenuAvailable": false
+    ])
+
+    #if DEBUG
+    OnCreate {
+      print("""
+        [expo-cloudkit] DEBUG build detected. Available __debug* methods:
+          - __debugDumpContainerInfo()  : container ID, account status, environments
+          - __debugListZones()          : all zones across private + shared databases
+          - __debugFetchRawRecord()     : single record with full system metadata
+          - __debugClearZone()          : wipe + recreate a zone (DESTRUCTIVE)
+        Call configure(containerId) first — all methods reject with notConfigured until then.
+        """)
+    }
+    #endif
+
+    // -------------------------------------------------------------------------
     // Container & Account
     // -------------------------------------------------------------------------
 
@@ -237,7 +272,7 @@ public class ExpoCloudKitModule: Module {
     ///
     /// Pass options["queueOnFailure"] = true to enqueue offline on retryable errors.
     /// Fires onBatchProgress after each record is confirmed saved.
-    AsyncFunction("saveRecords") { [weak self] (recordDicts: [[String: Any]], database: String, options: [String: Any]?, promise: Promise) in
+    AsyncFunction("saveRecords") { [weak self] (recordDicts: [[String: Any]], database: String, options: [String: Any]?, operationConfig: [String: Any]?, promise: Promise) in
       guard let self = self, let recordManager = self.recordManager else {
         promise.reject(CloudKitModuleError.notConfigured)
         return
@@ -249,6 +284,7 @@ public class ExpoCloudKitModule: Module {
         recordManager.saveRecords(
           records,
           in: scope,
+          operationConfig: operationConfig,
           progressHandler: { [weak self] completed, total, recordName in
             self?.sendEvent("onBatchProgress", [
               "completed": completed,
@@ -294,7 +330,7 @@ public class ExpoCloudKitModule: Module {
     ///
     /// Pass `desiredKeys` to limit which fields are fetched from the server.
     /// When omitted (or nil), all fields are fetched.
-    AsyncFunction("fetchRecord") { [weak self] (recordType: String, recordId: String, zoneName: String?, database: String, desiredKeys: [String]?, promise: Promise) in
+    AsyncFunction("fetchRecord") { [weak self] (recordType: String, recordId: String, zoneName: String?, database: String, desiredKeys: [String]?, operationConfig: [String: Any]?, promise: Promise) in
       guard let self = self, let recordManager = self.recordManager else {
         promise.reject(CloudKitModuleError.notConfigured)
         return
@@ -305,7 +341,8 @@ public class ExpoCloudKitModule: Module {
         recordId: recordId,
         zoneName: zoneName,
         database: scope,
-        desiredKeys: desiredKeys
+        desiredKeys: desiredKeys,
+        operationConfig: operationConfig
       ) { result in
         switch result {
         case .success(let record):
@@ -329,6 +366,7 @@ public class ExpoCloudKitModule: Module {
       resultsLimit: Int,
       cursor: String?,
       desiredKeys: [String]?,
+      operationConfig: [String: Any]?,
       promise: Promise
     ) in
       guard let self = self, let recordManager = self.recordManager else {
@@ -353,7 +391,8 @@ public class ExpoCloudKitModule: Module {
         database: scope,
         resultsLimit: resultsLimit,
         cursor: resolvedCursor,
-        desiredKeys: desiredKeys
+        desiredKeys: desiredKeys,
+        operationConfig: operationConfig
       ) { [weak self] result in
         switch result {
         case .success(let (records, nextCursor)):
@@ -376,7 +415,7 @@ public class ExpoCloudKitModule: Module {
     }
 
     /// Deletes one or more records by their identifiers.
-    AsyncFunction("deleteRecords") { [weak self] (recordIdDicts: [[String: Any]], database: String, promise: Promise) in
+    AsyncFunction("deleteRecords") { [weak self] (recordIdDicts: [[String: Any]], database: String, operationConfig: [String: Any]?, promise: Promise) in
       guard let self = self, let recordManager = self.recordManager else {
         promise.reject(CloudKitModuleError.notConfigured)
         return
@@ -389,7 +428,7 @@ public class ExpoCloudKitModule: Module {
           ?? CKRecordZone.ID.default
         return CKRecord.ID(recordName: recordName, zoneID: zoneID)
       }
-      recordManager.deleteRecords(recordIDs, in: scope) { result in
+      recordManager.deleteRecords(recordIDs, in: scope, operationConfig: operationConfig) { result in
         switch result {
         case .success:
           promise.resolve(nil)
@@ -403,13 +442,13 @@ public class ExpoCloudKitModule: Module {
     ///
     /// Pass `desiredKeys` to limit which fields are included in changed records.
     /// When omitted (or nil), all fields are fetched.
-    AsyncFunction("fetchRecordZoneChanges") { [weak self] (zoneNames: [String], database: String, desiredKeys: [String]?, promise: Promise) in
+    AsyncFunction("fetchRecordZoneChanges") { [weak self] (zoneNames: [String], database: String, desiredKeys: [String]?, operationConfig: [String: Any]?, promise: Promise) in
       guard let self = self, let recordManager = self.recordManager else {
         promise.reject(CloudKitModuleError.notConfigured)
         return
       }
       let scope = Converters.toDatabaseScope(database)
-      recordManager.fetchRecordZoneChanges(zoneNames: zoneNames, database: scope, desiredKeys: desiredKeys) { result in
+      recordManager.fetchRecordZoneChanges(zoneNames: zoneNames, database: scope, desiredKeys: desiredKeys, operationConfig: operationConfig) { result in
         switch result {
         case .success(let changes):
           promise.resolve(changes)

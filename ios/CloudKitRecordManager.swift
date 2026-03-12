@@ -19,6 +19,31 @@ final class CloudKitRecordManager {
   /// Maximum records per CKModifyRecordsOperation (CloudKit hard limit).
   static let batchSize = 400
 
+  // MARK: - Operation Configuration
+
+  /// Applies optional JS-provided operation configuration to any CKOperation.
+  ///
+  /// Accepted keys in `config`:
+  ///   - `qos`     (String): "userInitiated" | "utility" | "background" | "default"
+  ///   - `timeout` (Double): request timeout in seconds
+  ///
+  /// When `config` is nil this is a no-op, so callers never need to guard before
+  /// calling it.
+  static func applyConfig(_ config: [String: Any]?, to operation: CKOperation) {
+    guard let config = config else { return }
+    if let qosString = config["qos"] as? String {
+      switch qosString {
+      case "userInitiated": operation.configuration.qualityOfService = .userInitiated
+      case "utility":       operation.configuration.qualityOfService = .utility
+      case "background":    operation.configuration.qualityOfService = .background
+      default:              operation.configuration.qualityOfService = .default
+      }
+    }
+    if let timeout = config["timeout"] as? Double {
+      operation.configuration.timeoutIntervalForRequest = timeout
+    }
+  }
+
   // MARK: - Properties
 
   private let ckContainer: CKContainer
@@ -55,6 +80,7 @@ final class CloudKitRecordManager {
   func saveRecords(
     _ records: [CKRecord],
     in scope: CKDatabase.Scope,
+    operationConfig: [String: Any]? = nil,
     progressHandler: ((_ completed: Int, _ total: Int, _ recordName: String) -> Void)? = nil,
     completion: @escaping (Result<[CKRecord], Error>) -> Void
   ) {
@@ -97,6 +123,10 @@ final class CloudKitRecordManager {
       // Use .changedKeys as the default; individual record conflict handling
       // is done via the per-record save block below.
       operation.savePolicy = .changedKeys
+      // Apply caller-supplied QoS / timeout overrides (G.3). When operationConfig
+      // is nil this is a no-op; when provided it may override the .userInitiated
+      // default set above.
+      CloudKitRecordManager.applyConfig(operationConfig, to: operation)
 
       operation.perRecordSaveBlock = { _, result in
         switch result {
@@ -143,6 +173,7 @@ final class CloudKitRecordManager {
     zoneName: String?,
     database scope: CKDatabase.Scope,
     desiredKeys: [String]? = nil,
+    operationConfig: [String: Any]? = nil,
     completion: @escaping (Result<CKRecord, Error>) -> Void
   ) {
     let zoneID: CKRecordZone.ID
@@ -160,6 +191,7 @@ final class CloudKitRecordManager {
     if let desiredKeys = desiredKeys {
       operation.desiredKeys = desiredKeys
     }
+    CloudKitRecordManager.applyConfig(operationConfig, to: operation)
 
     operation.perRecordResultBlock = { _, result in
       switch result {
@@ -188,6 +220,7 @@ final class CloudKitRecordManager {
     resultsLimit: Int,
     cursor: CKQueryOperation.Cursor?,
     desiredKeys: [CKRecord.FieldKey]? = nil,
+    operationConfig: [String: Any]? = nil,
     completion: @escaping (Result<([CKRecord], CKQueryOperation.Cursor?), Error>) -> Void
   ) {
     let db = database(for: scope)
@@ -212,6 +245,7 @@ final class CloudKitRecordManager {
     if let desiredKeys = desiredKeys {
       operation.desiredKeys = desiredKeys
     }
+    CloudKitRecordManager.applyConfig(operationConfig, to: operation)
 
     operation.recordMatchedBlock = { _, result in
       switch result {
@@ -244,6 +278,7 @@ final class CloudKitRecordManager {
   func deleteRecords(
     _ recordIDs: [CKRecord.ID],
     in scope: CKDatabase.Scope,
+    operationConfig: [String: Any]? = nil,
     completion: @escaping (Result<Void, Error>) -> Void
   ) {
     let db = database(for: scope)
@@ -270,6 +305,7 @@ final class CloudKitRecordManager {
         recordIDsToDelete: chunks[index]
       )
       operation.qualityOfService = .userInitiated
+      CloudKitRecordManager.applyConfig(operationConfig, to: operation)
 
       operation.modifyRecordsResultBlock = { result in
         switch result {
@@ -297,6 +333,7 @@ final class CloudKitRecordManager {
     zoneNames: [String],
     database scope: CKDatabase.Scope,
     desiredKeys: [CKRecord.FieldKey]? = nil,
+    operationConfig: [String: Any]? = nil,
     completion: @escaping (Result<[String: Any], Error>) -> Void
   ) {
     let db = database(for: scope)
@@ -324,6 +361,7 @@ final class CloudKitRecordManager {
     )
     operation.qualityOfService = .userInitiated
     operation.fetchAllChanges = false // respect moreComing
+    CloudKitRecordManager.applyConfig(operationConfig, to: operation)
 
     operation.recordWasChangedBlock = { _, result in
       switch result {
