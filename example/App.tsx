@@ -49,6 +49,7 @@ import {
   CloudKitError,
   CloudKitRecord,
   OfflineQueueStatus,
+  OperationConfig,
   SavedRecord,
   Share,
   ShareParticipant,
@@ -59,6 +60,7 @@ import {
   addAccountStatusListener,
   configure,
   createZone,
+  fetchRecord,
   getAccountStatus,
   queryRecords,
   saveRecords,
@@ -91,6 +93,9 @@ import {
   CloudKitProvider,
   useAccountStatus,
   useCloudKitSubscription,
+  // Phase G — Performance & DX
+  fetchUserRecordID,
+  resolveSyncConflict,
 } from 'expo-cloudkit';
 
 // ---------------------------------------------------------------------------
@@ -792,6 +797,16 @@ function App(): React.JSX.Element {
         <SectionHeader title="Phase D — CloudKitProvider + Optimistic Updates" />
         <PhaseDSection savedRecordName={savedRecord?.recordName} zoneName={ZONE_NAME} log={log} />
 
+        {/* ------------------------------------------------------------------ */}
+        {/* Phase G — Performance & DX                                         */}
+        {/* ------------------------------------------------------------------ */}
+        <SectionHeader title="Phase G — Performance & DX" />
+        <PhaseGSection
+          savedRecordName={savedRecord?.recordName}
+          zoneName={ZONE_NAME}
+          log={log}
+        />
+
         {isLoading && <ActivityIndicator style={styles.spinner} />}
 
         {/* Log output */}
@@ -1118,6 +1133,104 @@ function PhaseDSection({ savedRecordName, zoneName, log }: PhaseDSectionProps): 
         ) : (
           <Text style={styles.moreText}>Subscribing...</Text>
         )}
+      </View>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Phase G — Performance & DX demo section
+// ---------------------------------------------------------------------------
+
+interface PhaseGSectionProps {
+  savedRecordName: string | undefined;
+  zoneName: string;
+  log: (message: string, isError?: boolean) => void;
+}
+
+function PhaseGSection({ savedRecordName, zoneName, log }: PhaseGSectionProps): React.JSX.Element {
+  // G.a — fetchUserRecordID
+  const handleFetchUserRecordID = useCallback(async () => {
+    try {
+      const recordID = await fetchUserRecordID();
+      log(`fetchUserRecordID: ${recordID}`);
+    } catch (err) {
+      log(`fetchUserRecordID failed: ${err instanceof Error ? err.message : String(err)}`, true);
+    }
+  }, [log]);
+
+  // G.b — fetchRecord with desiredKeys
+  const handleFetchWithDesiredKeys = useCallback(async () => {
+    if (!savedRecordName) return;
+    try {
+      const record = await fetchRecord(RECORD_TYPE, savedRecordName, zoneName, 'private', ['title']);
+      const fieldCount = Object.keys(record.fields).length;
+      log(`fetchRecord (desiredKeys: ['title']): ${fieldCount} field(s) returned`);
+    } catch (err) {
+      log(`fetchRecord (desiredKeys) failed: ${err instanceof Error ? err.message : String(err)}`, true);
+    }
+  }, [savedRecordName, zoneName, log]);
+
+  // G.c — queryRecords with OperationConfig
+  const handleQueryWithConfig = useCallback(async () => {
+    const config: OperationConfig = { qos: 'background' };
+    try {
+      const result = await queryRecords(
+        RECORD_TYPE,
+        undefined,
+        undefined,
+        zoneName,
+        'private',
+        5,
+        undefined,
+        undefined,
+        config,
+      );
+      log(`queryRecords (background QoS): ${result.records.length} record(s)`);
+    } catch (err) {
+      log(`queryRecords (background QoS) failed: ${err instanceof Error ? err.message : String(err)}`, true);
+    }
+  }, [zoneName, log]);
+
+  return (
+    <View>
+      {/* G.a — fetchUserRecordID */}
+      <View style={styles.results}>
+        <Text style={styles.sectionTitle}>fetchUserRecordID</Text>
+        <Button
+          title="Fetch User Record ID"
+          onPress={() => { void handleFetchUserRecordID(); }}
+        />
+      </View>
+
+      {/* G.b — fetchRecord with desiredKeys */}
+      <View style={styles.results}>
+        <Text style={styles.sectionTitle}>fetchRecord with desiredKeys</Text>
+        {savedRecordName === undefined && (
+          <Text style={styles.moreText}>Save a record first to enable this.</Text>
+        )}
+        <Button
+          title="Fetch with desiredKeys: ['title']"
+          onPress={() => { void handleFetchWithDesiredKeys(); }}
+          disabled={savedRecordName === undefined}
+        />
+      </View>
+
+      {/* G.c — queryRecords with OperationConfig */}
+      <View style={styles.results}>
+        <Text style={styles.sectionTitle}>queryRecords with OperationConfig</Text>
+        <Button
+          title="Query (background QoS)"
+          onPress={() => { void handleQueryWithConfig(); }}
+        />
+      </View>
+
+      {/* G.d — resolveSyncConflict info */}
+      <View style={styles.results}>
+        <Text style={styles.sectionTitle}>resolveSyncConflict</Text>
+        <Text style={styles.moreText}>
+          resolveSyncConflict: call with requestId from onSyncConflict events (requires resolveConflicts: true in startSyncEngine)
+        </Text>
       </View>
     </View>
   );
