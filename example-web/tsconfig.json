@@ -3,13 +3,14 @@
   "compilerOptions": {
     "strict": true,
     "paths": {
-      "expo-cloudkit": ["../src/index.ts"]
+      "expo-cloudkit": [
+        "../src/index.ts"
+      ]
     }
   },
   "include": [
     "**/*.ts",
     "**/*.tsx",
-    ".expo/types/**/*.d.ts",
-    "expo-env.d.ts"
+    ".expo/types/**/*.d.ts"
   ]
 }
