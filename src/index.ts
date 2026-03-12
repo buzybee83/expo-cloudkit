@@ -92,6 +92,8 @@ export type {
   // Phase C — CKRecord.Reference deep linking
   FetchWithReferencesOptions,
   ResolvedRecord,
+  // H.4 — deleteRecordWithReferences
+  DeleteRecordWithReferencesOptions,
   // Phase C — Offline Queue
   OfflineQueueEntryStatus,
   OfflineQueueEntry,
@@ -191,7 +193,7 @@ export {
 } from './ExpoCloudKit';
 
 // Phase C — CKRecord.Reference deep linking
-export { fetchRecordWithReferences } from './ExpoCloudKit';
+export { fetchRecordWithReferences, deleteRecordWithReferences } from './ExpoCloudKit';
 
 // Phase C — Offline Queue
 export {

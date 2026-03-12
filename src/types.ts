@@ -810,6 +810,26 @@ export type SubscriptionEvent = QuerySubscriptionEvent | DatabaseSubscriptionEve
 // ---------------------------------------------------------------------------
 
 /**
+ * Options for `deleteRecordWithReferences()`.
+ *
+ * Controls how deeply the client-side reference graph walk descends before
+ * issuing a batched delete. Each additional depth level requires additional
+ * network round-trips to fetch referenced records prior to deletion.
+ */
+export interface DeleteRecordWithReferencesOptions {
+  /**
+   * Maximum depth of the reference graph to traverse and delete.
+   * - 1: delete only the root record and its direct references
+   * - 2: delete root + its references + their references
+   * - 3: maximum depth (capped server-side)
+   * Default: 1
+   */
+  maxDepth?: 1 | 2 | 3;
+  /** CloudKit database scope. Default: 'private' */
+  database?: DatabaseScope;
+}
+
+/**
  * Options for `fetchRecordWithReferences()`.
  *
  * Controls which record to fetch and how deeply to follow CKRecord.Reference

@@ -50,6 +50,7 @@ import type {
   WebConfigOptions,
   Zone,
   ZoneChanges,
+  DeleteRecordWithReferencesOptions,
   FetchWithReferencesOptions,
   OfflineQueueDrainResult,
   OfflineQueueEntryStatus,
@@ -975,6 +976,45 @@ export function fetchRecordWithReferences(
 ): Promise<ResolvedRecord> {
   return callAsync(() =>
     NativeModule!.fetchRecordWithReferences(recordName, options)
+  );
+}
+
+/**
+ * Fetches a record, walks its CKRecord.Reference fields up to `maxDepth` levels,
+ * and deletes all records in the graph in a single batched operation.
+ *
+ * **Warning:** This is a client-side graph walk. Each depth level requires
+ * additional network round-trips. Large graphs may hit CloudKit rate limits.
+ * Use `maxDepth: 1` for most cases.
+ *
+ * @param recordName - The `CKRecord.ID.recordName` of the root record to delete.
+ * @param recordType - The `CKRecord.recordType` of the root record.
+ * @param zoneName   - The zone the root record lives in. Pass `undefined` for the default zone.
+ * @param options    - Controls graph traversal depth and database scope.
+ * @returns Array of deleted record names, including the root and all traversed references.
+ * @throws {CloudKitNotSupportedError} On non-iOS platforms.
+ * @throws {CloudKitError} code NOT_AUTHENTICATED if the user is not signed in.
+ * @throws {CloudKitError} code NETWORK_UNAVAILABLE if the device is offline.
+ * @throws {CloudKitError} code RECORD_NOT_FOUND if the root record does not exist.
+ *
+ * @example
+ * ```typescript
+ * const deleted = await deleteRecordWithReferences('abc123', 'Note', 'MyZone', {
+ *   maxDepth: 2,
+ *   database: 'private',
+ * });
+ * console.log('Deleted records:', deleted);
+ * ```
+ */
+export function deleteRecordWithReferences(
+  recordName: string,
+  recordType: string,
+  zoneName: string | undefined,
+  options?: DeleteRecordWithReferencesOptions
+): Promise<string[]> {
+  const { maxDepth = 1, database = 'private' } = options ?? {};
+  return callAsync(() =>
+    NativeModule!.deleteRecordWithReferences(recordName, recordType, zoneName ?? null, database, maxDepth)
   );
 }
 

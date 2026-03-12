@@ -34,6 +34,7 @@ import type {
   DatabaseScope,
   DeleteShareOptions,
   FetchParticipantsOptions,
+  DeleteRecordWithReferencesOptions,
   FetchWithReferencesOptions,
   OfflineQueueDrainResult,
   OfflineQueueEntryStatus,
@@ -1215,6 +1216,21 @@ export async function fetchRecordWithReferences(
   }
 
   return resolveReferences(rootRecord, depth);
+}
+
+/**
+ * Not supported on web — throws `CloudKitNotSupportedError`.
+ *
+ * The client-side reference graph walk required by `deleteRecordWithReferences`
+ * depends on native CKRecord introspection that is unavailable in CloudKit JS.
+ */
+export function deleteRecordWithReferences(
+  _recordName: string,
+  _recordType: string,
+  _zoneName: string | undefined,
+  _options?: DeleteRecordWithReferencesOptions
+): Promise<string[]> {
+  return Promise.reject(new CloudKitNotSupportedError());
 }
 
 // ---------------------------------------------------------------------------
