@@ -11,6 +11,27 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.0] — 2026-03-12
+
+### Added
+
+**Phase H — CI Hardening, Architecture & API Gaps**
+
+- **Swift tests in CI** — GitHub Actions now runs the full XCTest suite (`ConvertersTests`, `OfflineQueueTests`, `OfflineQueueEntryTests`, `CloudKitNotificationHandlerTests`) on `macos-14` using `expo prebuild` + CocoaPods. Both `ci.yml` (every push/PR) and `publish.yml` (blocks npm release on failure).
+- **`deleteRecordWithReferences(recordName, recordType, zoneName?, options?)`** — client-side reference graph delete. Fetches the root record, walks `CKRecord.Reference` fields up to `maxDepth` levels (1–3), and deletes the entire collected set in one batched `CKModifyRecordsOperation`. Returns the array of deleted record names.
+- **`DeleteRecordWithReferencesOptions`** type — `{ maxDepth?: 1 | 2 | 3, database?: DatabaseScope }`.
+- **`createCloudKitClient(containerId): Promise<CloudKitClient>`** — creates an isolated CloudKit client bound to a specific container, independent of the module-level singleton. Supports `saveRecords`, `queryRecords`, `deleteRecords`, and `destroy()`. Enables apps with multiple CloudKit containers to operate them concurrently without state conflicts.
+- **`CloudKitClient`** interface — public type for the multi-container client object.
+- **Cursor persistence** — `queryRecords` now accepts `persistCursor?: boolean` (default `false`). When `true`, cursors are serialized via `NSKeyedArchiver` to `UserDefaults` and survive app restarts. Pass a previously-returned cursor token on the next call to resume pagination from where you left off across sessions.
+- **`clearPersistedCursors(): Promise<void>`** — removes all persisted cursor data from device storage.
+
+### Changed
+
+- **`OfflineQueue` migrated to Swift actor** — mutable state (`entries`, `isDraining`, debounce task) is now actor-isolated. NWPathMonitor callbacks re-enter actor isolation via `Task { await self.handlePathUpdate(...) }`. Timer-based retry replaced with `Task.sleep`. Eliminates all `DispatchQueue.sync` usage in `OfflineQueue.swift`.
+- **`CloudKitSyncEngine` and `CloudKitSyncFallback` queue hardening** — `pendingQueue` renamed to `stateQueue` with explicit `.userInitiated` QoS. Full actor migration deferred until `CKSyncEngineDelegate.handleEvent` async/actor interaction patterns are resolved without deadlock risk.
+
+---
+
 ## [0.6.0] — 2026-03-11
 
 ### Added

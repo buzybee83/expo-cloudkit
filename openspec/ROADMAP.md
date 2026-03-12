@@ -179,3 +179,129 @@ _Done when_: Setting `onConflict` in `startSyncEngine({ zones: ['z'], onConflict
 - **G.1 (`desiredKeys`)** is the highest-impact item: it directly improves network performance for every app using the module, the codebase's own guidelines already require it, and it touches foundational fetch paths that downstream features (G.3 QoS) will also modify.
 - **G.2 (`fetchUserRecordID`)** is the lowest-risk item: a single CloudKit API call, no architectural decisions, fixes a documented gap. Ships a working API in under an hour.
 - **G.5 (NotificationHandler tests)** is pure additive test coverage with zero risk to existing code. Runs in parallel with no conflicts.
+
+## Phase H — CI Hardening, Architecture & API Gaps
+
+### H.1 — Swift tests in CI
+_Effort: S (CI config only) | Agent: devops_
+
+The XCTest suite (5 test files: `ConvertersTests`, `OfflineQueueTests`, `OfflineQueueEntryTests`, `CloudKitNotificationHandlerTests`, `ExpoCloudKitTestSuite`) runs manually via `xcodebuild test` but is not part of the GitHub Actions CI pipeline. The existing CI workflow (`.github/workflows/ci.yml`) runs on `ubuntu-latest` and only executes TypeScript typecheck, lint, Jest tests, and build. Swift tests require `macos-latest` with Xcode.
+
+- [x] **CI**: Add a new `swift-tests` job to `.github/workflows/ci.yml` using `runs-on: macos-latest` (or `macos-14` for Apple Silicon)
+- [x] **CI**: Install Expo module dependencies — run `pod install` or use the example app's Xcode workspace if a standalone workspace does not exist
+- [x] **CI**: Execute `xcodebuild test` with `-destination "platform=iOS Simulator,name=iPhone 15"` targeting the test scheme
+- [x] **CI**: Ensure the job runs on both `push` to `main` and `pull_request` targeting `main`, matching existing triggers
+- [x] **CI**: Add the `swift-tests` job to the `publish.yml` `validate` stage so Swift regressions block releases
+
+_Risks_: The Expo module may not have a standalone `xcworkspace` — the test target may only build inside the example app's Pods workspace. If so, the CI job must `cd example && pod install` first, adding ~2 min to CI. macOS runners are slower and more expensive than Ubuntu; consider making the Swift job a separate workflow or allowing it to run in parallel with the existing `check` job.
+
+_Done when_: A PR that breaks a Swift test (e.g., renaming a `Converters` method without updating `ConvertersTests`) fails CI with a clear `xcodebuild test` error.
+
+### H.2 — Example app coverage for Phase G APIs
+_Effort: S (TypeScript only) | Agent: ts-sdk-dev_
+
+`example/App.tsx` demonstrates Phases A through C but does not exercise `desiredKeys`, `OperationConfig`, or `resolveSyncConflict` from Phase G. These are the most user-facing new APIs and need working example code for adoption.
+
+- [x] **Example**: Add a "Fetch with desiredKeys" demo section — call `fetchRecord(type, id, { desiredKeys: ['title'] })` and display which fields are returned vs omitted
+- [x] **Example**: Add an "Operation Config" demo — call `queryRecords` with `{ operationConfig: { qos: 'utility', timeout: 15 } }` and log the QoS used
+- [x] **Example**: Add a "Conflict Resolution" demo — start sync with `resolveConflicts: true`, display emitted `SyncConflictEvent` payloads, and call `resolveSyncConflict` with a merged record
+- [x] **Example**: Update the file header comment to list Phase G coverage
+
+_Done when_: `cd example && npx expo run:ios` shows working UI for `desiredKeys` filtering, QoS configuration, and conflict resolution flow. No new TypeScript errors.
+
+### H.3 — Multi-container support (`CloudKitClient` instance API)
+_Effort: M (Swift + TypeScript) | Agent: ios-native-dev + ts-sdk-dev (parallel)_
+
+`configure()` initializes a single global `CKContainer`. Apps with multiple containers (e.g., personal + team) must call `configure()` repeatedly, risking state conflicts in the singleton `CloudKitRecordManager`, `CloudKitSyncEngine`, and `OfflineQueue`. This phase adds an instance-based `CloudKitClient` API as an alternative to module-level singleton functions.
+
+- [ ] **Swift**: Create `CloudKitClient.swift` — a class holding its own `CKContainer`, `CloudKitRecordManager`, `CloudKitZoneManager`, `CloudKitShareManager`, and `OfflineQueue` instances. Constructor takes `containerIdentifier: String`
+- [ ] **Swift**: Add `createClient(containerIdentifier: String) -> String` AsyncFunction in `ExpoCloudKitModule.swift` — returns a client ID (UUID); store in a `[String: CloudKitClient]` dict
+- [ ] **Swift**: Add `clientRecordManager`-style overloads for core operations (`saveRecords`, `queryRecords`, `deleteRecords`, `fetchRecord`) that accept a `clientId` parameter and route to the correct `CloudKitClient` instance
+- [ ] **Swift**: Add `destroyClient(clientId: String)` to tear down and deregister a client
+- [ ] **TypeScript**: Export `createCloudKitClient(containerId: string): Promise<CloudKitClient>` returning an object with bound methods (`client.saveRecords(...)`, `client.queryRecords(...)`, etc.)
+- [ ] **TypeScript**: Add `CloudKitClient` interface to `src/types.ts`
+- [ ] **Web**: Implement `createCloudKitClient` by calling `CloudKit.configure()` with a second container config and returning scoped wrapper functions
+
+_Risks_: The `OfflineQueue` currently persists to a single `UserDefaults` key. Multi-container needs per-container keys. `CKSyncEngine` (iOS 17+) is initialized per-container — multiple engines may compete for system resources.
+
+_Done when_: Two `CloudKitClient` instances targeting different containers can save and query records independently without cross-contamination. Destroying a client cleans up its resources.
+
+### H.4 — `CKRecord.Reference` cascade delete option
+_Effort: S (Swift + TypeScript) | Agent: ios-native-dev + ts-sdk-dev (parallel)_
+
+`deleteRecords` currently uses `CKModifyRecordsOperation` with no reference-action awareness. The `Converters.swift` layer already parses `action: "deleteSelf"` when creating references, but callers cannot trigger cascade deletes through reference graphs. This phase adds a `referenceAction` option to `deleteRecords`.
+
+- [x] **Swift**: Add `referenceAction: String?` parameter to `CloudKitRecordManager.deleteRecords()` — when set to `"deleteSelf"`, fetch each record before deletion and verify its reference graph (note: `CKModifyRecordsOperation` delete-by-ID does not automatically cascade; cascade is a property of the reference on the *referencing* record, not a delete-time option)
+- [x] **Swift**: Alternatively, document that cascade delete is a reference-creation concern (already handled via `action: "deleteSelf"` in `Converters.toCloudKitValue`) and add a `deleteRecordWithReferences(recordName:, depth: Int)` function that fetches the record, walks its reference fields, and deletes the graph
+- [x] **TypeScript**: Export `deleteRecordWithReferences(recordName: string, options?: { maxDepth?: number, database?: DatabaseScope })` in `src/index.ts`
+- [x] **TypeScript**: Add JSDoc warning about potential CloudKit rate limits when deleting large reference graphs
+
+_Risks_: CloudKit's `.deleteSelf` action is enforced server-side when the *parent* record is deleted, but only for references created with that action. A client-side graph walk adds N+1 fetch overhead and risk of partial failure. This feature should carry a "use at your own risk" warning for deep graphs.
+
+_Done when_: `deleteRecordWithReferences('parentRecord', { maxDepth: 2 })` deletes the target record and all records it references (up to depth 2). Records referenced with `.none` action are not cascade-deleted.
+
+### H.5 — Cursor persistence across app restarts
+_Effort: S (Swift + TypeScript) | Agent: ios-native-dev + ts-sdk-dev (parallel)_
+
+`queryRecords` stores `CKQueryOperation.Cursor` objects in an in-memory dictionary (`cursorCache` / `cursorStore`). App restart clears all cursors, forcing callers to re-query from page 1. `CKQueryOperation.Cursor` conforms to `NSSecureCoding`, so it can be serialized to `Data` and persisted.
+
+- [ ] **Swift**: Add `persistCursor(_ cursor: CKQueryOperation.Cursor, forToken token: String)` and `loadCursor(forToken token: String) -> CKQueryOperation.Cursor?` to `CloudKitRecordManager.swift` — serialize via `NSKeyedArchiver` to `UserDefaults` (keyed `expo.cloudkit.cursors.<token>`)
+- [ ] **Swift**: On `queryRecords` call, if a cursor token is provided but not in-memory, attempt to load from `UserDefaults` before returning "cursor not found"
+- [ ] **Swift**: Add `clearPersistedCursors()` function to flush all stored cursor data
+- [ ] **TypeScript**: Add `persistCursor?: boolean` option to `queryRecords` options (default `false` to preserve current behavior)
+- [ ] **TypeScript**: Export `clearPersistedCursors(): Promise<void>`
+
+_Risks_: `CKQueryOperation.Cursor` may not be safely deserializable across app version upgrades or CloudKit schema changes — a corrupted cursor produces a `CKError`. The implementation must catch deserialization failures and fall back to "cursor not found." Stored cursors should have a TTL or be version-stamped.
+
+_Done when_: `queryRecords(type, predicate, { limit: 10, persistCursor: true })` returns a cursor token. After force-quitting and restarting the app, passing that token to a subsequent `queryRecords` call resumes pagination from page 2 (not page 1).
+
+### H.6 — Swift actor migration for sync adapters
+_Effort: M (Swift only) | Agent: ios-native-dev_
+
+`CloudKitSyncEngine.swift` (352 lines) and `CloudKitSyncFallback.swift` (434 lines) protect shared mutable state (`pendingConflicts`, configuration) with a serial `DispatchQueue`. `OfflineQueue.swift` (426 lines) uses two `DispatchQueue`s. Swift actors (available since Swift 5.5, iOS 15+) provide compile-time data-race safety and are the modern replacement. Since the module targets iOS 16+, actors are available on all supported versions.
+
+- [ ] **Swift**: Convert `CloudKitSyncEngineAdapter` from class + `DispatchQueue` to `actor` — move `pendingConflicts`, `syncEngine`, `configuration` into actor-isolated state
+- [ ] **Swift**: Convert `CloudKitSyncFallbackAdapter` from class + `DispatchQueue` to `actor`
+- [ ] **Swift**: Convert `OfflineQueue` from class + two `DispatchQueue`s to `actor`
+- [ ] **Swift**: Update `ExpoCloudKitModule.swift` call sites to use `await` for actor-isolated method calls
+- [ ] **Swift**: Ensure `CKSyncEngineDelegate` protocol conformance works with actor isolation (may need `nonisolated` annotations on delegate methods)
+- [ ] **Swift**: Run all existing XCTests — they must continue to pass with the actor-based implementations
+- [ ] **Swift**: Verify no `DispatchQueue.main.async` calls remain in migrated files (replace with `@MainActor` where needed for UI/event dispatch)
+
+_Risks_: `CKSyncEngineDelegate` methods are called by the system on arbitrary threads. Actor re-entrancy and `nonisolated` annotations add complexity. The `ExpoModulesCore` event system (`sendEvent`) may require `@MainActor` dispatch, which interacts with actor isolation. `OfflineQueue`'s timer-based retry uses `DispatchQueue.global().asyncAfter` which needs reworking for actor context. This is the highest-risk phase in H and should not be parallelized with other Swift work.
+
+_Done when_: Zero `DispatchQueue` usage remains in `CloudKitSyncEngine.swift`, `CloudKitSyncFallback.swift`, and `OfflineQueue.swift`. All existing XCTests pass. `swift build` produces no data-race warnings with strict concurrency checking enabled.
+
+---
+
+### Batch Execution Plan
+
+#### Batch 1 (parallel — no dependencies)
+| Phase | Goal | Agent(s) | Effort |
+|-------|------|----------|--------|
+| H.1 | Swift tests in CI | devops | S |
+| H.2 | Example app for Phase G APIs | ts-sdk-dev | S |
+| H.4 | Reference cascade delete | ios-native-dev + ts-sdk-dev | S |
+
+#### Batch 2 (parallel — no dependencies on Batch 1)
+| Phase | Goal | Agent(s) | Effort |
+|-------|------|----------|--------|
+| H.3 | Multi-container support | ios-native-dev + ts-sdk-dev | M |
+| H.5 | Cursor persistence | ios-native-dev + ts-sdk-dev | S |
+
+#### Batch 3 (after Batch 1 H.1 — requires CI Swift tests green before refactoring)
+| Phase | Goal | Agent(s) | Effort |
+|-------|------|----------|--------|
+| H.6 | Swift actor migration | ios-native-dev | M |
+
+### Priority & Rationale
+
+**Start with H.1 + H.2 + H.4 (Batch 1).**
+
+- **H.1 (Swift tests in CI)** is the highest-leverage infrastructure item: without it, every subsequent Swift change (including H.6 actor migration) ships without automated regression checks. Low effort, high ongoing value.
+- **H.2 (Example app for Phase G)** is pure documentation value with zero risk. Phase G shipped three significant APIs (`desiredKeys`, `OperationConfig`, `resolveSyncConflict`) with no example code — this is the most visible gap for new adopters.
+- **H.4 (Reference cascade delete)** is a small, self-contained API addition that completes the reference management story started in Phase C.
+
+**Batch 2 (H.3 + H.5)** delivers the two API-gap features. Multi-container (H.3) is the most architecturally significant item in Phase H — it introduces a second code path for all core operations — but it is additive and does not modify existing singleton behavior. Cursor persistence (H.5) is a quick win that solves a real usability problem.
+
+**Batch 3 (H.6) runs last and alone.** Actor migration is the highest-risk item: it rewrites concurrency primitives in three core files totaling 1,200+ lines. It must run after H.1 lands so that CI catches any regressions automatically. It must not overlap with H.3 or H.4 which also touch Swift files.
