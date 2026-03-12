@@ -137,46 +137,51 @@ export function CloudKitProvider({
 
   // configure() + optional account status observation
   React.useEffect(() => {
-    // 1. Configure the container (platform-specific)
-    if (Platform.OS === 'web') {
-      // On web: use configureWeb() from the web implementation.
-      // We import dynamically to avoid touching the native module on web.
-      // The `.web.ts` extension ensures Metro resolves the web implementation.
-      if (webConfig) {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const { configureWeb } = require('./ExpoCloudKit') as typeof import('./ExpoCloudKit.web');
-        configureWeb(containerId, webConfig).catch(() => {
-          // configureWeb failure is surfaced through getAccountStatus() returning couldNotDetermine
-        });
+    let cancelled = false;
+
+    async function setup() {
+      // 1. Configure the container (platform-specific)
+      if (Platform.OS === 'web') {
+        if (webConfig) {
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          const { configureWeb } = require('./ExpoCloudKit') as typeof import('./ExpoCloudKit.web');
+          try {
+            await configureWeb(containerId, webConfig);
+          } catch {
+            // configureWeb failure surfaces through getAccountStatus() returning couldNotDetermine
+          }
+        }
+      } else {
+        try {
+          configure(containerId);
+        } catch {
+          // configure() throws synchronously on non-iOS — swallow so the Provider
+          // renders normally (hooks will individually fail with CloudKitNotSupportedError).
+        }
       }
-    } else {
+
+      if (!observeAccountStatus || cancelled) return;
+
+      // 2. Reset to loading and fetch current status (after configure completes)
+      setAccountStatus('loading');
+
       try {
-        configure(containerId);
+        const status = await getAccountStatus();
+        if (!cancelled) setAccountStatus(status);
       } catch {
-        // configure() throws synchronously on non-iOS — swallow so the Provider
-        // renders normally (hooks will individually fail with CloudKitNotSupportedError).
+        // leave as 'loading'
       }
     }
 
-    if (!observeAccountStatus) return;
-
-    // 2. Reset to loading and fetch current status
-    setAccountStatus('loading');
-
-    getAccountStatus()
-      .then((status) => {
-        setAccountStatus(status);
-      })
-      .catch(() => {
-        // On non-iOS or when the module fails to load, leave as 'loading'.
-      });
-
     // 3. Subscribe to live updates
     const subscription = addAccountStatusListener((status) => {
-      setAccountStatus(status);
+      if (!cancelled) setAccountStatus(status);
     });
 
+    void setup();
+
     return () => {
+      cancelled = true;
       subscription.remove();
     };
   }, [containerId, observeAccountStatus, webConfig]);
