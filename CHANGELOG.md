@@ -11,6 +11,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.5.3] — 2026-03-11
+
+### Fixed
+
+- **Config plugin**: `com.apple.developer.icloud-container-environment` was written as an array (`['Development', 'Production']`) instead of the string Xcode requires. Now reads `iCloudContainerEnvironment` from plugin options (default: `'Production'`) and writes it as a plain string.
+- **CloudKitProvider (web)**: `getAccountStatus()` was called before `configureWeb()` finished, always returning `'couldNotDetermine'` on web. Provider now awaits `configureWeb()` before fetching account status.
+- **`authenticateWeb()`**: After `setUpAuth()` returns `null` (user not signed in), now calls `whenUserSignsIn()` to properly await the CloudKit JS sign-in flow instead of returning `'noAccount'` immediately.
+- **example-web**: Fixed Metro bundler 404 — parent `.gitignore` includes `node_modules/` which caused Watchman to skip `example-web/node_modules/`; set `resolver.useWatchman = false` to use Node.js crawler instead.
+- **example-web**: Removed duplicate "Sign in with Apple" button (rendered by both `AccountBanner` and `index.tsx`).
+
+---
+
 ## [0.5.2] — 2026-03-10
 
 ### Added
