@@ -11,6 +11,24 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.0] — 2026-03-11
+
+### Added
+
+**Phase G — Polish, Performance & DX**
+
+- **`desiredKeys` on fetch operations** — `fetchRecord`, `queryRecords`, and `fetchRecordZoneChanges` now accept an optional `desiredKeys?: string[]` parameter that passes through to the underlying `CKOperation`, avoiding over-fetching of unused fields. Web: passed to CloudKit JS query/fetch options.
+- **`fetchUserRecordID(): Promise<string>`** — returns the current iCloud user's record name. Previously documented as complete but not implemented. On web, delegates to `fetchCurrentUserIdentity()` / `fetchUserRecordName()` in CloudKit JS.
+- **`OperationConfig` type** — new `operationConfig?: OperationConfig` optional parameter on `saveRecords`, `deleteRecords`, `fetchRecord`, `queryRecords`, and `fetchRecordZoneChanges`. Controls `qualityOfService` (`'userInitiated' | 'utility' | 'background' | 'default'`) and `timeout` (seconds) for the underlying `CKOperation`. Default behavior (`.userInitiated`, no timeout) is unchanged when omitted.
+- **Custom conflict resolution in `CKSyncEngine`** — set `resolveConflicts: true` in `startSyncEngine` options to opt into manual conflict handling. The module emits `onSyncConflict` events with `{ requestId, clientRecord, serverRecord }`; call `resolveSyncConflict(requestId, mergedRecord)` (or `resolveSyncConflict(requestId, null)` to accept the server version). When `resolveConflicts` is false (default), server-record-wins behavior is unchanged.
+- **`resolveSyncConflict(requestId, resolvedRecord | null): void`** — new exported function to complete a pending conflict resolution.
+- **`SyncConflictEvent`** — new variant in the `SyncEngineEvent` discriminated union (`type: 'conflict'`).
+- **XCTest: `CloudKitNotificationHandlerTests`** — 8 new offline test cases covering query (created/updated/deleted), database subscription, empty/non-CloudKit payloads, `recordID` extraction, and `subscriptionID` forwarding.
+- **XCTest: `ConvertersTests` expanded** — 11 new cases: `toCKRecord` round-trips for date, location, stringList, and numberList fields; `toExpoError` coverage for `serverRecordChanged`→`CONFLICT`, `limitExceeded`→`LIMIT_EXCEEDED`, `assetFileTooBig`→`ASSET_TOO_LARGE`, `operationCancelled`→`UNKNOWN`; `toDictionary` reference field type/action coverage.
+- **Example app Phase D section** — `CloudKitProvider` wraps the app; `useAccountStatus`, optimistic update demo (`update()`, `optimisticAdd`, `optimisticRemove`), `useCloudKitSubscription` demo added to `example/App.tsx`.
+
+---
+
 ## [0.5.3] — 2026-03-11
 
 ### Fixed
