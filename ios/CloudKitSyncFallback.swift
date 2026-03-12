@@ -17,10 +17,21 @@ import Foundation
 /// 3. Emit `stateChanged(.idle)` when the cycle completes.
 ///
 /// # Thread Safety
-/// All mutable state (`pendingSaves`, `pendingDeletes`, `trackedZones`, `state`) is
-/// accessed through `pendingQueue` (serial DispatchQueue). Timer callbacks dispatch
-/// sync work to a background queue. The `eventHandler` is always called from the
-/// internal queue; the module layer dispatches to main before `sendEvent`.
+/// All mutable state (`pendingSaves`, `pendingDeletes`, `trackedZones`, `state`,
+/// `isSyncInFlight`, `pendingConflicts`) is accessed through `stateQueue` — a private
+/// serial DispatchQueue acting as a synchronisation domain equivalent to an actor's
+/// executor. Timer callbacks and CKOperation completion blocks re-enter via
+/// `stateQueue.async`; synchronous reads use `stateQueue.sync`.
+///
+/// # Why not a Swift actor?
+/// The push phase (`pushChanges`) uses CKModifyRecordsOperation's
+/// `perRecordSaveBlock` — a synchronous callback called on CloudKit's internal queue.
+/// Inside that callback, the current implementation calls `stateQueue.sync` to
+/// register conflict continuations. Wrapping this in an actor would require converting
+/// the entire push/pull callback chain to structured concurrency (async/await) before
+/// actor isolation is safe to apply.
+///
+/// TODO: migrate to actor after converting pushChanges/pullChanges to async throws.
 final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
 
   // MARK: - Protocol conformance
@@ -43,8 +54,9 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
   /// Default: 1 retry on conflict before surfacing the error.
   private let maxConflictRetries = 1
 
-  /// Serial queue for all mutable state access and sync cycle coordination.
-  private let pendingQueue = DispatchQueue(label: "expo.cloudkit.syncfallback.pending")
+  /// Serial DispatchQueue acting as the synchronisation domain for all mutable state.
+  /// Named after the actor-equivalent pattern it approximates.
+  private let stateQueue = DispatchQueue(label: "expo.cloudkit.syncfallback.state", qos: .userInitiated)
   private var pendingSaves: [CKRecord] = []
   private var pendingDeletes: [CKRecord.ID] = []
 
@@ -56,7 +68,7 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
   var conflictResolutionEnabled = false
 
   /// Continuations keyed by requestId, awaiting JS resolution of a conflict.
-  /// Access only from `pendingQueue`.
+  /// Access only from `stateQueue`.
   private var pendingConflicts: [String: CheckedContinuation<[String: Any]?, Never>] = [:]
 
   // MARK: - Init
@@ -75,7 +87,7 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
     eventHandler: @escaping (SyncProviderEvent) -> Void
   ) {
     self.eventHandler = eventHandler
-    pendingQueue.sync { [weak self] in
+    stateQueue.sync { [weak self] in
       guard let self = self else { return }
       self.trackedZones = zones
       self.databaseScope = database
@@ -106,7 +118,7 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
       self?.pollingTimer?.invalidate()
       self?.pollingTimer = nil
     }
-    pendingQueue.sync { [weak self] in
+    stateQueue.sync { [weak self] in
       guard let self = self else { return }
       self.state = .notStarted
       self.pendingSaves.removeAll()
@@ -129,19 +141,19 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
   }
 
   func enqueueSave(_ record: CKRecord) {
-    pendingQueue.async { [weak self] in
+    stateQueue.async { [weak self] in
       self?.pendingSaves.append(record)
     }
   }
 
   func enqueueDelete(_ recordID: CKRecord.ID) {
-    pendingQueue.async { [weak self] in
+    stateQueue.async { [weak self] in
       self?.pendingDeletes.append(recordID)
     }
   }
 
   func resumeConflictResolution(requestId: String, resolvedRecord: [String: Any]?) {
-    pendingQueue.async { [weak self] in
+    stateQueue.async { [weak self] in
       guard let self = self else { return }
       guard let continuation = self.pendingConflicts.removeValue(forKey: requestId) else {
         print("[ExpoCloudKit] resumeConflictResolution: no pending conflict for requestId '\(requestId)'")
@@ -155,7 +167,7 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
 
   /// Runs a push-then-pull cycle. Guards against overlapping cycles.
   private func runSyncCycle() {
-    pendingQueue.async { [weak self] in
+    stateQueue.async { [weak self] in
       guard let self = self else { return }
       guard !self.isSyncInFlight else { return }
       self.isSyncInFlight = true
@@ -174,7 +186,7 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
       self.pushChanges(saves: saves, deletes: deletes, scope: scope, retryCount: 0) { [weak self] in
         guard let self = self else { return }
         self.pullChanges(zones: zones, scope: scope) {
-          self.pendingQueue.async {
+          self.stateQueue.async {
             self.isSyncInFlight = false
             self.state = .idle
             self.eventHandler?(.stateChanged(.idle))
@@ -252,9 +264,9 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
             // event to JS, preventing the race where JS calls resolveSyncConflict
             // before the slot is available.
             // Note: `perRecordSaveBlock` runs on a CloudKit internal queue (not
-            // pendingQueue), so `pendingQueue.sync` is safe here.
+            // stateQueue), so `stateQueue.sync` is safe here.
             let resolvedDict: [String: Any]? = await withCheckedContinuation { continuation in
-              self.pendingQueue.sync {
+              self.stateQueue.sync {
                 self.pendingConflicts[requestId] = continuation
               }
               // Emit the event only after the slot is registered.

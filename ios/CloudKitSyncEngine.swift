@@ -12,10 +12,23 @@ import Foundation
 ///
 /// # Thread Safety
 /// CKSyncEngine calls its delegate on an internal serial queue. All mutable state
-/// (`pendingSaves`, `pendingDeletes`, `state`) is accessed through `pendingQueue`
-/// (a private serial DispatchQueue). The `eventHandler` closure is called from
-/// whatever queue CKSyncEngine provides; the module layer dispatches to the main
-/// queue before calling `sendEvent`.
+/// (`pendingSaves`, `pendingDeletes`, `state`, `pendingConflicts`) is accessed
+/// through `stateQueue` — a private serial DispatchQueue acting as a synchronisation
+/// domain equivalent to an actor's executor.
+///
+/// # Why not a Swift actor?
+/// `CKSyncEngineDelegate` conformance requires `handleEvent(_:syncEngine:)` to be
+/// callable from arbitrary system threads. An actor type would make this method
+/// actor-isolated, which conflicts with how CKSyncEngine invokes it. The
+/// `nonisolated` + `Task { await self.method() }` pattern *would* work for the
+/// non-async delegate methods, but `handleEvent` is `async` — the actor re-entry
+/// pattern is correct here, and Swift's actor-reentrancy rules allow it, but the
+/// intermediate `stateQueue.sync` calls inside the async delegate body would
+/// deadlock against the actor executor. A full actor migration requires converting
+/// the push/pull loops to structured concurrency first.
+///
+/// TODO: migrate to actor when CKSyncEngineDelegate nonisolated patterns are
+/// verified — replace `stateQueue` barrier writes with actor isolation.
 @available(iOS 17.0, macOS 14.0, *)
 final class CloudKitSyncEngineAdapter: CloudKitSyncProvider {
 
@@ -35,14 +48,16 @@ final class CloudKitSyncEngineAdapter: CloudKitSyncProvider {
   /// being auto-resolved with server-record-wins. Default: false.
   var conflictResolutionEnabled = false
 
-  /// Serial queue protecting all mutable state: pendingSaves, pendingDeletes, state,
-  /// and pendingConflicts.
-  private let pendingQueue = DispatchQueue(label: "expo.cloudkit.sync.pending")
+  /// Serial DispatchQueue acting as the synchronisation domain for all mutable state:
+  /// `pendingSaves`, `pendingDeletes`, `state`, and `pendingConflicts`.
+  /// Named after the actor-equivalent pattern it approximates.
+  /// Barrier writes via `stateQueue.sync` ensure exclusive access.
+  private let stateQueue = DispatchQueue(label: "expo.cloudkit.sync.state", qos: .userInitiated)
   private var pendingSaves: [CKRecord] = []
   private var pendingDeletes: [CKRecord.ID] = []
 
   /// Continuations keyed by requestId, awaiting JS resolution of a conflict.
-  /// Access only from `pendingQueue`.
+  /// Access only from `stateQueue`.
   private var pendingConflicts: [String: CheckedContinuation<[String: Any]?, Never>] = [:]
 
   // MARK: - Init
@@ -82,7 +97,7 @@ final class CloudKitSyncEngineAdapter: CloudKitSyncProvider {
       newEngine.state.add(pendingDatabaseChanges: zonesToAdd.map { .saveZone($0) })
     }
 
-    pendingQueue.sync { [weak self] in
+    stateQueue.sync { [weak self] in
       self?.state = .idle
     }
     eventHandler(.stateChanged(.idle))
@@ -92,7 +107,7 @@ final class CloudKitSyncEngineAdapter: CloudKitSyncProvider {
     // CKSyncEngine does not have an explicit stop API — releasing the reference
     // stops automatic syncing. Pending changes already queued in the engine are
     // still sent before it releases its resources.
-    pendingQueue.sync {
+    stateQueue.sync {
       self.engine = nil
       self.state = .notStarted
       self.pendingSaves.removeAll()
@@ -121,11 +136,11 @@ final class CloudKitSyncEngineAdapter: CloudKitSyncProvider {
 
   func enqueueSave(_ record: CKRecord) {
     // Both the array append and the engine notification must happen inside the
-    // same pendingQueue.async block. If engine.state.add() is called first on
+    // same stateQueue.async block. If engine.state.add() is called first on
     // the calling thread, nextRecordZoneChangeBatch can fire before the append
     // completes, finding pendingSaves empty while the record ID is already
     // registered as pending.
-    pendingQueue.async { [weak self] in
+    stateQueue.async { [weak self] in
       guard let self = self else { return }
       self.pendingSaves.append(record)
       self.engine?.state.add(pendingRecordZoneChanges: [.saveRecord(record.recordID)])
@@ -133,7 +148,7 @@ final class CloudKitSyncEngineAdapter: CloudKitSyncProvider {
   }
 
   func enqueueDelete(_ recordID: CKRecord.ID) {
-    pendingQueue.async { [weak self] in
+    stateQueue.async { [weak self] in
       guard let self = self else { return }
       self.pendingDeletes.append(recordID)
       self.engine?.state.add(pendingRecordZoneChanges: [.deleteRecord(recordID)])
@@ -141,7 +156,7 @@ final class CloudKitSyncEngineAdapter: CloudKitSyncProvider {
   }
 
   func resumeConflictResolution(requestId: String, resolvedRecord: [String: Any]?) {
-    pendingQueue.async { [weak self] in
+    stateQueue.async { [weak self] in
       guard let self = self else { return }
       guard let continuation = self.pendingConflicts.removeValue(forKey: requestId) else {
         // Stale or unknown requestId — log and return gracefully.
@@ -173,7 +188,7 @@ extension CloudKitSyncEngineAdapter: CKSyncEngineDelegate {
       default:
         break
       }
-      pendingQueue.sync { [weak self] in
+      stateQueue.sync { [weak self] in
         self?.state = .suspended
       }
       emit(.stateChanged(.suspended))
@@ -227,10 +242,10 @@ extension CloudKitSyncEngineAdapter: CKSyncEngineDelegate {
 
           // Register the continuation slot synchronously before emitting the event
           // to JS. This prevents a race where JS calls resolveSyncConflict before
-          // the slot is available. `pendingQueue.sync` is safe here because
-          // `handleEvent` runs on CKSyncEngine's internal queue (not pendingQueue).
+          // the slot is available. `stateQueue.sync` is safe here because
+          // `handleEvent` runs on CKSyncEngine's internal queue (not stateQueue).
           let resolvedDict: [String: Any]? = await withCheckedContinuation { continuation in
-            pendingQueue.sync { [weak self] in
+            stateQueue.sync { [weak self] in
               self?.pendingConflicts[requestId] = continuation
             }
             // Emit the event to JS only after the slot is registered.
@@ -247,7 +262,7 @@ extension CloudKitSyncEngineAdapter: CKSyncEngineDelegate {
             // JS passed null — accept server version unchanged.
             recordToEnqueue = serverRecord
           }
-          pendingQueue.async { [weak self] in
+          stateQueue.async { [weak self] in
             self?.pendingSaves.append(recordToEnqueue)
           }
           syncEngine.state.add(pendingRecordZoneChanges: [.saveRecord(recordToEnqueue.recordID)])
@@ -255,7 +270,7 @@ extension CloudKitSyncEngineAdapter: CKSyncEngineDelegate {
         } else {
           // Default: server-record-wins with client field overlay.
           let merged = resolveConflict(clientRecord: clientRecord, serverRecord: serverRecord)
-          pendingQueue.async { [weak self] in
+          stateQueue.async { [weak self] in
             self?.pendingSaves.append(merged)
           }
           syncEngine.state.add(pendingRecordZoneChanges: [.saveRecord(merged.recordID)])
@@ -265,7 +280,7 @@ extension CloudKitSyncEngineAdapter: CKSyncEngineDelegate {
       emit(.recordsSent(saved: saved, failed: failed))
 
     case .willFetchChanges:
-      pendingQueue.sync { [weak self] in
+      stateQueue.sync { [weak self] in
         self?.state = .syncing
       }
       emit(.stateChanged(.syncing))
@@ -275,19 +290,19 @@ extension CloudKitSyncEngineAdapter: CKSyncEngineDelegate {
       break
 
     case .didFetchChanges:
-      pendingQueue.sync { [weak self] in
+      stateQueue.sync { [weak self] in
         self?.state = .idle
       }
       emit(.stateChanged(.idle))
 
     case .willSendChanges:
-      pendingQueue.sync { [weak self] in
+      stateQueue.sync { [weak self] in
         self?.state = .syncing
       }
       emit(.stateChanged(.syncing))
 
     case .didSendChanges:
-      pendingQueue.sync { [weak self] in
+      stateQueue.sync { [weak self] in
         self?.state = .idle
       }
       emit(.stateChanged(.idle))
@@ -301,7 +316,7 @@ extension CloudKitSyncEngineAdapter: CKSyncEngineDelegate {
     _ context: CKSyncEngine.SendChangesContext,
     syncEngine: CKSyncEngine
   ) async -> CKSyncEngine.RecordZoneChangeBatch? {
-    return pendingQueue.sync {
+    return stateQueue.sync {
       guard !pendingSaves.isEmpty || !pendingDeletes.isEmpty else {
         return nil
       }

@@ -159,8 +159,9 @@ public class ExpoCloudKitModule: Module {
         container: ck,
         containerID: containerId,
         recordManager: rm,
+        // OfflineQueue (actor) already dispatches to @MainActor before calling this closure.
         sendEvent: { [weak self] payload in
-          DispatchQueue.main.async { self?.sendEvent("onOfflineQueueEvent", payload) }
+          self?.sendEvent("onOfflineQueueEvent", payload)
         }
       )
 
@@ -320,17 +321,20 @@ public class ExpoCloudKitModule: Module {
               promise.reject(Converters.toExpoError(error))
               return
             }
-            var queueResults: [[String: Any]] = []
-            for recordDict in recordDicts {
-              if let queueId = try? queue.enqueue(
-                operation: "save",
-                database: database,
-                recordData: recordDict
-              ) {
-                queueResults.append(["queued": true, "queueId": queueId])
+            // OfflineQueue is an actor — enqueue must be called from an async context.
+            Task {
+              var queueResults: [[String: Any]] = []
+              for recordDict in recordDicts {
+                if let queueId = try? await queue.enqueue(
+                  operation: "save",
+                  database: database,
+                  recordData: recordDict
+                ) {
+                  queueResults.append(["queued": true, "queueId": queueId])
+                }
               }
+              promise.resolve(queueResults)
             }
-            promise.resolve(queueResults)
           }
         }
       } catch {
@@ -1379,15 +1383,17 @@ public class ExpoCloudKitModule: Module {
       guard let recordData = options["recordData"] as? [String: Any] else {
         promise.reject(CloudKitModuleError.invalidArgument("recordData is required")); return
       }
-      do {
-        let queueId = try queue.enqueue(
-          operation: operation, database: database, recordData: recordData
-        )
-        promise.resolve(["id": queueId])
-      } catch OfflineQueueError.queueFull {
-        promise.reject(OfflineQueueFullException())
-      } catch {
-        promise.reject(error)
+      Task {
+        do {
+          let queueId = try await queue.enqueue(
+            operation: operation, database: database, recordData: recordData
+          )
+          promise.resolve(["id": queueId])
+        } catch OfflineQueueError.queueFull {
+          promise.reject(OfflineQueueFullException())
+        } catch {
+          promise.reject(error)
+        }
       }
     }
 
@@ -1396,7 +1402,10 @@ public class ExpoCloudKitModule: Module {
       guard let queue = self?.offlineQueue else {
         promise.reject(CloudKitModuleError.notConfigured); return
       }
-      promise.resolve(queue.drain())
+      Task {
+        let status = await queue.drain()
+        promise.resolve(status)
+      }
     }
 
     /// Returns queue status. Pass { includeEntries: true } for full list.
@@ -1404,9 +1413,11 @@ public class ExpoCloudKitModule: Module {
       guard let queue = self?.offlineQueue else {
         promise.reject(CloudKitModuleError.notConfigured); return
       }
-      promise.resolve(
-        queue.getStatus(includeEntries: options["includeEntries"] as? Bool ?? false)
-      )
+      let includeEntries = options["includeEntries"] as? Bool ?? false
+      Task {
+        let status = await queue.getStatus(includeEntries: includeEntries)
+        promise.resolve(status)
+      }
     }
 
     /// Removes entries by status ("pending"|"retrying"|"failed"|"all").
@@ -1414,8 +1425,11 @@ public class ExpoCloudKitModule: Module {
       guard let queue = self?.offlineQueue else {
         promise.reject(CloudKitModuleError.notConfigured); return
       }
-      queue.clear(status: options["status"] as? String ?? "all")
-      promise.resolve(nil)
+      let filterStatus = options["status"] as? String ?? "all"
+      Task {
+        await queue.clear(status: filterStatus)
+        promise.resolve(nil)
+      }
     }
 
     /// Resets all failed entries to pending and immediately triggers a drain.
@@ -1423,8 +1437,10 @@ public class ExpoCloudKitModule: Module {
       guard let queue = self?.offlineQueue else {
         promise.reject(CloudKitModuleError.notConfigured); return
       }
-      queue.retryFailed()
-      promise.resolve(nil)
+      Task {
+        await queue.retryFailed()
+        promise.resolve(nil)
+      }
     }
 
     // -------------------------------------------------------------------------
