@@ -133,11 +133,16 @@ final class CloudKitRecordManager {
   // MARK: - Fetch
 
   /// Fetches a single record by its type and ID.
+  ///
+  /// Uses `CKFetchRecordsOperation` so that `desiredKeys` can be specified.
+  /// When `desiredKeys` is non-nil, only those field keys are fetched from
+  /// the server — avoids over-fetching large field sets.
   func fetchRecord(
     recordType: String,
     recordId: String,
     zoneName: String?,
     database scope: CKDatabase.Scope,
+    desiredKeys: [String]? = nil,
     completion: @escaping (Result<CKRecord, Error>) -> Void
   ) {
     let zoneID: CKRecordZone.ID
@@ -150,17 +155,22 @@ final class CloudKitRecordManager {
     let recordID = CKRecord.ID(recordName: recordId, zoneID: zoneID)
     let db = database(for: scope)
 
-    db.fetch(withRecordID: recordID) { record, error in
-      if let error = error {
-        completion(.failure(error))
-        return
-      }
-      guard let record = record else {
-        completion(.failure(CKError(.unknownItem)))
-        return
-      }
-      completion(.success(record))
+    let operation = CKFetchRecordsOperation(recordIDs: [recordID])
+    operation.qualityOfService = .userInitiated
+    if let desiredKeys = desiredKeys {
+      operation.desiredKeys = desiredKeys
     }
+
+    operation.perRecordResultBlock = { _, result in
+      switch result {
+      case .success(let record):
+        completion(.success(record))
+      case .failure(let error):
+        completion(.failure(error))
+      }
+    }
+
+    db.add(operation)
   }
 
   // MARK: - Query
@@ -177,6 +187,7 @@ final class CloudKitRecordManager {
     database scope: CKDatabase.Scope,
     resultsLimit: Int,
     cursor: CKQueryOperation.Cursor?,
+    desiredKeys: [CKRecord.FieldKey]? = nil,
     completion: @escaping (Result<([CKRecord], CKQueryOperation.Cursor?), Error>) -> Void
   ) {
     let db = database(for: scope)
@@ -198,6 +209,9 @@ final class CloudKitRecordManager {
     operation.zoneID = zoneID
     operation.resultsLimit = resultsLimit
     operation.qualityOfService = .userInitiated
+    if let desiredKeys = desiredKeys {
+      operation.desiredKeys = desiredKeys
+    }
 
     operation.recordMatchedBlock = { _, result in
       switch result {
@@ -282,6 +296,7 @@ final class CloudKitRecordManager {
   func fetchRecordZoneChanges(
     zoneNames: [String],
     database scope: CKDatabase.Scope,
+    desiredKeys: [CKRecord.FieldKey]? = nil,
     completion: @escaping (Result<[String: Any], Error>) -> Void
   ) {
     let db = database(for: scope)
@@ -296,7 +311,11 @@ final class CloudKitRecordManager {
     var moreComing = false
 
     let configs = zoneIDs.reduce(into: [CKRecordZone.ID: CKFetchRecordZoneChangesOperation.ZoneConfiguration]()) { dict, id in
-      dict[id] = CKFetchRecordZoneChangesOperation.ZoneConfiguration()
+      var config = CKFetchRecordZoneChangesOperation.ZoneConfiguration()
+      if let desiredKeys = desiredKeys {
+        config.desiredKeys = desiredKeys
+      }
+      dict[id] = config
     }
 
     let operation = CKFetchRecordZoneChangesOperation(

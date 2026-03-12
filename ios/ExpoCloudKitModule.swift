@@ -141,6 +141,35 @@ public class ExpoCloudKitModule: Module {
       }
     }
 
+    /// Fetches the current user's record ID (iCloud account identifier).
+    ///
+    /// Returns the `recordName` string of the user's `_defaultZone` record —
+    /// typically a stable opaque identifier starting with "_".
+    /// Rejects with `notConfigured` if `configure()` has not been called,
+    /// or with the mapped CKError if the account is unavailable / not authenticated.
+    AsyncFunction("fetchUserRecordID") { [weak self] (promise: Promise) in
+      guard let self = self, let container = self.container else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+      container.ckContainer.fetchUserRecordID { recordID, error in
+        if let error = error {
+          promise.reject(Converters.toExpoError(error))
+          return
+        }
+        guard let recordID = recordID else {
+          promise.reject(ExpoCloudKitBridgeError(
+            code: "UNKNOWN",
+            message: "fetchUserRecordID returned nil without an error",
+            retryAfterSeconds: nil,
+            serverRecord: nil
+          ))
+          return
+        }
+        promise.resolve(recordID.recordName)
+      }
+    }
+
     // -------------------------------------------------------------------------
     // Zone Management
     // -------------------------------------------------------------------------
@@ -262,7 +291,10 @@ public class ExpoCloudKitModule: Module {
     }
 
     /// Fetches a single record by type and recordName.
-    AsyncFunction("fetchRecord") { [weak self] (recordType: String, recordId: String, zoneName: String?, database: String, promise: Promise) in
+    ///
+    /// Pass `desiredKeys` to limit which fields are fetched from the server.
+    /// When omitted (or nil), all fields are fetched.
+    AsyncFunction("fetchRecord") { [weak self] (recordType: String, recordId: String, zoneName: String?, database: String, desiredKeys: [String]?, promise: Promise) in
       guard let self = self, let recordManager = self.recordManager else {
         promise.reject(CloudKitModuleError.notConfigured)
         return
@@ -272,7 +304,8 @@ public class ExpoCloudKitModule: Module {
         recordType: recordType,
         recordId: recordId,
         zoneName: zoneName,
-        database: scope
+        database: scope,
+        desiredKeys: desiredKeys
       ) { result in
         switch result {
         case .success(let record):
@@ -284,6 +317,9 @@ public class ExpoCloudKitModule: Module {
     }
 
     /// Queries records by type with optional predicate, sort, and pagination.
+    ///
+    /// Pass `desiredKeys` to limit which fields are fetched from the server.
+    /// When omitted (or nil), all fields are fetched.
     AsyncFunction("queryRecords") { [weak self] (
       recordType: String,
       predicateDict: [String: Any]?,
@@ -292,6 +328,7 @@ public class ExpoCloudKitModule: Module {
       database: String,
       resultsLimit: Int,
       cursor: String?,
+      desiredKeys: [String]?,
       promise: Promise
     ) in
       guard let self = self, let recordManager = self.recordManager else {
@@ -315,7 +352,8 @@ public class ExpoCloudKitModule: Module {
         zoneName: zoneName,
         database: scope,
         resultsLimit: resultsLimit,
-        cursor: resolvedCursor
+        cursor: resolvedCursor,
+        desiredKeys: desiredKeys
       ) { [weak self] result in
         switch result {
         case .success(let (records, nextCursor)):
@@ -362,13 +400,16 @@ public class ExpoCloudKitModule: Module {
     }
 
     /// Fetches all record changes in the specified zones since the last sync token.
-    AsyncFunction("fetchRecordZoneChanges") { [weak self] (zoneNames: [String], database: String, promise: Promise) in
+    ///
+    /// Pass `desiredKeys` to limit which fields are included in changed records.
+    /// When omitted (or nil), all fields are fetched.
+    AsyncFunction("fetchRecordZoneChanges") { [weak self] (zoneNames: [String], database: String, desiredKeys: [String]?, promise: Promise) in
       guard let self = self, let recordManager = self.recordManager else {
         promise.reject(CloudKitModuleError.notConfigured)
         return
       }
       let scope = Converters.toDatabaseScope(database)
-      recordManager.fetchRecordZoneChanges(zoneNames: zoneNames, database: scope) { result in
+      recordManager.fetchRecordZoneChanges(zoneNames: zoneNames, database: scope, desiredKeys: desiredKeys) { result in
         switch result {
         case .success(let changes):
           promise.resolve(changes)
