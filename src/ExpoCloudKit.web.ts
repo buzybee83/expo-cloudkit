@@ -213,9 +213,24 @@ export async function authenticateWeb(): Promise<AccountStatus> {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const userIdentity: any = await _container.setUpAuth();
       if (userIdentity) {
+        // Already signed in
         setWebAuthState({
           isAuthenticated: true,
           userRecordName: userIdentity?.userRecordName,
+        });
+        return 'available';
+      }
+
+      // Not yet signed in — wait for the user to complete sign-in.
+      // CloudKit JS injects its own sign-in button into the DOM element with
+      // id="apple-sign-in-button" (or the id passed in configureWeb's signInButton).
+      // whenUserSignsIn() resolves when that button is clicked and auth completes.
+      if (typeof _container.whenUserSignsIn === 'function') {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const identity: any = await _container.whenUserSignsIn();
+        setWebAuthState({
+          isAuthenticated: true,
+          userRecordName: identity?.userRecordName,
         });
         return 'available';
       }
@@ -225,7 +240,7 @@ export async function authenticateWeb(): Promise<AccountStatus> {
     return webAuthStateToAccountStatus(getWebAuthState());
   } catch (err) {
     setWebAuthState({ isAuthenticated: false, userRecordName: undefined });
-    return 'noAccount';
+    throw mapCKJSError(err, 'general');
   }
 }
 

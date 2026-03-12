@@ -95,9 +95,22 @@ export function AccountBanner() {
         </Text>
       )}
 
+      {/* Web: no API token configured */}
+      {Platform.OS === 'web' && !process.env.EXPO_PUBLIC_CLOUDKIT_API_TOKEN && (
+        <Text style={styles.hint}>
+          ⚠️ Set EXPO_PUBLIC_CLOUDKIT_API_TOKEN in .env (see .env.example) and use a real container ID to enable sign-in.
+        </Text>
+      )}
+
       {/* Web: show sign-in button when not yet authenticated */}
-      {Platform.OS === 'web' && status !== 'available' && status !== 'loading' && (
+      {Platform.OS === 'web' && !!process.env.EXPO_PUBLIC_CLOUDKIT_API_TOKEN && status !== 'available' && status !== 'loading' && (
         <View style={styles.webSignIn}>
+          {/* CloudKit JS injects Apple's hosted sign-in button into this element.
+              Our Pressable below triggers authenticateWeb() which calls
+              whenUserSignsIn() — that resolves once the CloudKit JS button is
+              clicked and Apple's OAuth popup completes. */}
+          {/* @ts-expect-error: nativeID maps to DOM id on web */}
+          <View nativeID="apple-sign-in-button" style={styles.ckSignInAnchor} />
           <Pressable
             style={[styles.signInButton, isSigningIn && styles.signInButtonDisabled]}
             onPress={() => void handleWebSignIn()}
@@ -151,6 +164,11 @@ const styles = StyleSheet.create({
   webSignIn: {
     marginTop: 4,
     gap: 8,
+  },
+  ckSignInAnchor: {
+    // CloudKit JS injects its sign-in button here.
+    // minHeight ensures the injected button is visible.
+    minHeight: 40,
   },
   signInButton: {
     backgroundColor: '#000',
