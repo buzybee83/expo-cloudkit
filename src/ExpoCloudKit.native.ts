@@ -55,6 +55,7 @@ import type {
   OfflineQueueEntryStatus,
   OfflineQueueEvent,
   OfflineQueueStatus,
+  OperationConfig,
   ResolvedRecord,
 } from './types';
 
@@ -245,9 +246,10 @@ export function fetchZones(database: DatabaseScope = 'private'): Promise<Zone[]>
  */
 export function saveRecords(
   records: RecordToSave[],
-  database: DatabaseScope = 'private'
+  database: DatabaseScope = 'private',
+  operationConfig?: OperationConfig
 ): Promise<SavedRecord[]> {
-  return callAsync(() => NativeModule!.saveRecords(records, database));
+  return callAsync(() => NativeModule!.saveRecords(records, database, operationConfig ?? null));
 }
 
 /**
@@ -264,9 +266,10 @@ export function fetchRecord(
   recordId: string,
   zoneName?: string,
   database: DatabaseScope = 'private',
-  desiredKeys?: string[]
+  desiredKeys?: string[],
+  operationConfig?: OperationConfig
 ): Promise<CloudKitRecord> {
-  return callAsync(() => NativeModule!.fetchRecord(recordType, recordId, zoneName ?? null, database, desiredKeys ?? null));
+  return callAsync(() => NativeModule!.fetchRecord(recordType, recordId, zoneName ?? null, database, desiredKeys ?? null, operationConfig ?? null));
 }
 
 /**
@@ -290,7 +293,8 @@ export function queryRecords(
   database: DatabaseScope = 'private',
   resultsLimit?: number,
   cursor?: string,
-  desiredKeys?: string[]
+  desiredKeys?: string[],
+  operationConfig?: OperationConfig
 ): Promise<QueryResult> {
   return callAsync(() =>
     NativeModule!.queryRecords(
@@ -301,7 +305,8 @@ export function queryRecords(
       database,
       resultsLimit ?? 100,
       cursor ?? null,
-      desiredKeys ?? null
+      desiredKeys ?? null,
+      operationConfig ?? null
     )
   );
 }
@@ -314,9 +319,10 @@ export function queryRecords(
  */
 export function deleteRecords(
   recordIds: RecordIdentifier[],
-  database: DatabaseScope = 'private'
+  database: DatabaseScope = 'private',
+  operationConfig?: OperationConfig
 ): Promise<void> {
-  return callAsync(() => NativeModule!.deleteRecords(recordIds, database));
+  return callAsync(() => NativeModule!.deleteRecords(recordIds, database, operationConfig ?? null));
 }
 
 /**
@@ -333,9 +339,10 @@ export function deleteRecords(
 export function fetchRecordZoneChanges(
   zoneNames: string[],
   database: DatabaseScope = 'private',
-  desiredKeys?: string[]
+  desiredKeys?: string[],
+  operationConfig?: OperationConfig
 ): Promise<ZoneChanges> {
-  return callAsync(() => NativeModule!.fetchRecordZoneChanges(zoneNames, database, desiredKeys ?? null));
+  return callAsync(() => NativeModule!.fetchRecordZoneChanges(zoneNames, database, desiredKeys ?? null, operationConfig ?? null));
 }
 
 // ---------------------------------------------------------------------------

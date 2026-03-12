@@ -922,6 +922,36 @@ export interface QueuedResult {
 }
 
 // ---------------------------------------------------------------------------
+// Operation Configuration (G.3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Optional CKOperation configuration. Controls quality-of-service scheduling
+ * and network timeout for individual CloudKit operations.
+ *
+ * On native (iOS), these values map directly to `CKOperationConfiguration.qualityOfService`
+ * and `CKOperationConfiguration.timeoutIntervalForRequest`.
+ *
+ * On web, CloudKit JS does not expose QoS or timeout controls — this parameter
+ * is accepted but silently ignored.
+ */
+export interface OperationConfig {
+  /**
+   * Quality of service for the underlying CKOperation.
+   * - 'userInitiated': Highest priority. Use for operations triggered directly by user interaction.
+   * - 'utility': Lower priority. Use for background sync or prefetch.
+   * - 'background': Lowest priority. Use for bulk imports or non-time-sensitive work.
+   * - 'default': System default (equivalent to 'utility' in most contexts).
+   * Default: 'userInitiated'
+   */
+  qos?: 'userInitiated' | 'utility' | 'background' | 'default';
+  /**
+   * Timeout in seconds for the network request. When omitted, the system default is used.
+   */
+  timeout?: number;
+}
+
+// ---------------------------------------------------------------------------
 // Web — CloudKit Web Services configuration
 // ---------------------------------------------------------------------------
 

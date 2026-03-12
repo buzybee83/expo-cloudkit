@@ -65,6 +65,7 @@ import type {
   WebConfigOptions,
   Zone,
   ZoneChanges,
+  OperationConfig,
 } from './types';
 import {
   configureAuthPersistence,
@@ -485,7 +486,8 @@ export async function fetchZones(database: DatabaseScope = 'private'): Promise<Z
  */
 export async function saveRecords(
   records: RecordToSave[],
-  database: DatabaseScope = 'private'
+  database: DatabaseScope = 'private',
+  _operationConfig?: OperationConfig
 ): Promise<SavedRecord[]> {
   const container = requireContainer();
   const db = resolveDatabase(container, database);
@@ -532,7 +534,8 @@ export async function fetchRecord(
   recordId: string,
   zoneName?: string,
   database: DatabaseScope = 'private',
-  desiredKeys?: string[]
+  desiredKeys?: string[],
+  _operationConfig?: OperationConfig
 ): Promise<CloudKitRecord> {
   const container = requireContainer();
   const db = resolveDatabase(container, database);
@@ -587,7 +590,8 @@ export async function queryRecords(
   database: DatabaseScope = 'private',
   resultsLimit?: number,
   cursor?: string,
-  desiredKeys?: string[]
+  desiredKeys?: string[],
+  _operationConfig?: OperationConfig
 ): Promise<QueryResult> {
   const container = requireContainer();
   const db = resolveDatabase(container, database);
@@ -651,7 +655,8 @@ export async function queryRecords(
  */
 export async function deleteRecords(
   recordIds: RecordIdentifier[],
-  database: DatabaseScope = 'private'
+  database: DatabaseScope = 'private',
+  _operationConfig?: OperationConfig
 ): Promise<void> {
   const container = requireContainer();
   const db = resolveDatabase(container, database);
@@ -686,7 +691,8 @@ export async function deleteRecords(
 export async function fetchRecordZoneChanges(
   zoneNames: string[],
   database: DatabaseScope = 'private',
-  desiredKeys?: string[]
+  desiredKeys?: string[],
+  _operationConfig?: OperationConfig
 ): Promise<ZoneChanges> {
   const container = requireContainer();
   const db = resolveDatabase(container, database);

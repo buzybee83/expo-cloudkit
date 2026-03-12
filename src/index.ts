@@ -98,6 +98,8 @@ export type {
   OfflineQueueDrainResult,
   QueuedResult,
   OfflineQueueEvent,
+  // G.3 — Operation configuration
+  OperationConfig,
 } from './types';
 
 // Errors
