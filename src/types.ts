@@ -987,6 +987,86 @@ export interface QueuedResult {
 }
 
 // ---------------------------------------------------------------------------
+// Multi-container (H.3)
+// ---------------------------------------------------------------------------
+
+/**
+ * A scoped CloudKit client bound to a specific container.
+ * Returned by `createCloudKitClient()`. All methods operate on the
+ * container specified at creation time, independently of the module-level
+ * singleton configured by `configure()`.
+ *
+ * Remember to call `client.destroy()` when done to release native resources.
+ *
+ * @example
+ * ```typescript
+ * const client = await createCloudKitClient('iCloud.com.example.secondary');
+ * const results = await client.queryRecords('Note', undefined, undefined, 'MyZone');
+ * await client.destroy();
+ * ```
+ */
+export interface CloudKitClient {
+  /** The CloudKit container identifier this client is bound to. */
+  readonly containerId: string;
+  /** Opaque client ID used internally to route calls to the correct native instance. */
+  readonly clientId: string;
+
+  /**
+   * Saves one or more records to the specified database in this client's container.
+   *
+   * @param records         - Records to save. Provide `recordName` to update an existing record.
+   * @param database        - Target database. Default: 'private'.
+   * @param operationConfig - Optional QoS and timeout configuration.
+   */
+  saveRecords(
+    records: RecordToSave[],
+    database?: DatabaseScope,
+    operationConfig?: OperationConfig
+  ): Promise<SavedRecord[]>;
+
+  /**
+   * Queries records by type with optional predicate and sort descriptors.
+   *
+   * @param recordType      - CKRecord type to query.
+   * @param predicate       - Optional filter predicate.
+   * @param sortDescriptors - Optional sort order.
+   * @param zoneName        - Zone to query. Omit for the default zone.
+   * @param database        - Target database. Default: 'private'.
+   * @param resultsLimit    - Max records to return. Default: 200.
+   * @param cursor          - Pagination cursor from a previous QueryResult.
+   * @param desiredKeys     - Field names to fetch. Omit to fetch all fields.
+   * @param operationConfig - Optional QoS and timeout configuration.
+   */
+  queryRecords(
+    recordType: string,
+    predicate?: QueryPredicate,
+    sortDescriptors?: SortDescriptor[],
+    zoneName?: string,
+    database?: DatabaseScope,
+    resultsLimit?: number,
+    cursor?: string,
+    desiredKeys?: string[],
+    operationConfig?: OperationConfig
+  ): Promise<QueryResult>;
+
+  /**
+   * Deletes one or more records from the specified database in this client's container.
+   *
+   * @param recordIds       - Record identifiers to delete.
+   * @param database        - Target database. Default: 'private'.
+   * @param operationConfig - Optional QoS and timeout configuration.
+   */
+  deleteRecords(
+    recordIds: RecordIdentifier[],
+    database?: DatabaseScope,
+    operationConfig?: OperationConfig
+  ): Promise<void>;
+
+  /** Releases native resources associated with this client. */
+  destroy(): Promise<void>;
+}
+
+// ---------------------------------------------------------------------------
 // Operation Configuration (G.3)
 // ---------------------------------------------------------------------------
 

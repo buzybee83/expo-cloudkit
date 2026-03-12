@@ -18,6 +18,7 @@ import type {
   AccountStatus,
   AssetProgress,
   BatchProgress,
+  CloudKitClient,
   CloudKitRecord,
   CloudKitSubscription,
   ContainerInfo,
@@ -285,6 +286,13 @@ export function fetchRecord(
  * @param resultsLimit    - Max records to return (1–200). Default: 100.
  * @param cursor          - Pagination cursor from a previous QueryResult.
  * @param desiredKeys     - Field names to fetch. Omit to fetch all fields.
+ * @param operationConfig - Optional QoS and timeout configuration.
+ * @param persistCursor   - When `true`, the native layer persists the returned
+ *                          cursor to device storage keyed by `recordType` and
+ *                          `zoneName`. On subsequent calls with the same key,
+ *                          if `cursor` is omitted the persisted cursor is used
+ *                          automatically. Call `clearPersistedCursors()` to
+ *                          reset all persisted cursors. Default: `false`.
  */
 export function queryRecords(
   recordType: string,
@@ -295,7 +303,8 @@ export function queryRecords(
   resultsLimit?: number,
   cursor?: string,
   desiredKeys?: string[],
-  operationConfig?: OperationConfig
+  operationConfig?: OperationConfig,
+  persistCursor?: boolean
 ): Promise<QueryResult> {
   return callAsync(() =>
     NativeModule!.queryRecords(
@@ -307,7 +316,8 @@ export function queryRecords(
       resultsLimit ?? 100,
       cursor ?? null,
       desiredKeys ?? null,
-      operationConfig ?? null
+      operationConfig ?? null,
+      persistCursor ?? false
     )
   );
 }
@@ -1321,4 +1331,100 @@ export function isWebAuthenticated(): boolean {
   // On native there is no CloudKit JS auth session; always false.
   // Auth is handled by the OS — use getAccountStatus() to check account availability.
   return false;
+}
+
+// ---------------------------------------------------------------------------
+// H.3 — Multi-container support
+// ---------------------------------------------------------------------------
+
+/**
+ * Creates an isolated CloudKit client bound to the specified container.
+ *
+ * Use this when your app needs to operate on multiple CloudKit containers
+ * simultaneously without conflicting with the module-level singleton
+ * configured by `configure()`. Each client holds its own native
+ * `CKContainer` reference and routes all calls through it.
+ *
+ * Remember to call `client.destroy()` when done to release native resources.
+ *
+ * @param containerId - CloudKit container identifier, e.g. "iCloud.com.example.secondary".
+ * @returns A `CloudKitClient` scoped to the specified container.
+ * @throws {CloudKitNotSupportedError} On non-iOS platforms.
+ * @throws {CloudKitError} If the container identifier is invalid.
+ *
+ * @example
+ * ```typescript
+ * const client = await createCloudKitClient('iCloud.com.example.secondary');
+ * try {
+ *   const results = await client.queryRecords('Note', undefined, undefined, 'MyZone');
+ *   console.log(results.records);
+ * } finally {
+ *   await client.destroy();
+ * }
+ * ```
+ */
+export async function createCloudKitClient(containerId: string): Promise<CloudKitClient> {
+  const clientId: string = await callAsync(() => NativeModule!.createClient(containerId));
+
+  return {
+    containerId,
+    clientId,
+    saveRecords: (records, database = 'private', operationConfig) =>
+      callAsync(() =>
+        NativeModule!.clientSaveRecords(clientId, records, database, operationConfig ?? null)
+      ),
+    queryRecords: (
+      recordType,
+      predicate,
+      sortDescriptors,
+      zoneName,
+      database = 'private',
+      resultsLimit = 200,
+      cursor,
+      desiredKeys,
+      operationConfig
+    ) =>
+      callAsync(() =>
+        NativeModule!.clientQueryRecords(
+          clientId,
+          recordType,
+          predicate ?? null,
+          sortDescriptors ?? null,
+          zoneName ?? null,
+          database,
+          resultsLimit,
+          cursor ?? null,
+          desiredKeys ?? null,
+          operationConfig ?? null
+        )
+      ),
+    deleteRecords: (recordIds, database = 'private', operationConfig) =>
+      callAsync(() =>
+        NativeModule!.clientDeleteRecords(clientId, recordIds, database, operationConfig ?? null)
+      ),
+    destroy: () => callAsync(() => NativeModule!.destroyClient(clientId)),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// H.5 — Cursor persistence
+// ---------------------------------------------------------------------------
+
+/**
+ * Removes all persisted query cursors from device storage.
+ *
+ * Persisted cursors are written by `queryRecords()` when called with
+ * `persistCursor: true`. Calling this function resets all of them so that
+ * the next paginated query starts from the beginning.
+ *
+ * @throws {CloudKitNotSupportedError} On non-iOS platforms.
+ *
+ * @example
+ * ```typescript
+ * await clearPersistedCursors();
+ * // Next queryRecords call with persistCursor: true starts fresh
+ * ```
+ */
+export function clearPersistedCursors(): Promise<void> {
+  return callAsync(() => NativeModule!.clearPersistedCursors());
 }

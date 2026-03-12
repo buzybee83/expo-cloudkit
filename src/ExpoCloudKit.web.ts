@@ -27,6 +27,7 @@ import type {
   AcceptedShare,
   AssetProgress,
   BatchProgress,
+  CloudKitClient,
   CloudKitRecord,
   CloudKitSubscription,
   ContainerInfo,
@@ -592,7 +593,8 @@ export async function queryRecords(
   resultsLimit?: number,
   cursor?: string,
   desiredKeys?: string[],
-  _operationConfig?: OperationConfig
+  _operationConfig?: OperationConfig,
+  _persistCursor?: boolean
 ): Promise<QueryResult> {
   const container = requireContainer();
   const db = resolveDatabase(container, database);
@@ -1328,4 +1330,29 @@ export function addOfflineQueueListener(
   _callback: (event: OfflineQueueEvent) => void
 ): Subscription {
   return noopSubscription;
+}
+
+// ---------------------------------------------------------------------------
+// H.3 — Multi-container support (web stub)
+// ---------------------------------------------------------------------------
+
+/**
+ * Throws `CloudKitNotSupportedError` — multi-container clients are not
+ * supported on web. Use `configureWeb()` and the module-level functions
+ * to interact with your container on web.
+ */
+export function createCloudKitClient(_containerId: string): Promise<CloudKitClient> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+// ---------------------------------------------------------------------------
+// H.5 — Cursor persistence (web stub)
+// ---------------------------------------------------------------------------
+
+/**
+ * No-op on web — there is no cursor persistence layer in CloudKit JS.
+ * Resolves immediately.
+ */
+export function clearPersistedCursors(): Promise<void> {
+  return Promise.resolve();
 }

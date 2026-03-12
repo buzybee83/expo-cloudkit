@@ -103,6 +103,8 @@ export type {
   OfflineQueueEvent,
   // G.3 — Operation configuration
   OperationConfig,
+  // H.3 — Multi-container
+  CloudKitClient,
 } from './types';
 
 // Errors
@@ -204,6 +206,12 @@ export {
   retryFailedOperations,
   addOfflineQueueListener,
 } from './ExpoCloudKit';
+
+// H.3 — Multi-container support
+export { createCloudKitClient } from './ExpoCloudKit';
+
+// H.5 — Cursor persistence
+export { clearPersistedCursors } from './ExpoCloudKit';
 
 // Phase D — DX Improvements
 export { CloudKitProvider, useAccountStatus, useContainerId } from './CloudKitProvider';
