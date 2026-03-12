@@ -486,6 +486,22 @@ export interface SyncEngineConfig {
    * Default: true.
    */
   automaticallySync?: boolean;
+  /**
+   * When `true`, the module emits `onSyncConflict` events instead of applying
+   * server-record-wins automatically whenever a write conflict is detected.
+   *
+   * The caller MUST listen for these events via `addSyncEngineListener` (filtering
+   * for `event.type === 'conflict'`) and call `resolveSyncConflict()` for each
+   * emitted conflict. If `resolveSyncConflict()` is never called for a given
+   * `requestId`, the sync engine will hang waiting for resolution — no further
+   * records will be sent until every pending conflict is resolved.
+   *
+   * Set to `false` (or omit) to retain the default server-record-wins behavior,
+   * in which conflicts are silently resolved by discarding the client version.
+   *
+   * Default: `false`.
+   */
+  resolveConflicts?: boolean;
 }
 
 /**
@@ -522,7 +538,8 @@ export type SyncEngineEventType =
   | 'stateChanged'
   | 'recordsFetched'
   | 'recordsSent'
-  | 'syncError';
+  | 'syncError'
+  | 'conflict';
 
 /**
  * Event emitted when the sync provider's lifecycle state changes.
@@ -579,6 +596,29 @@ export interface SyncErrorEvent {
 }
 
 /**
+ * Event emitted when CKSyncEngine detects a write conflict and
+ * `SyncEngineConfig.resolveConflicts` is `true`.
+ *
+ * The caller must call `resolveSyncConflict(requestId, resolvedRecord)` to
+ * unblock the sync engine. Pass `null` for `resolvedRecord` to accept the
+ * server version. If `resolveSyncConflict()` is never called, the sync
+ * engine will hang until the app is restarted.
+ *
+ * Only emitted on iOS 17+ (CKSyncEngine). On iOS 16 the legacy fetch path
+ * does not support conflict callbacks; conflicts are silently resolved
+ * server-record-wins regardless of this setting.
+ */
+export interface SyncConflictEvent {
+  type: 'conflict';
+  /** Opaque identifier; pass this to `resolveSyncConflict()`. */
+  requestId: string;
+  /** The version of the record that was staged locally for upload. */
+  clientRecord: CloudKitRecord;
+  /** The current server version of the record that conflicts with the client version. */
+  serverRecord: CloudKitRecord;
+}
+
+/**
  * Union of all possible sync engine events.
  * Narrowed by the `type` discriminant field.
  *
@@ -588,6 +628,10 @@ export interface SyncErrorEvent {
  *   if (event.type === 'recordsFetched') {
  *     console.log(event.changedRecords);
  *   }
+ *   if (event.type === 'conflict') {
+ *     // Merge client and server, then resolve
+ *     resolveSyncConflict(event.requestId, mergedRecord);
+ *   }
  * });
  * ```
  */
@@ -595,7 +639,8 @@ export type SyncEngineEvent =
   | SyncStateChangedEvent
   | RecordsFetchedEvent
   | RecordsSentEvent
-  | SyncErrorEvent;
+  | SyncErrorEvent
+  | SyncConflictEvent;
 
 /**
  * A queued change for the sync engine to process on its next send cycle.

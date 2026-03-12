@@ -480,6 +480,40 @@ export function stopSyncEngine(): Promise<void> {
   return callAsync(() => NativeModule!.stopSyncEngine());
 }
 
+/**
+ * Resolves a pending sync conflict previously emitted via an `onSyncEngineEvent`
+ * event with `type === 'conflict'`.
+ *
+ * Must only be called when `SyncEngineConfig.resolveConflicts` is `true`.
+ * Each `requestId` must be resolved exactly once; resolving an unknown or
+ * already-resolved `requestId` is a no-op on the native side.
+ *
+ * @param requestId - The `requestId` from the `conflict` sync engine event.
+ * @param resolvedRecord - The merged record to save, or `null` to accept
+ *   the server version and discard the client version.
+ *
+ * @example
+ * ```typescript
+ * addSyncEngineListener((event) => {
+ *   if (event.type === 'conflict') {
+ *     const merged = mergeRecords(event.clientRecord, event.serverRecord);
+ *     resolveSyncConflict(event.requestId, merged ?? null);
+ *   }
+ * });
+ * ```
+ */
+export function resolveSyncConflict(
+  requestId: string,
+  resolvedRecord: RecordToSave | null
+): void {
+  assertNativeAvailable();
+  try {
+    NativeModule!.resolveSyncConflict(requestId, resolvedRecord);
+  } catch (err) {
+    throw CloudKitError.fromNativeError(err);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Asset progress (Phase D)
 // ---------------------------------------------------------------------------

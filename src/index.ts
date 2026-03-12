@@ -65,6 +65,7 @@ export type {
   Subscription,
   // Phase B — CKSyncEngine
   SyncEngineConfig,
+  SyncConflictEvent,
   SyncEngineEvent,
   SyncEngineEventType,
   SyncProviderStatus,
@@ -133,6 +134,7 @@ export {
   enqueuePendingChange,
   addSyncEngineListener,
   stopSyncEngine,
+  resolveSyncConflict,
 } from './ExpoCloudKit';
 
 // Phase C — Batch Progress
