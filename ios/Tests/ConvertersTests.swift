@@ -433,6 +433,136 @@ final class ConvertersTests: XCTestCase {
     XCTAssertEqual(dict["code"] as? String, "NOT_AUTHENTICATED")
     XCTAssertNotNil(dict["message"])
   }
+
+  // MARK: - toCKRecord — additional field types
+
+  func test_toCKRecord_roundTrip_dateField() throws {
+    let input: [String: Any] = [
+      "recordType": "Event",
+      "fields": [
+        "startAt": ["type": "date", "value": "1970-01-01T00:00:00Z"]
+      ]
+    ]
+    let record = try Converters.toCKRecord(from: input)
+    let date = record["startAt"] as? Date
+    XCTAssertNotNil(date, "Expected a Date value for field 'startAt'")
+    XCTAssertEqual(date!.timeIntervalSince1970, 0.0, accuracy: 1.0)
+  }
+
+  func test_toCKRecord_roundTrip_locationField() throws {
+    let input: [String: Any] = [
+      "recordType": "Place",
+      "fields": [
+        "coords": [
+          "type": "location",
+          "value": ["latitude": 37.7749, "longitude": -122.4194]
+        ]
+      ]
+    ]
+    let record = try Converters.toCKRecord(from: input)
+    let location = record["coords"] as? CLLocation
+    XCTAssertNotNil(location, "Expected a CLLocation value for field 'coords'")
+    XCTAssertEqual(location!.coordinate.latitude, 37.7749, accuracy: 0.0001)
+    XCTAssertEqual(location!.coordinate.longitude, -122.4194, accuracy: 0.0001)
+  }
+
+  func test_toCKRecord_roundTrip_stringListField() throws {
+    let input: [String: Any] = [
+      "recordType": "Tag",
+      "fields": [
+        "tags": ["type": "stringList", "value": ["a", "b", "c"]]
+      ]
+    ]
+    let record = try Converters.toCKRecord(from: input)
+    let tags = record["tags"] as? [String]
+    XCTAssertNotNil(tags, "Expected a [String] value for field 'tags'")
+    XCTAssertEqual(tags, ["a", "b", "c"])
+  }
+
+  func test_toCKRecord_roundTrip_numberListField() throws {
+    let input: [String: Any] = [
+      "recordType": "Scores",
+      "fields": [
+        "scores": [
+          "type": "numberList",
+          "value": [NSNumber(value: 1.0), NSNumber(value: 2.0)]
+        ]
+      ]
+    ]
+    let record = try Converters.toCKRecord(from: input)
+    let scores = record["scores"] as? NSArray
+    XCTAssertNotNil(scores, "Expected an NSArray of NSNumbers for field 'scores'")
+    XCTAssertEqual(scores!.count, 2)
+    XCTAssertEqual((scores![0] as? NSNumber)?.doubleValue, 1.0, accuracy: 0.001)
+    XCTAssertEqual((scores![1] as? NSNumber)?.doubleValue, 2.0, accuracy: 0.001)
+  }
+
+  // MARK: - toExpoError — additional CKError codes
+
+  func test_toExpoError_serverRecordChanged_mapsToCONFLICT() {
+    let ckError = CKError(.serverRecordChanged)
+    let bridgeError = Converters.toExpoError(ckError) as? ExpoCloudKitBridgeError
+    XCTAssertNotNil(bridgeError)
+    XCTAssertEqual(bridgeError?.code, "CONFLICT")
+  }
+
+  func test_toExpoError_limitExceeded_mapsToLIMIT_EXCEEDED() {
+    let ckError = CKError(.limitExceeded)
+    let bridgeError = Converters.toExpoError(ckError) as? ExpoCloudKitBridgeError
+    XCTAssertNotNil(bridgeError)
+    XCTAssertEqual(bridgeError?.code, "LIMIT_EXCEEDED")
+  }
+
+  func test_toExpoError_assetFileTooBig_mapsToASSET_TOO_LARGE() {
+    let ckError = CKError(.assetFileTooBig)
+    let bridgeError = Converters.toExpoError(ckError) as? ExpoCloudKitBridgeError
+    XCTAssertNotNil(bridgeError)
+    XCTAssertEqual(bridgeError?.code, "ASSET_TOO_LARGE")
+  }
+
+  func test_toExpoError_operationCancelled_mapsToUNKNOWN() {
+    let ckError = CKError(.operationCancelled)
+    let bridgeError = Converters.toExpoError(ckError) as? ExpoCloudKitBridgeError
+    XCTAssertNotNil(bridgeError)
+    XCTAssertEqual(bridgeError?.code, "UNKNOWN")
+  }
+
+  // MARK: - toDictionary — reference field
+
+  func test_toDictionary_referenceField_typeAndValue() {
+    let record = CKRecord(recordType: "Note")
+    let refID = CKRecord.ID(recordName: "target-record-abc")
+    let reference = CKRecord.Reference(recordID: refID, action: .none)
+    record["ref"] = reference as CKRecordValue
+    let fields = self.fields(forRecord: record)
+
+    XCTAssertEqual(fields["ref"]?["type"] as? String, "reference")
+    let value = fields["ref"]?["value"] as? [String: Any]
+    XCTAssertNotNil(value, "Expected a [String: Any] value dict for reference field")
+    XCTAssertEqual(value?["recordName"] as? String, "target-record-abc")
+  }
+
+  func test_toDictionary_referenceField_deleteSelfAction() {
+    let record = CKRecord(recordType: "Note")
+    let refID = CKRecord.ID(recordName: "child-record-xyz")
+    let reference = CKRecord.Reference(recordID: refID, action: .deleteSelf)
+    record["ref"] = reference as CKRecordValue
+    let fields = self.fields(forRecord: record)
+
+    let value = fields["ref"]?["value"] as? [String: Any]
+    XCTAssertEqual(value?["action"] as? String, "deleteSelf")
+  }
+
+  func test_toDictionary_referenceField_noneAction() {
+    let record = CKRecord(recordType: "Note")
+    let refID = CKRecord.ID(recordName: "peer-record-def")
+    let reference = CKRecord.Reference(recordID: refID, action: .none)
+    record["ref"] = reference as CKRecordValue
+    let fields = self.fields(forRecord: record)
+
+    let value = fields["ref"]?["value"] as? [String: Any]
+    XCTAssertEqual(value?["action"] as? String, "none")
+  }
 }
 
 // MARK: - CKError convenience init (test helper)
