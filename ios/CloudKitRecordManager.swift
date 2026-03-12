@@ -19,6 +19,11 @@ final class CloudKitRecordManager {
   /// Maximum records per CKModifyRecordsOperation (CloudKit hard limit).
   static let batchSize = 400
 
+  /// UserDefaults key prefix used by cursor persistence (H.5).
+  /// Each persisted cursor is stored at "\(prefix)\(token)" so that all
+  /// expo-cloudkit cursor entries can be enumerated and cleared atomically.
+  private static let cursorDefaultsPrefix = "expo.cloudkit.cursor."
+
   // MARK: - Operation Configuration
 
   /// Applies optional JS-provided operation configuration to any CKOperation.
@@ -754,6 +759,56 @@ final class CloudKitRecordManager {
       }
     }
     return ids
+  }
+
+  // MARK: - Cursor Persistence (H.5)
+
+  /// Persists a `CKQueryOperation.Cursor` to `UserDefaults` under a key derived
+  /// from the opaque `token` string handed to JS.
+  ///
+  /// `NSKeyedArchiver` with `requiringSecureCoding: true` is the only supported
+  /// way to serialise a `CKQueryOperation.Cursor` — the type conforms to
+  /// `NSSecureCoding`. If archiving fails the cursor is silently dropped;
+  /// the in-memory cache entry remains authoritative for the current session.
+  ///
+  /// This is `internal` (not `private`) so that `ExpoCloudKitModule` can call
+  /// it from the module layer after assigning the UUID token to the new cursor.
+  func persistCursor(_ cursor: CKQueryOperation.Cursor, forToken token: String) {
+    guard let data = try? NSKeyedArchiver.archivedData(
+      withRootObject: cursor,
+      requiringSecureCoding: true
+    ) else { return }
+    UserDefaults.standard.set(data, forKey: Self.cursorDefaultsPrefix + token)
+  }
+
+  /// Attempts to deserialise a previously persisted cursor from `UserDefaults`.
+  ///
+  /// Returns `nil` when no persisted entry exists for `token` or when
+  /// unarchiving fails (e.g. the cursor has expired on the server since the
+  /// last app session — callers should treat nil as "start from the beginning").
+  ///
+  /// This is `internal` so that `ExpoCloudKitModule` can use it during cursor
+  /// resolution when the in-memory cache misses on a cold-start token.
+  func loadPersistedCursor(forToken token: String) -> CKQueryOperation.Cursor? {
+    guard let data = UserDefaults.standard.data(
+      forKey: Self.cursorDefaultsPrefix + token
+    ) else { return nil }
+    return try? NSKeyedUnarchiver.unarchivedObject(
+      ofClass: CKQueryOperation.Cursor.self,
+      from: data
+    )
+  }
+
+  /// Removes all cursor entries written by this module from `UserDefaults`.
+  ///
+  /// Call from `AsyncFunction("clearPersistedCursors")` in the module layer.
+  /// The in-memory cursor cache (`cursorStore`) is NOT cleared here — the module
+  /// layer is responsible for clearing that separately if required.
+  func clearPersistedCursors() {
+    let defaults = UserDefaults.standard
+    defaults.dictionaryRepresentation().keys
+      .filter { $0.hasPrefix(Self.cursorDefaultsPrefix) }
+      .forEach { defaults.removeObject(forKey: $0) }
   }
 
   // MARK: - Helpers

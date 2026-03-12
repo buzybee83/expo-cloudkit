@@ -49,9 +49,20 @@ public class ExpoCloudKitModule: Module {
   /// In-memory store of CKQueryOperation.Cursor objects, keyed by opaque UUID token.
   /// CKQueryOperation.Cursor is not serializable to Data via the public API — the
   /// only safe way to pass it across calls is to keep the Swift object alive in memory
-  /// and hand an opaque string token to JS. Cursors do not survive app restarts;
-  /// that is acceptable and expected for CloudKit cursor-based pagination.
+  /// and hand an opaque string token to JS. When H.5 persistence is enabled the token
+  /// is also written to UserDefaults so it survives app restarts.
   private var cursorCache: [String: CKQueryOperation.Cursor] = [:]
+
+  // MARK: - Multi-container client registry (H.3)
+
+  /// Named CloudKit clients, each bound to a specific container identifier.
+  /// Keyed by an opaque UUID client ID that is handed to JS after `createClient`.
+  /// Access is serialised through `clientsQueue` (barrier writes, concurrent reads).
+  private var clients: [String: CloudKitClient] = [:]
+
+  /// Concurrent queue that guards the `clients` dictionary.
+  /// Writes use `.barrier` to prevent races; reads use a plain `.sync`.
+  private let clientsQueue = DispatchQueue(label: "expo.cloudkit.clients", attributes: .concurrent)
 
   // MARK: - Sync provider (Phase B)
 
@@ -368,6 +379,7 @@ public class ExpoCloudKitModule: Module {
       cursor: String?,
       desiredKeys: [String]?,
       operationConfig: [String: Any]?,
+      persistCursor: Bool?,
       promise: Promise
     ) in
       guard let self = self, let recordManager = self.recordManager else {
@@ -377,12 +389,16 @@ public class ExpoCloudKitModule: Module {
       let scope = Converters.toDatabaseScope(database)
       let predicate = predicateDict.map { Converters.toPredicate(from: $0) } ?? NSPredicate(value: true)
       let sortDescriptors = sortDescriptorDicts?.compactMap { Converters.toNSSortDescriptor(from: $0) }
+      let shouldPersistCursor = persistCursor ?? false
 
-      // Resolve the cursor token to the live CKQueryOperation.Cursor object.
-      // CKQueryOperation.Cursor is opaque and cannot be constructed from Data —
-      // it must be the exact Swift object returned by a prior query operation.
-      // We store it in cursorCache keyed by a UUID string and give JS that token.
-      let resolvedCursor: CKQueryOperation.Cursor? = cursor.flatMap { self.cursorCache[$0] }
+      // Resolve the cursor token to a live CKQueryOperation.Cursor.
+      // Primary lookup: in-memory cursorCache (valid for the current app session).
+      // Fallback (H.5): UserDefaults-persisted cursor loaded by the record manager,
+      // which survives app restarts when the caller previously set persistCursor: true.
+      let resolvedCursor: CKQueryOperation.Cursor? = cursor.flatMap { token in
+        if let cached = self.cursorCache[token] { return cached }
+        return recordManager.loadPersistedCursor(forToken: token)
+      }
 
       recordManager.queryRecords(
         recordType: recordType,
@@ -397,12 +413,16 @@ public class ExpoCloudKitModule: Module {
       ) { [weak self] result in
         switch result {
         case .success(let (records, nextCursor)):
-          // If CloudKit returned a cursor, store it and give JS the token.
-          // If nil, there are no more pages.
+          // Store the cursor in the in-memory cache and give JS the opaque token.
+          // When shouldPersistCursor is true, also write to UserDefaults so the
+          // cursor survives the current app session (H.5).
           var nextToken: String? = nil
           if let nextCursor = nextCursor {
             let token = UUID().uuidString
             self?.cursorCache[token] = nextCursor
+            if shouldPersistCursor {
+              recordManager.persistCursor(nextCursor, forToken: token)
+            }
             nextToken = token
           }
           promise.resolve([
@@ -413,6 +433,20 @@ public class ExpoCloudKitModule: Module {
           promise.reject(Converters.toExpoError(error))
         }
       }
+    }
+
+    /// Removes all cursor entries persisted to UserDefaults by this module (H.5).
+    ///
+    /// The in-memory cursor cache is also cleared so stale tokens cannot be
+    /// used to accidentally resume a now-invalid server-side cursor.
+    AsyncFunction("clearPersistedCursors") { [weak self] (promise: Promise) in
+      guard let self = self, let recordManager = self.recordManager else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+      recordManager.clearPersistedCursors()
+      self.cursorCache.removeAll()
+      promise.resolve(nil)
     }
 
     /// Deletes one or more records by their identifiers.
@@ -1391,6 +1425,198 @@ public class ExpoCloudKitModule: Module {
       }
       queue.retryFailed()
       promise.resolve(nil)
+    }
+
+    // -------------------------------------------------------------------------
+    // H.3 — Multi-container support (CloudKitClient instance API)
+    //
+    // A "client" is an opaque UUID token that maps to a CloudKitClient holding
+    // its own CKContainer, CloudKitRecordManager, and CloudKitZoneManager.
+    // All client IDs are stored in `clients` which is protected by `clientsQueue`.
+    // -------------------------------------------------------------------------
+
+    /// Creates a scoped CloudKit client bound to the given container identifier.
+    ///
+    /// - Parameter containerId: The fully-qualified iCloud container identifier,
+    ///   e.g. "iCloud.com.example.app". Must start with "iCloud.".
+    /// - Returns: An opaque client ID string. Pass this to `clientSaveRecords`,
+    ///   `clientQueryRecords`, `clientDeleteRecords`, and `destroyClient`.
+    /// - Throws: `invalidArgument` if `containerId` does not start with "iCloud.".
+    AsyncFunction("createClient") { [weak self] (containerId: String, promise: Promise) in
+      guard let self = self else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+      guard containerId.hasPrefix("iCloud.") else {
+        promise.reject(CloudKitModuleError.invalidArgument(
+          "containerId must start with 'iCloud.' — got: \(containerId)"
+        ))
+        return
+      }
+      let clientId = UUID().uuidString
+      let client = CloudKitClient(containerId: containerId)
+      self.clientsQueue.sync(flags: .barrier) {
+        self.clients[clientId] = client
+      }
+      promise.resolve(clientId)
+    }
+
+    /// Removes the client identified by `clientId` from the registry.
+    ///
+    /// No-op if the client does not exist. Always resolves without error.
+    AsyncFunction("destroyClient") { [weak self] (clientId: String, promise: Promise) in
+      guard let self = self else {
+        promise.resolve(nil)
+        return
+      }
+      self.clientsQueue.sync(flags: .barrier) {
+        self.clients.removeValue(forKey: clientId)
+      }
+      promise.resolve(nil)
+    }
+
+    /// Saves records using the client bound to `clientId`.
+    ///
+    /// Delegates to the client's `CloudKitRecordManager.saveRecords`.
+    /// - Throws: `invalidArgument` if `clientId` is not found.
+    AsyncFunction("clientSaveRecords") { [weak self] (
+      clientId: String,
+      recordDicts: [[String: Any]],
+      database: String,
+      operationConfig: [String: Any]?,
+      promise: Promise
+    ) in
+      guard let self = self else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+      guard let client = self.clientsQueue.sync(execute: { self.clients[clientId] }) else {
+        promise.reject(CloudKitModuleError.invalidArgument("No client found for clientId: \(clientId)"))
+        return
+      }
+      let scope = Converters.toDatabaseScope(database)
+      var records: [CKRecord] = []
+      do {
+        records = try recordDicts.map { try Converters.toCKRecord(from: $0) }
+      } catch {
+        promise.reject(Converters.toExpoError(error))
+        return
+      }
+      client.recordManager.saveRecords(
+        records,
+        in: scope,
+        operationConfig: operationConfig
+      ) { result in
+        switch result {
+        case .success(let saved):
+          promise.resolve(saved.map { Converters.toDictionary($0) })
+        case .failure(let error):
+          promise.reject(Converters.toExpoError(error))
+        }
+      }
+    }
+
+    /// Queries records using the client bound to `clientId`.
+    ///
+    /// Delegates to the client's `CloudKitRecordManager.queryRecords`.
+    /// - Throws: `invalidArgument` if `clientId` is not found.
+    AsyncFunction("clientQueryRecords") { [weak self] (
+      clientId: String,
+      recordType: String,
+      predicateDict: [String: Any]?,
+      sortDescriptorDicts: [[String: Any]]?,
+      zoneName: String?,
+      database: String,
+      resultsLimit: Int,
+      cursor: String?,
+      desiredKeys: [String]?,
+      operationConfig: [String: Any]?,
+      promise: Promise
+    ) in
+      guard let self = self else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+      guard let client = self.clientsQueue.sync(execute: { self.clients[clientId] }) else {
+        promise.reject(CloudKitModuleError.invalidArgument("No client found for clientId: \(clientId)"))
+        return
+      }
+      let scope = Converters.toDatabaseScope(database)
+      let predicate = predicateDict.map { Converters.toPredicate(from: $0) } ?? NSPredicate(value: true)
+      let sortDescriptors = sortDescriptorDicts?.compactMap { Converters.toNSSortDescriptor(from: $0) }
+
+      // Cursor resolution for client queries uses the module-level cursorCache
+      // (client queries and singleton queries share the same in-memory store —
+      // client IDs are unique UUIDs so there is no key collision risk).
+      let resolvedCursor: CKQueryOperation.Cursor? = cursor.flatMap { token in
+        if let cached = self.cursorCache[token] { return cached }
+        return client.recordManager.loadPersistedCursor(forToken: token)
+      }
+
+      client.recordManager.queryRecords(
+        recordType: recordType,
+        predicate: predicate,
+        sortDescriptors: sortDescriptors,
+        zoneName: zoneName,
+        database: scope,
+        resultsLimit: resultsLimit,
+        cursor: resolvedCursor,
+        desiredKeys: desiredKeys,
+        operationConfig: operationConfig
+      ) { [weak self] result in
+        switch result {
+        case .success(let (records, nextCursor)):
+          var nextToken: String? = nil
+          if let nextCursor = nextCursor {
+            let token = UUID().uuidString
+            self?.cursorCache[token] = nextCursor
+            nextToken = token
+          }
+          promise.resolve([
+            "records": records.map { Converters.toDictionary($0) },
+            "cursor": nextToken as Any
+          ])
+        case .failure(let error):
+          promise.reject(Converters.toExpoError(error))
+        }
+      }
+    }
+
+    /// Deletes records using the client bound to `clientId`.
+    ///
+    /// Delegates to the client's `CloudKitRecordManager.deleteRecords`.
+    /// - Throws: `invalidArgument` if `clientId` is not found.
+    AsyncFunction("clientDeleteRecords") { [weak self] (
+      clientId: String,
+      recordIdDicts: [[String: Any]],
+      database: String,
+      operationConfig: [String: Any]?,
+      promise: Promise
+    ) in
+      guard let self = self else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+      guard let client = self.clientsQueue.sync(execute: { self.clients[clientId] }) else {
+        promise.reject(CloudKitModuleError.invalidArgument("No client found for clientId: \(clientId)"))
+        return
+      }
+      let scope = Converters.toDatabaseScope(database)
+      let recordIDs = recordIdDicts.compactMap { dict -> CKRecord.ID? in
+        guard let recordName = dict["recordName"] as? String else { return nil }
+        let zoneIDName = dict["zoneName"] as? String
+        let zoneID = zoneIDName.map { CKRecordZone.ID(zoneName: $0, ownerName: CKCurrentUserDefaultName) }
+          ?? CKRecordZone.ID.default
+        return CKRecord.ID(recordName: recordName, zoneID: zoneID)
+      }
+      client.recordManager.deleteRecords(recordIDs, in: scope, operationConfig: operationConfig) { result in
+        switch result {
+        case .success:
+          promise.resolve(nil)
+        case .failure(let error):
+          promise.reject(Converters.toExpoError(error))
+        }
+      }
     }
   }
 }
