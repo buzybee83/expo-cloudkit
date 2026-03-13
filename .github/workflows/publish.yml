@@ -46,6 +46,9 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Install root dependencies and build plugin
+        run: npm ci && npm run build
+
       - name: Install example dependencies
         working-directory: example
         run: npm install --legacy-peer-deps
