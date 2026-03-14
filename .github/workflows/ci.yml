@@ -106,22 +106,20 @@ jobs:
           puts "Saved #{PROJECT_PATH} — test target: #{test_target.name}"
           RUBY
 
-      # Enable ENABLE_TESTABILITY on the ExpoCloudKit pod so @testable import works.
-      # This must run before pod install.
+      # Inject ENABLE_TESTABILITY into the existing post_install block in the
+      # Expo-generated Podfile so @testable import ExpoCloudKit compiles in tests.
+      # CocoaPods disallows multiple post_install blocks, so we insert into the first one.
       - name: Patch Podfile for testability
         working-directory: example/ios
         run: |
-          cat >> Podfile <<'PODFILE'
-
-          post_install do |installer|
-            installer.pods_project.targets.each do |target|
-              next unless target.name == 'ExpoCloudKit'
-              target.build_configurations.each do |config|
-                config.build_settings['ENABLE_TESTABILITY'] = 'YES'
-              end
-            end
-          end
-          PODFILE
+          ruby - <<'RUBY'
+          content = File.read('Podfile')
+          inject = "  installer.pods_project.targets.select { |t| t.name == 'ExpoCloudKit' }.each do |t|\n    t.build_configurations.each { |c| c.build_settings['ENABLE_TESTABILITY'] = 'YES' }\n  end\n"
+          raise 'No post_install block found in Podfile' unless content.include?('post_install do |installer|')
+          content.sub!("post_install do |installer|\n", "post_install do |installer|\n#{inject}")
+          File.write('Podfile', content)
+          puts 'Patched Podfile for ENABLE_TESTABILITY'
+          RUBY
 
       - name: Cache CocoaPods downloads
         uses: actions/cache@v4
