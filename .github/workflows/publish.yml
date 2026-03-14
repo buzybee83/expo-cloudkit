@@ -143,7 +143,6 @@ jobs:
 
           target 'ExpoCloudKitCITests' do
             inherit! :search_paths
-            pod 'ExpoCloudKit', :path => '../..'
           end
           PODFILE_BLOCK
 

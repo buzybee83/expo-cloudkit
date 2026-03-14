@@ -146,11 +146,11 @@ jobs:
           puts "Saved #{PROJECT_PATH} — test target: #{test_target.name}"
           RUBY
 
-      # 1. Add an ExpoCloudKitCITests pod target that links ExpoCloudKit via
-      #    :path so CocoaPods builds it as a proper importable Swift module.
-      #    This is what allows @testable import ExpoCloudKit in the test files.
-      #    inherit! :search_paths copies framework search paths from the app
-      #    target so the pod's dependencies (ExpoModulesCore etc.) resolve.
+      # 1. Add an ExpoCloudKitCITests pod target with inherit! :search_paths.
+      #    The app target has ExpoCloudKit via Expo auto-linking from node_modules.
+      #    inherit! :search_paths propagates the framework search paths + module
+      #    maps to the test bundle so @testable import ExpoCloudKit resolves.
+      #    We do NOT re-declare the pod (CocoaPods rejects duplicate sources).
       # 2. Inject ENABLE_TESTABILITY into the existing post_install block so
       #    the ExpoCloudKit pod is compiled with testing enabled.
       # CocoaPods disallows multiple post_install blocks, so we insert into the first one.
@@ -160,13 +160,15 @@ jobs:
           ruby - <<'RUBY'
           content = File.read('Podfile')
 
-          # Declare a test target that links the module as a proper CocoaPod.
-          # ExpoCloudKit.podspec lives at the repo root (two dirs up from ios/).
+          # Declare a test target. The app target already has ExpoCloudKit
+          # linked via Expo auto-linking (from ../node_modules/expo-cloudkit).
+          # inherit! :search_paths propagates that linkage to the test bundle
+          # so @testable import ExpoCloudKit resolves without re-declaring the pod
+          # (which would cause a 'multiple sources' conflict).
           test_target_block = <<~PODFILE_BLOCK
 
           target 'ExpoCloudKitCITests' do
             inherit! :search_paths
-            pod 'ExpoCloudKit', :path => '../..'
           end
           PODFILE_BLOCK
 
