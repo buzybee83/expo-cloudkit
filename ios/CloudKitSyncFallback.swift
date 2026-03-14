@@ -71,6 +71,18 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
   /// Access only from `stateQueue`.
   private var pendingConflicts: [String: CheckedContinuation<[String: Any]?, Never>] = [:]
 
+  // MARK: - Health Metrics Accumulators (I.3)
+  // All fields accessed exclusively from stateQueue.
+
+  /// Wall-clock start time of the current sync cycle.
+  private var cycleStartTime: Date?
+  /// Total records received (changed + deleted) during the current pull phase.
+  private var cycleReceivedCount: Int = 0
+  /// Total records successfully saved during the current push phase.
+  private var cycleSentCount: Int = 0
+  /// Total record save failures during the current push phase.
+  private var cycleFailedCount: Int = 0
+
   // MARK: - Init
 
   init(ckContainer: CKContainer, tokenStore: ChangeTokenStore) {
@@ -172,6 +184,10 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
       guard !self.isSyncInFlight else { return }
       self.isSyncInFlight = true
       self.state = .syncing
+      self.cycleStartTime = Date()
+      self.cycleReceivedCount = 0
+      self.cycleSentCount = 0
+      self.cycleFailedCount = 0
       self.eventHandler?(.stateChanged(.syncing))
 
       // Capture current pending changes and zone configuration.
@@ -189,6 +205,23 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
           self.stateQueue.async {
             self.isSyncInFlight = false
             self.state = .idle
+
+            // Compute duration and emit health event for this cycle.
+            let durationMs: Double
+            if let start = self.cycleStartTime {
+              durationMs = Date().timeIntervalSince(start) * 1_000
+            } else {
+              durationMs = 0
+            }
+            self.eventHandler?(.syncHealth(
+              sentCount: self.cycleSentCount,
+              receivedCount: self.cycleReceivedCount,
+              failedCount: self.cycleFailedCount,
+              durationMs: durationMs,
+              syncEngine: false
+            ))
+            self.cycleStartTime = nil
+
             self.eventHandler?(.stateChanged(.idle))
           }
         }
@@ -301,6 +334,11 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
       case .failure(let error):
         self.eventHandler?(.syncError(error))
       case .success:
+        // Accumulate health counters on stateQueue.
+        self.stateQueue.async {
+          self.cycleSentCount += savedRecords.count
+          self.cycleFailedCount += failedSaves.count
+        }
         // Emit what was sent (including partial failures).
         if !savedRecords.isEmpty || !failedSaves.isEmpty {
           self.eventHandler?(.recordsSent(saved: savedRecords, failed: failedSaves))
