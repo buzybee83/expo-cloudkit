@@ -1278,3 +1278,37 @@ export interface SyncHealthEvent {
    */
   syncEngine: boolean;
 }
+
+// ---------------------------------------------------------------------------
+// Batch Fetch (Phase I.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * The outcome of fetching a single record inside a `batchFetchRecords` call.
+ * Either `record` or `error` is set — never both.
+ */
+export interface BatchFetchResult {
+  /** The record name that was requested. */
+  recordName: string;
+  /** The fetched record, present on success. */
+  record?: CloudKitRecord;
+  /** Error details, present on failure. */
+  error?: { code: string; message: string };
+}
+
+// ---------------------------------------------------------------------------
+// Rate Limiting Events (Phase I.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Event emitted on `onRateLimited` when CloudKit rate-limits an operation
+ * and the native layer is about to retry automatically.
+ */
+export interface RateLimitedEvent {
+  /** Seconds until the native layer retries. */
+  retryAfter: number;
+  /** Name of the rate-limited operation (e.g. 'saveRecords'). */
+  operationName: string;
+  /** Retry attempt number (starts at 1). */
+  retryCount: number;
+}

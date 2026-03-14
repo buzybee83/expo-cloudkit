@@ -68,6 +68,8 @@ import type {
   Zone,
   ZoneChanges,
   OperationConfig,
+  BatchFetchResult,
+  RateLimitedEvent,
 } from './types';
 import {
   configureAuthPersistence,
@@ -1355,4 +1357,63 @@ export function createCloudKitClient(_containerId: string): Promise<CloudKitClie
  */
 export function clearPersistedCursors(): Promise<void> {
   return Promise.resolve();
+}
+
+// ---------------------------------------------------------------------------
+// Phase I.1 — Batch Fetch & Rate Limiting (web)
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetches multiple records sequentially using CloudKit JS.
+ *
+ * CloudKit JS has no native batch-fetch operation, so records are fetched
+ * one at a time. Failed fetches are captured per-record in the `error` field;
+ * the overall call does not reject unless all fetches fail catastrophically.
+ *
+ * @param recordIDs       - Array of record identifiers to fetch.
+ * @param database        - Target database. Default: `'private'`.
+ * @param desiredKeys     - Field names to fetch. Omit to fetch all fields.
+ * @param _operationConfig - Ignored on web (no equivalent CloudKit JS option).
+ * @returns Array of per-record results, one per requested record ID.
+ */
+export async function batchFetchRecords(
+  recordIDs: Array<{ recordName: string; zoneName?: string; zoneOwner?: string }>,
+  database?: DatabaseScope,
+  desiredKeys?: string[],
+  _operationConfig?: OperationConfig
+): Promise<BatchFetchResult[]> {
+  const results: BatchFetchResult[] = [];
+  for (const id of recordIDs) {
+    try {
+      const record = await fetchRecord(
+        'CloudKitRecord',
+        id.recordName,
+        id.zoneName,
+        database,
+        desiredKeys
+      );
+      results.push({ recordName: id.recordName, record });
+    } catch (err: unknown) {
+      const e = err as { code?: string; message?: string };
+      results.push({
+        recordName: id.recordName,
+        error: { code: e.code ?? 'UNKNOWN', message: e.message ?? String(err) },
+      });
+    }
+  }
+  return results;
+}
+
+/**
+ * Rate limiting is handled natively on iOS; web has no equivalent event.
+ * Returns a no-op subscription that resolves immediately on `.remove()`.
+ *
+ * @param _callback - Ignored on web.
+ * @returns A no-op Subscription.
+ */
+export function addRateLimitedListener(
+  _callback: (event: RateLimitedEvent) => void
+): Subscription {
+  // Rate limiting is a native-only concern; CloudKit JS handles retries internally.
+  return noopSubscription;
 }

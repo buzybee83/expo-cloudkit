@@ -108,6 +108,9 @@ export type {
   // Phase I.3 — Observability
   OperationMetrics,
   SyncHealthEvent,
+  // Phase I.1 — Batch Fetch & Rate Limiting
+  BatchFetchResult,
+  RateLimitedEvent,
 } from './types';
 
 // Errors
@@ -231,5 +234,8 @@ export type { CloudKitStatus, UseCloudKitStatusOptions } from './useCloudKitStat
 
 // Phase I.3 — Observability
 export { addSyncHealthListener } from './ExpoCloudKit';
+
+// Phase I.1 — Batch Fetch & Rate Limiting
+export { batchFetchRecords, addRateLimitedListener } from './ExpoCloudKit';
 export { useSyncHealth } from './hooks/useSyncHealth';
 export type { SyncHealthState } from './hooks/useSyncHealth';

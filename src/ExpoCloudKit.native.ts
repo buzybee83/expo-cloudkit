@@ -60,6 +60,8 @@ import type {
   OperationConfig,
   ResolvedRecord,
   SyncHealthEvent,
+  BatchFetchResult,
+  RateLimitedEvent,
 } from './types';
 
 // ---------------------------------------------------------------------------
@@ -1461,5 +1463,65 @@ export function addSyncHealthListener(
   if (!isIOS) return { remove: () => {} };
   assertNativeAvailable();
   const subscription = emitter!.addListener('onSyncHealth', callback);
+  return { remove: () => subscription.remove() };
+}
+
+// ---------------------------------------------------------------------------
+// Phase I.1 — Batch Fetch & Rate Limiting
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetches multiple records in a single `CKFetchRecordsOperation`.
+ *
+ * Each element of the returned array corresponds to one requested record.
+ * Failed records have the `error` field set instead of `record`; the call
+ * itself does not reject unless the operation cannot be started at all.
+ *
+ * @param recordIDs       - Array of record identifiers to fetch.
+ * @param database        - Target database. Default: `'private'`.
+ * @param desiredKeys     - Field names to fetch. Omit to fetch all fields.
+ * @param operationConfig - Optional timeout and quality-of-service overrides.
+ * @returns Array of per-record results, one per requested record ID.
+ */
+export function batchFetchRecords(
+  recordIDs: Array<{ recordName: string; zoneName?: string; zoneOwner?: string }>,
+  database?: DatabaseScope,
+  desiredKeys?: string[],
+  operationConfig?: OperationConfig
+): Promise<BatchFetchResult[]> {
+  return callAsync(() =>
+    NativeModule!.batchFetchRecords(
+      recordIDs,
+      database ?? 'private',
+      desiredKeys ?? null,
+      operationConfig ?? null
+    )
+  );
+}
+
+/**
+ * Registers a callback that fires whenever CloudKit rate-limits an operation
+ * and the native layer is about to retry automatically.
+ *
+ * Returns a Subscription handle; call `.remove()` to unsubscribe.
+ *
+ * @param callback - Invoked with the rate-limit details before each retry.
+ * @returns A Subscription; call `.remove()` to stop receiving events.
+ *
+ * @example
+ * ```typescript
+ * const sub = addRateLimitedListener((event) => {
+ *   console.warn(`Rate limited on ${event.operationName}, retrying in ${event.retryAfter}s`);
+ * });
+ * // Later:
+ * sub.remove();
+ * ```
+ */
+export function addRateLimitedListener(
+  callback: (event: RateLimitedEvent) => void
+): Subscription {
+  if (!isIOS) return { remove: () => {} };
+  assertNativeAvailable();
+  const subscription = emitter!.addListener('onRateLimited', callback);
   return { remove: () => subscription.remove() };
 }
