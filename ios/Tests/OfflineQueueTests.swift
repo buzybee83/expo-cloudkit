@@ -109,8 +109,10 @@ final class OfflineQueueTests: XCTestCase {
   }
 
   func test_backoff_isMonotonicallyIncreasing_beforeCap() {
+    // Cap of 300 s hits at retryCount=6 (5 * 2^6 = 320 > 300).
+    // Test only retryCount 0...5 where the formula is strictly increasing.
     var previous = OfflineQueueBackoffFormula.base(retryCount: 0)
-    for count in 1...7 {
+    for count in 1...5 {
       let current = OfflineQueueBackoffFormula.base(retryCount: count)
       XCTAssertGreaterThan(current, previous,
         "base delay should increase with retryCount (count=\(count))")
