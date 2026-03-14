@@ -64,15 +64,25 @@ jobs:
           require 'xcodeproj'
 
           PROJECT_PATH = 'example/ios/ExpoCloudKitExample.xcodeproj'
-          TEST_TARGET_NAME = 'ExpoCloudKitExampleTests'
           TESTS_DIR = File.expand_path('ios/Tests')
 
           project = Xcodeproj::Project.open(PROJECT_PATH)
 
-          test_target = project.targets.find { |t| t.name == TEST_TARGET_NAME }
-          raise "Test target '#{TEST_TARGET_NAME}' not found in project" if test_target.nil?
+          puts "Available targets: #{project.targets.map(&:name).join(', ')}"
 
-          group = project.main_group.find_subpath(TEST_TARGET_NAME, true)
+          test_target = project.targets.find { |t| t.name.end_with?('Tests') && t.test_target_type? rescue false }
+          test_target ||= project.targets.find { |t| t.name.end_with?('Tests') }
+
+          if test_target.nil?
+            puts "No test target found — creating ExpoCloudKitTests"
+            app_target = project.targets.find { |t| !t.name.end_with?('Tests') }
+            test_target = project.new_target(:unit_test_bundle, 'ExpoCloudKitTests', :ios, '16.0')
+            test_target.add_dependency(app_target) if app_target
+          else
+            puts "Using test target: #{test_target.name}"
+          end
+
+          group = project.main_group.find_subpath('ExpoCloudKitTests', true)
           group.set_path(TESTS_DIR)
 
           swift_files = Dir.glob(File.join(TESTS_DIR, '*.swift'))
@@ -85,7 +95,7 @@ jobs:
           end
 
           project.save
-          puts "Saved #{PROJECT_PATH}"
+          puts "Saved #{PROJECT_PATH} — test target: #{test_target.name}"
           RUBY
 
       - name: Cache CocoaPods downloads
@@ -107,11 +117,15 @@ jobs:
         working-directory: example/ios
         run: |
           set -o pipefail
+          TEST_TARGET=$(xcodebuild -list -workspace ExpoCloudKitExample.xcworkspace 2>/dev/null \
+            | grep -E "ExpoCloudKitTests|ExpoCloudKitExampleTests" | head -1 | xargs)
+          TEST_TARGET=${TEST_TARGET:-ExpoCloudKitTests}
+          echo "Running test target: $TEST_TARGET"
           xcodebuild test \
             -workspace ExpoCloudKitExample.xcworkspace \
             -scheme ExpoCloudKitExample \
             -destination "platform=iOS Simulator,name=iPhone 15 Pro,OS=latest" \
-            -only-testing:ExpoCloudKitExampleTests \
+            -only-testing:$TEST_TARGET \
             2>&1 | xcpretty --color
 
   publish:
