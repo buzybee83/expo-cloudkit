@@ -146,19 +146,40 @@ jobs:
           puts "Saved #{PROJECT_PATH} — test target: #{test_target.name}"
           RUBY
 
-      # Inject ENABLE_TESTABILITY into the existing post_install block in the
-      # Expo-generated Podfile so @testable import ExpoCloudKit compiles in tests.
+      # 1. Add an ExpoCloudKitCITests pod target so CocoaPods sets up the
+      #    framework search paths and module maps for @testable import ExpoCloudKit.
+      # 2. Inject ENABLE_TESTABILITY into the existing post_install block so
+      #    the ExpoCloudKit pod is compiled with testing enabled.
       # CocoaPods disallows multiple post_install blocks, so we insert into the first one.
       - name: Patch Podfile for testability
         working-directory: example/ios
         run: |
           ruby - <<'RUBY'
           content = File.read('Podfile')
+
+          # Add a unit test target block that inherits pods from the app target
+          # and also explicitly links ExpoCloudKit so @testable import works.
+          test_target_block = <<~PODFILE_BLOCK
+
+          target 'ExpoCloudKitCITests' do
+            inherit! :search_paths
+            pod 'ExpoCloudKit', :path => '../..'
+          end
+          PODFILE_BLOCK
+
+          # Append the test target before the final post_install block (or at end of file)
+          if content.include?('post_install do |installer|')
+            content.sub!("post_install do |installer|", "#{test_target_block}\npost_install do |installer|")
+          else
+            content += test_target_block
+          end
+
+          # Inject ENABLE_TESTABILITY into post_install
           inject = "  installer.pods_project.targets.select { |t| t.name == 'ExpoCloudKit' }.each do |t|\n    t.build_configurations.each { |c| c.build_settings['ENABLE_TESTABILITY'] = 'YES' }\n  end\n"
-          raise 'No post_install block found in Podfile' unless content.include?('post_install do |installer|')
           content.sub!("post_install do |installer|\n", "post_install do |installer|\n#{inject}")
+
           File.write('Podfile', content)
-          puts 'Patched Podfile for ENABLE_TESTABILITY'
+          puts 'Patched Podfile: added ExpoCloudKitCITests target + ENABLE_TESTABILITY'
           RUBY
 
       - name: Cache CocoaPods downloads
