@@ -90,6 +90,7 @@ public class ExpoCloudKitModule: Module {
     Events(
       "onAccountStatusChanged",
       "onSyncEngineEvent",
+      "onSyncHealth",
       "onSubscriptionEvent",
       "onAssetProgress",
       "onShareAccepted",
@@ -1750,6 +1751,20 @@ extension ExpoCloudKitModule {
       // to main by the sync adapters, but we guard again for safety.
       DispatchQueue.main.async { [weak self] in
         self?.sendEvent("onSyncConflict", eventPayload)
+      }
+      return
+
+    case .syncHealth(let sentCount, let receivedCount, let failedCount, let durationMs, let syncEngine):
+      // Route health metrics to the dedicated `onSyncHealth` channel.
+      let healthPayload: [String: Any] = [
+        "sentCount": sentCount,
+        "receivedCount": receivedCount,
+        "failedCount": failedCount,
+        "durationMs": durationMs,
+        "syncEngine": syncEngine
+      ]
+      DispatchQueue.main.async { [weak self] in
+        self?.sendEvent("onSyncHealth", healthPayload)
       }
       return
     }

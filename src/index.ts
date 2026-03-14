@@ -105,6 +105,9 @@ export type {
   OperationConfig,
   // H.3 — Multi-container
   CloudKitClient,
+  // Phase I.3 — Observability
+  OperationMetrics,
+  SyncHealthEvent,
 } from './types';
 
 // Errors
@@ -225,3 +228,8 @@ export type {
 // Phase I — useCloudKitStatus hook
 export { useCloudKitStatus } from './useCloudKitStatus';
 export type { CloudKitStatus, UseCloudKitStatusOptions } from './useCloudKitStatus';
+
+// Phase I.3 — Observability
+export { addSyncHealthListener } from './ExpoCloudKit';
+export { useSyncHealth } from './hooks/useSyncHealth';
+export type { SyncHealthState } from './hooks/useSyncHealth';

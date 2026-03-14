@@ -60,6 +60,18 @@ final class CloudKitSyncEngineAdapter: CloudKitSyncProvider {
   /// Access only from `stateQueue`.
   private var pendingConflicts: [String: CheckedContinuation<[String: Any]?, Never>] = [:]
 
+  // MARK: - Health Metrics Accumulators (I.3)
+  // Accessed exclusively from the CKSyncEngine delegate queue (serial, owned by CKSyncEngine).
+
+  /// Wall-clock start time recorded at willSendChanges / willFetchChanges.
+  private var cycleStartTime: Date?
+  /// Records received in the current fetch cycle across all zones.
+  private var cycleReceivedCount: Int = 0
+  /// Records successfully sent in the current send cycle.
+  private var cycleSentCount: Int = 0
+  /// Records that failed to send in the current send cycle.
+  private var cycleFailedCount: Int = 0
+
   // MARK: - Init
 
   init(ckContainer: CKContainer, tokenStore: ChangeTokenStore) {
@@ -213,6 +225,7 @@ extension CloudKitSyncEngineAdapter: CKSyncEngineDelegate {
       } else {
         zoneName = CKRecordZone.default().zoneID.zoneName
       }
+      cycleReceivedCount += changed.count + deleted.count
       emit(.recordsFetched(changed: changed, deleted: deleted, zoneName: zoneName))
 
     case .sentDatabaseChanges:
@@ -286,9 +299,13 @@ extension CloudKitSyncEngineAdapter: CKSyncEngineDelegate {
         }
       }
 
+      cycleSentCount += saved.count
+      cycleFailedCount += failed.count
       emit(.recordsSent(saved: saved, failed: failed))
 
     case .willFetchChanges:
+      cycleStartTime = Date()
+      cycleReceivedCount = 0
       stateQueue.sync { [weak self] in
         self?.state = .syncing
       }
@@ -299,18 +316,52 @@ extension CloudKitSyncEngineAdapter: CKSyncEngineDelegate {
       break
 
     case .didFetchChanges:
+      let fetchDurationMs: Double
+      if let start = cycleStartTime {
+        fetchDurationMs = Date().timeIntervalSince(start) * 1_000
+      } else {
+        fetchDurationMs = 0
+      }
+      emit(.syncHealth(
+        sentCount: 0,
+        receivedCount: cycleReceivedCount,
+        failedCount: 0,
+        durationMs: fetchDurationMs,
+        syncEngine: true
+      ))
+      cycleStartTime = nil
+      cycleReceivedCount = 0
       stateQueue.sync { [weak self] in
         self?.state = .idle
       }
       emit(.stateChanged(.idle))
 
     case .willSendChanges:
+      cycleStartTime = Date()
+      cycleSentCount = 0
+      cycleFailedCount = 0
       stateQueue.sync { [weak self] in
         self?.state = .syncing
       }
       emit(.stateChanged(.syncing))
 
     case .didSendChanges:
+      let sendDurationMs: Double
+      if let start = cycleStartTime {
+        sendDurationMs = Date().timeIntervalSince(start) * 1_000
+      } else {
+        sendDurationMs = 0
+      }
+      emit(.syncHealth(
+        sentCount: cycleSentCount,
+        receivedCount: 0,
+        failedCount: cycleFailedCount,
+        durationMs: sendDurationMs,
+        syncEngine: true
+      ))
+      cycleStartTime = nil
+      cycleSentCount = 0
+      cycleFailedCount = 0
       stateQueue.sync { [weak self] in
         self?.state = .idle
       }

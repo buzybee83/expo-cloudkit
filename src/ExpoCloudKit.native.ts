@@ -59,6 +59,7 @@ import type {
   OfflineQueueStatus,
   OperationConfig,
   ResolvedRecord,
+  SyncHealthEvent,
 } from './types';
 
 // ---------------------------------------------------------------------------
@@ -1426,4 +1427,39 @@ export async function createCloudKitClient(containerId: string): Promise<CloudKi
  */
 export function clearPersistedCursors(): Promise<void> {
   return callAsync(() => NativeModule!.clearPersistedCursors());
+}
+
+// ---------------------------------------------------------------------------
+// Phase I.3 — Observability
+// ---------------------------------------------------------------------------
+
+/**
+ * Subscribes to sync-cycle health snapshots emitted by the sync engine.
+ *
+ * The native side emits `onSyncHealth` once at the end of every sync cycle —
+ * both on iOS 17+ (CKSyncEngine) and on the iOS 16 fallback polling path.
+ * The event is NOT emitted on web; this listener is a no-op on that platform.
+ *
+ * Prefer the `useSyncHealth()` React hook for component-level subscriptions;
+ * use this function directly when you need to subscribe outside of a component.
+ *
+ * @param callback - Invoked on the JS thread after each completed sync cycle.
+ * @returns A Subscription; call `.remove()` to stop receiving events.
+ *
+ * @example
+ * ```typescript
+ * const sub = addSyncHealthListener((event) => {
+ *   console.log(`Sync done — sent: ${event.sentCount}, failed: ${event.failedCount}`);
+ * });
+ * // Later:
+ * sub.remove();
+ * ```
+ */
+export function addSyncHealthListener(
+  callback: (event: SyncHealthEvent) => void
+): Subscription {
+  if (!isIOS) return { remove: () => {} };
+  assertNativeAvailable();
+  const subscription = emitter!.addListener('onSyncHealth', callback);
+  return { remove: () => subscription.remove() };
 }

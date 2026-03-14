@@ -12,6 +12,8 @@ enum SyncProviderEvent {
   /// Emitted when `conflictResolutionEnabled` is true and a CONFLICT error occurs.
   /// The `payload` dictionary is forwarded verbatim as the `onSyncConflict` event body.
   case conflictPending(requestId: String, payload: [String: Any])
+  /// Emitted after each complete sync cycle with aggregate health metrics.
+  case syncHealth(sentCount: Int, receivedCount: Int, failedCount: Int, durationMs: Double, syncEngine: Bool)
 }
 
 // MARK: - Sync Provider State

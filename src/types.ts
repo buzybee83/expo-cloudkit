@@ -1094,6 +1094,14 @@ export interface OperationConfig {
    * Timeout in seconds for the network request. When omitted, the system default is used.
    */
   timeout?: number;
+  /**
+   * When true, the operation records its wall-clock duration and retry count.
+   * The metrics are available on the result where applicable, or emitted via
+   * the corresponding event listener.
+   *
+   * Default: false.
+   */
+  collectMetrics?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -1216,3 +1224,57 @@ export type OfflineQueueEvent =
       /** The updated aggregate queue status after the change. */
       status: OfflineQueueStatus;
     };
+
+// ---------------------------------------------------------------------------
+// Observability (Phase I.3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Timing and retry metrics for a single CloudKit operation.
+ * Only populated when `OperationConfig.collectMetrics` is `true`.
+ */
+export interface OperationMetrics {
+  /** Wall-clock duration of the operation in milliseconds. */
+  durationMs: number;
+  /**
+   * Number of times the operation was automatically retried before succeeding
+   * or ultimately failing. 0 means it succeeded on the first attempt.
+   */
+  retryCount: number;
+}
+
+/**
+ * Health snapshot emitted by the sync engine at the end of each sync cycle
+ * via the `onSyncHealth` native event.
+ *
+ * Subscribe with `useSyncHealth()` to receive these events in real time.
+ *
+ * The event is emitted on both iOS 17+ (CKSyncEngine) and iOS 16 (fallback
+ * polling path). Use the `syncEngine` field to distinguish the two.
+ */
+export interface SyncHealthEvent {
+  /**
+   * Number of local records successfully sent to the server in this cycle.
+   */
+  sentCount: number;
+  /**
+   * Number of records fetched from the server in this cycle.
+   */
+  receivedCount: number;
+  /**
+   * Number of records that failed to save or fetch in this cycle.
+   * A non-zero value does not stop the engine; individual failures are
+   * surfaced separately via `RecordsSentEvent.failedRecords`.
+   */
+  failedCount: number;
+  /**
+   * Wall-clock duration of the complete sync cycle in milliseconds,
+   * measured from the first operation start to the last operation end.
+   */
+  durationMs: number;
+  /**
+   * `true` when the sync cycle was driven by CKSyncEngine (iOS 17+).
+   * `false` when the iOS 16 fallback polling path was used.
+   */
+  syncEngine: boolean;
+}
