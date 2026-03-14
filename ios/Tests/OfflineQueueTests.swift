@@ -103,12 +103,12 @@ final class OfflineQueueTests: XCTestCase {
 
   // MARK: - Entry status: new entry is "pending"
 
-  func test_enqueue_newEntry_statusIsPending() throws {
+  func test_enqueue_newEntry_statusIsPending() async throws {
     var events: [[String: Any]] = []
     let q = makeQueue(receivedEvents: &events)
-    let id = try q.enqueue(operation: "save", database: "private", recordData: sampleRecordData)
+    let id = try await q.enqueue(operation: "save", database: "private", recordData: sampleRecordData)
 
-    let status = q.getStatus(includeEntries: true)
+    let status = await q.getStatus(includeEntries: true)
     let entries = status["entries"] as? [[String: Any]] ?? []
     let entry = entries.first(where: { $0["id"] as? String == id })
     XCTAssertNotNil(entry, "Enqueued entry should appear in getStatus")
@@ -116,109 +116,108 @@ final class OfflineQueueTests: XCTestCase {
     XCTAssertEqual(entry?["retryCount"] as? Int, 0)
   }
 
-  func test_enqueue_returnedId_isNonEmpty() throws {
+  func test_enqueue_returnedId_isNonEmpty() async throws {
     var events: [[String: Any]] = []
     let q = makeQueue(receivedEvents: &events)
-    let id = try q.enqueue(operation: "save", database: "private", recordData: sampleRecordData)
+    let id = try await q.enqueue(operation: "save", database: "private", recordData: sampleRecordData)
     XCTAssertFalse(id.isEmpty)
   }
 
-  func test_enqueue_multipleEntries_allPending() throws {
+  func test_enqueue_multipleEntries_allPending() async throws {
     var events: [[String: Any]] = []
     let q = makeQueue(receivedEvents: &events)
     for _ in 0..<5 {
-      _ = try q.enqueue(operation: "save", database: "private", recordData: sampleRecordData)
+      _ = try await q.enqueue(operation: "save", database: "private", recordData: sampleRecordData)
     }
-    let status = q.getStatus(includeEntries: false)
+    let status = await q.getStatus(includeEntries: false)
     XCTAssertEqual(status["pending"] as? Int, 5)
     XCTAssertEqual(status["total"] as? Int, 5)
   }
 
   // MARK: - Queue cap: 500 entries max
 
-  func test_enqueueCap_500EntriesSucceed() throws {
+  func test_enqueueCap_500EntriesSucceed() async throws {
     var events: [[String: Any]] = []
     let q = makeQueue(receivedEvents: &events)
     for _ in 0..<500 {
-      XCTAssertNoThrow(
-        try q.enqueue(operation: "save", database: "private", recordData: sampleRecordData)
-      )
+      _ = try await q.enqueue(operation: "save", database: "private", recordData: sampleRecordData)
     }
-    let status = q.getStatus(includeEntries: false)
+    let status = await q.getStatus(includeEntries: false)
     XCTAssertEqual(status["total"] as? Int, 500)
   }
 
-  func test_enqueueCap_501stEntryThrowsQueueFull() throws {
+  func test_enqueueCap_501stEntryThrowsQueueFull() async throws {
     var events: [[String: Any]] = []
     let q = makeQueue(receivedEvents: &events)
     for _ in 0..<500 {
-      _ = try q.enqueue(operation: "save", database: "private", recordData: sampleRecordData)
+      _ = try await q.enqueue(operation: "save", database: "private", recordData: sampleRecordData)
     }
-    XCTAssertThrowsError(
-      try q.enqueue(operation: "save", database: "private", recordData: sampleRecordData)
-    ) { error in
-      XCTAssertTrue(error is OfflineQueueError,
-        "Expected OfflineQueueError, got \(type(of: error))")
-      if case .queueFull = error as! OfflineQueueError {
+    do {
+      _ = try await q.enqueue(operation: "save", database: "private", recordData: sampleRecordData)
+      XCTFail("Expected enqueue to throw queueFull")
+    } catch let error as OfflineQueueError {
+      if case .queueFull = error {
         // correct
       } else {
-        XCTFail("Expected .queueFull")
+        XCTFail("Expected .queueFull, got \(error)")
       }
+    } catch {
+      XCTFail("Expected OfflineQueueError, got \(type(of: error))")
     }
   }
 
   // MARK: - clear()
 
-  func test_clear_all_removesAllEntries() throws {
+  func test_clear_all_removesAllEntries() async throws {
     var events: [[String: Any]] = []
     let q = makeQueue(receivedEvents: &events)
-    _ = try q.enqueue(operation: "save", database: "private", recordData: sampleRecordData)
-    _ = try q.enqueue(operation: "delete", database: "private", recordData: ["recordName": "x"])
-    q.clear(status: "all")
-    let status = q.getStatus(includeEntries: false)
+    _ = try await q.enqueue(operation: "save", database: "private", recordData: sampleRecordData)
+    _ = try await q.enqueue(operation: "delete", database: "private", recordData: ["recordName": "x"])
+    await q.clear(status: "all")
+    let status = await q.getStatus(includeEntries: false)
     XCTAssertEqual(status["total"] as? Int, 0)
   }
 
-  func test_clear_pending_removesOnlyPending() throws {
+  func test_clear_pending_removesOnlyPending() async throws {
     var events: [[String: Any]] = []
     let q = makeQueue(receivedEvents: &events)
     // Add two pending entries (we can't easily make "failed" ones without
     // calling drain, so we only verify "pending" clear removes exactly them)
-    _ = try q.enqueue(operation: "save", database: "private", recordData: sampleRecordData)
-    _ = try q.enqueue(operation: "save", database: "private", recordData: sampleRecordData)
-    q.clear(status: "pending")
-    let status = q.getStatus(includeEntries: false)
+    _ = try await q.enqueue(operation: "save", database: "private", recordData: sampleRecordData)
+    _ = try await q.enqueue(operation: "save", database: "private", recordData: sampleRecordData)
+    await q.clear(status: "pending")
+    let status = await q.getStatus(includeEntries: false)
     XCTAssertEqual(status["pending"] as? Int, 0)
     XCTAssertEqual(status["total"] as? Int, 0)
   }
 
   // MARK: - getStatus structure
 
-  func test_getStatus_containsExpectedKeys() throws {
+  func test_getStatus_containsExpectedKeys() async throws {
     var events: [[String: Any]] = []
     let q = makeQueue(receivedEvents: &events)
-    let status = q.getStatus(includeEntries: false)
+    let status = await q.getStatus(includeEntries: false)
     XCTAssertNotNil(status["pending"])
     XCTAssertNotNil(status["retrying"])
     XCTAssertNotNil(status["failed"])
     XCTAssertNotNil(status["total"])
   }
 
-  func test_getStatus_withEntries_includesEntriesKey() throws {
+  func test_getStatus_withEntries_includesEntriesKey() async throws {
     var events: [[String: Any]] = []
     let q = makeQueue(receivedEvents: &events)
-    _ = try q.enqueue(operation: "save", database: "private", recordData: sampleRecordData)
-    let status = q.getStatus(includeEntries: true)
+    _ = try await q.enqueue(operation: "save", database: "private", recordData: sampleRecordData)
+    let status = await q.getStatus(includeEntries: true)
     XCTAssertNotNil(status["entries"], "includeEntries: true should populate 'entries' key")
     let entries = status["entries"] as? [[String: Any]]
     XCTAssertEqual(entries?.count, 1)
   }
 
-  func test_getStatus_withoutEntries_omitsEntriesKey() throws {
+  func test_getStatus_withoutEntries_omitsEntriesKey() async throws {
     var events: [[String: Any]] = []
     let q = makeQueue(receivedEvents: &events)
-    _ = try q.enqueue(operation: "save", database: "private", recordData: sampleRecordData)
-    let status = q.getStatus(includeEntries: false)
+    _ = try await q.enqueue(operation: "save", database: "private", recordData: sampleRecordData)
+    let status = await q.getStatus(includeEntries: false)
     XCTAssertNil(status["entries"])
   }
 
@@ -229,20 +228,20 @@ final class OfflineQueueTests: XCTestCase {
   // containerID). The first queue enqueues entries; the second queue loads
   // them from disk in its init.
 
-  func test_persistence_entriesSurviveReload() throws {
+  func test_persistence_entriesSurviveReload() async throws {
     // Build a fixed list of IDs so we can verify them after reload.
     var capturedIds: [String] = []
     var events1: [[String: Any]] = []
     let q1 = makeQueue(receivedEvents: &events1)
     for _ in 0..<3 {
-      let id = try q1.enqueue(operation: "save", database: "private", recordData: sampleRecordData)
+      let id = try await q1.enqueue(operation: "save", database: "private", recordData: sampleRecordData)
       capturedIds.append(id)
     }
     // Verify q1 has 3 entries on disk by creating q2 (same real storage path
     // since we use default container and the process's Application Support dir).
     var events2: [[String: Any]] = []
     let q2 = makeQueue(receivedEvents: &events2)
-    let status = q2.getStatus(includeEntries: true)
+    let status = await q2.getStatus(includeEntries: true)
     let loadedEntries = status["entries"] as? [[String: Any]] ?? []
 
     // Loaded count must be >= 3 (may be higher if a previous test left entries
@@ -257,15 +256,15 @@ final class OfflineQueueTests: XCTestCase {
     }
   }
 
-  func test_persistence_entriesStatusSurvivesReload() throws {
+  func test_persistence_entriesStatusSurvivesReload() async throws {
     var events: [[String: Any]] = []
     let q1 = makeQueue(receivedEvents: &events)
-    let id = try q1.enqueue(operation: "delete", database: "public",
-                             recordData: ["recordName": "rec-abc", "recordType": "Note"])
+    let id = try await q1.enqueue(operation: "delete", database: "public",
+                                   recordData: ["recordName": "rec-abc", "recordType": "Note"])
 
     var events2: [[String: Any]] = []
     let q2 = makeQueue(receivedEvents: &events2)
-    let status = q2.getStatus(includeEntries: true)
+    let status = await q2.getStatus(includeEntries: true)
     let entries = status["entries"] as? [[String: Any]] ?? []
     let match = entries.first(where: { $0["id"] as? String == id })
     XCTAssertNotNil(match, "Entry \(id) should exist after reload")
