@@ -91,14 +91,20 @@ final class CloudKitDebugHelper {
     var firstError: Error? = nil
     let errorLock = NSLock()
 
-    // Fetch private database zones
+    // Fetch private database zones.
+    // Use perRecordZoneResultBlock to collect each zone; fetchRecordZonesResultBlock
+    // fires once for overall success/failure (Result<Void, Error> in iOS 18+).
     group.enter()
     let privateOp = CKFetchRecordZonesOperation.fetchAllRecordZonesOperation()
-    privateOp.fetchRecordZonesResultBlock = { (result: Result<[CKRecordZone.ID: CKRecordZone], Error>) in
-      switch result {
-      case .success(let zonesByID):
-        privateZones = Array(zonesByID.values)
-      case .failure(let error):
+    privateOp.perRecordZoneResultBlock = { (zoneID: CKRecordZone.ID, result: Result<CKRecordZone, Error>) in
+      if case .success(let zone) = result {
+        errorLock.lock()
+        privateZones.append(zone)
+        errorLock.unlock()
+      }
+    }
+    privateOp.fetchRecordZonesResultBlock = { (result: Result<Void, Error>) in
+      if case .failure(let error) = result {
         errorLock.lock()
         if firstError == nil { firstError = error }
         errorLock.unlock()
@@ -107,14 +113,18 @@ final class CloudKitDebugHelper {
     }
     container.privateCloudDatabase.add(privateOp)
 
-    // Fetch shared database zones
+    // Fetch shared database zones.
     group.enter()
     let sharedOp = CKFetchRecordZonesOperation.fetchAllRecordZonesOperation()
-    sharedOp.fetchRecordZonesResultBlock = { (result: Result<[CKRecordZone.ID: CKRecordZone], Error>) in
-      switch result {
-      case .success(let zonesByID):
-        sharedZones = Array(zonesByID.values)
-      case .failure(let error):
+    sharedOp.perRecordZoneResultBlock = { (zoneID: CKRecordZone.ID, result: Result<CKRecordZone, Error>) in
+      if case .success(let zone) = result {
+        errorLock.lock()
+        sharedZones.append(zone)
+        errorLock.unlock()
+      }
+    }
+    sharedOp.fetchRecordZonesResultBlock = { (result: Result<Void, Error>) in
+      if case .failure(let error) = result {
         errorLock.lock()
         if firstError == nil { firstError = error }
         errorLock.unlock()

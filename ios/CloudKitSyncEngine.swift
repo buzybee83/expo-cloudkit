@@ -203,7 +203,16 @@ extension CloudKitSyncEngineAdapter: CKSyncEngineDelegate {
     case .fetchedRecordZoneChanges(let zoneChanges):
       let changed = zoneChanges.modifications.map { $0.record }
       let deleted = zoneChanges.deletions.map { $0.recordID }
-      let zoneName = zoneChanges.zoneID.zoneName
+      // CKSyncEngine.Event.FetchedRecordZoneChanges.zoneID was removed in iOS 18.
+      // Derive the zone name from the first modification or deletion record ID.
+      let zoneName: String
+      if let firstRecord = zoneChanges.modifications.first?.record {
+        zoneName = firstRecord.recordID.zoneID.zoneName
+      } else if let firstDeleted = zoneChanges.deletions.first?.recordID {
+        zoneName = firstDeleted.zoneID.zoneName
+      } else {
+        zoneName = CKRecordZone.default().zoneID.zoneName
+      }
       emit(.recordsFetched(changed: changed, deleted: deleted, zoneName: zoneName))
 
     case .sentDatabaseChanges:

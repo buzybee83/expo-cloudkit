@@ -340,60 +340,73 @@ final class CloudKitShareManager {
     let fetchZonesOp = CKFetchRecordZonesOperation.fetchAllRecordZonesOperation()
     fetchZonesOp.qualityOfService = .userInitiated
 
-    fetchZonesOp.fetchRecordZonesResultBlock = { result in
-      switch result {
-      case .failure(let error):
+    // Collect zones via perRecordZoneResultBlock (iOS 15+).
+    // In iOS 18, fetchRecordZonesResultBlock returns Result<Void, Error> so
+    // individual zone results must be captured here instead.
+    let zonesLock = NSLock()
+    var collectedZones: [CKRecordZone] = []
+
+    fetchZonesOp.perRecordZoneResultBlock = { (zoneID: CKRecordZone.ID, result: Result<CKRecordZone, Error>) in
+      if case .success(let zone) = result {
+        zonesLock.lock()
+        collectedZones.append(zone)
+        zonesLock.unlock()
+      }
+    }
+
+    fetchZonesOp.fetchRecordZonesResultBlock = { (result: Result<Void, Error>) in
+      if case .failure(let error) = result {
         completion(.failure(error))
+        return
+      }
 
-      case .success(let zonesByID):
-        let zones = Array(zonesByID.values)
+      let zones = collectedZones
 
-        guard !zones.isEmpty else {
-          completion(.success([]))
-          return
-        }
+      guard !zones.isEmpty else {
+        completion(.success([]))
+        return
+      }
 
-        // For each zone, build a base dictionary and attempt to attach share info.
-        // We query for CKShare records in each zone to get participant data.
-        let resultQueue = DispatchQueue(label: "expo.cloudkit.fetchSharedZones.results")
-        var resultDicts: [[String: Any]] = []
-        let group = DispatchGroup()
+      // For each zone, build a base dictionary and attempt to attach share info.
+      // We query for CKShare records in each zone to get participant data.
+      let resultQueue = DispatchQueue(label: "expo.cloudkit.fetchSharedZones.results")
+      var resultDicts: [[String: Any]] = []
+      let group = DispatchGroup()
 
-        for zone in zones {
-          var zoneDict = Converters.toZoneDictionary(zone)
-          group.enter()
+      for zone in zones {
+        var zoneDict = Converters.toZoneDictionary(zone)
+        group.enter()
 
-          // Query for the CKShare record in this zone.
-          let query = CKQuery(recordType: "cloudkit.share", predicate: NSPredicate(value: true))
-          let queryOp = CKQueryOperation(query: query)
-          queryOp.zoneID = zone.zoneID
-          queryOp.resultsLimit = 1
-          queryOp.qualityOfService = .utility
+        // Query for the CKShare record in this zone.
+        let query = CKQuery(recordType: "cloudkit.share", predicate: NSPredicate(value: true))
+        let queryOp = CKQueryOperation(query: query)
+        queryOp.zoneID = zone.zoneID
+        queryOp.resultsLimit = 1
+        queryOp.qualityOfService = .utility
 
-          var foundShare: CKShare?
+        var foundShare: CKShare?
 
-          queryOp.recordMatchedBlock = { _, recordResult in
-            if case .success(let record) = recordResult, let share = record as? CKShare {
-              foundShare = share
-            }
+        queryOp.recordMatchedBlock = { _, recordResult in
+          if case .success(let record) = recordResult, let share = record as? CKShare {
+            foundShare = share
           }
+        }
 
-          queryOp.queryResultBlock = { _ in
-            if let share = foundShare {
-              zoneDict["share"] = Converters.toShareDictionary(share)
-            }
-            resultQueue.sync {
-              resultDicts.append(zoneDict)
-            }
-            group.leave()
+        queryOp.queryResultBlock = { _ in
+          if let share = foundShare {
+            zoneDict["share"] = Converters.toShareDictionary(share)
           }
-
-          sharedDB.add(queryOp)
+          resultQueue.sync {
+            resultDicts.append(zoneDict)
+          }
+          group.leave()
         }
 
-        group.notify(queue: .global()) {
-          completion(.success(resultDicts))
-        }
+        sharedDB.add(queryOp)
+      }
+
+      group.notify(queue: .global()) {
+        completion(.success(resultDicts))
       }
     }
 

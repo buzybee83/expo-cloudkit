@@ -114,13 +114,14 @@ final class ChangeTokenStore {
 
   /// Persists the CKSyncEngine state serialization blob.
   /// Must be called on every `.stateUpdate` event to keep the token current.
+  ///
+  /// CKSyncEngine.State.Serialization conforms to Codable (iOS 17+) and
+  /// NSSecureCoding (iOS 17–17.x). In iOS 18+, NSSecureCoding was removed;
+  /// we use PropertyListEncoder which works across all supported versions.
   @available(iOS 17, macOS 14, *)
   func saveSyncEngineState(_ serialization: CKSyncEngine.State.Serialization) {
     do {
-      let data = try NSKeyedArchiver.archivedData(
-        withRootObject: serialization,
-        requiringSecureCoding: true
-      )
+      let data = try PropertyListEncoder().encode(serialization)
       defaults.set(data, forKey: key("syncEngineState"))
     } catch {
       // Non-fatal: next launch will trigger a full re-sync
@@ -132,10 +133,7 @@ final class ChangeTokenStore {
   @available(iOS 17, macOS 14, *)
   func loadSyncEngineState() -> CKSyncEngine.State.Serialization? {
     guard let data = defaults.data(forKey: key("syncEngineState")) else { return nil }
-    return try? NSKeyedUnarchiver.unarchivedObject(
-      ofClass: CKSyncEngine.State.Serialization.self,
-      from: data
-    )
+    return try? PropertyListDecoder().decode(CKSyncEngine.State.Serialization.self, from: data)
   }
 
   // MARK: - iOS 16 Per-Zone Tokens
