@@ -139,29 +139,24 @@ jobs:
           ruby - <<'RUBY'
           content = File.read('Podfile')
 
-          # Add a unit test target block that inherits pods from the app target
-          # and also explicitly links ExpoCloudKit so @testable import works.
           test_target_block = <<~PODFILE_BLOCK
 
           target 'ExpoCloudKitCITests' do
-            inherit! :search_paths
-            pod 'ExpoCloudKit', :path => '../..'
+            inherit! :complete
           end
           PODFILE_BLOCK
 
-          # Append the test target before the final post_install block (or at end of file)
           if content.include?('post_install do |installer|')
             content.sub!("post_install do |installer|", "#{test_target_block}\npost_install do |installer|")
           else
             content += test_target_block
           end
 
-          # Inject ENABLE_TESTABILITY into post_install
           inject = "  installer.pods_project.targets.select { |t| t.name == 'ExpoCloudKit' }.each do |t|\n    t.build_configurations.each { |c| c.build_settings['ENABLE_TESTABILITY'] = 'YES' }\n  end\n"
           content.sub!("post_install do |installer|\n", "post_install do |installer|\n#{inject}")
 
           File.write('Podfile', content)
-          puts 'Patched Podfile: added ExpoCloudKitCITests target + ENABLE_TESTABILITY'
+          puts 'Patched Podfile: added ExpoCloudKitCITests target (inherit! :complete) + ENABLE_TESTABILITY'
           RUBY
 
       - name: Cache CocoaPods downloads
