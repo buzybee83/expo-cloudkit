@@ -462,9 +462,9 @@ final class CloudKitRecordManager {
         return
       }
 
-      var dict = Converters.toDictionary(record)
-      self.resolveReferencesInDict(&dict, db: db, remainingDepth: clampedDepth - 1) {
-        completion(.success(dict))
+      let dict = Converters.toDictionary(record)
+      self.resolveReferencesInDict(dict, db: db, remainingDepth: clampedDepth - 1) { resolvedDict in
+        completion(.success(resolvedDict))
       }
     }
   }
@@ -480,14 +480,17 @@ final class CloudKitRecordManager {
   /// processing continues — partial resolution is preferable to a hard error.
   ///
   /// `completion` is always called exactly once, on an arbitrary background queue.
+  // NOTE: dict is passed by value (not inout) to allow capture in @escaping closures
+  // (Xcode 16 / Swift 6 forbids capturing inout parameters in escaping closures).
+  // The resolved copy is returned via the completion handler.
   private func resolveReferencesInDict(
-    _ dict: inout [String: Any],
+    _ dict: [String: Any],
     db: CKDatabase,
     remainingDepth: Int,
-    completion: @escaping () -> Void
+    completion: @escaping ([String: Any]) -> Void
   ) {
     guard let fields = dict["fields"] as? [String: [String: Any]] else {
-      completion()
+      completion(dict)
       return
     }
 
@@ -497,7 +500,7 @@ final class CloudKitRecordManager {
     }
 
     guard !referenceKeys.isEmpty else {
-      completion()
+      completion(dict)
       return
     }
 
@@ -505,6 +508,7 @@ final class CloudKitRecordManager {
     // Serial queue guards mutations to resolvedFields from concurrent CloudKit callbacks.
     let writeQueue = DispatchQueue(label: "expo.cloudkit.refresolver.\(UUID().uuidString)")
     var resolvedFields = fields
+    var mutableDict = dict
 
     for key in referenceKeys {
       guard
@@ -536,12 +540,12 @@ final class CloudKitRecordManager {
           return
         }
 
-        var refDict = Converters.toDictionary(refRecord)
+        let refDict = Converters.toDictionary(refRecord)
 
         if remainingDepth > 0 {
-          self.resolveReferencesInDict(&refDict, db: db, remainingDepth: remainingDepth - 1) {
+          self.resolveReferencesInDict(refDict, db: db, remainingDepth: remainingDepth - 1) { resolvedRefDict in
             writeQueue.sync {
-              resolvedFields[capturedKey] = ["type": "reference", "value": refDict]
+              resolvedFields[capturedKey] = ["type": "reference", "value": resolvedRefDict]
             }
             group.leave()
           }
@@ -556,9 +560,9 @@ final class CloudKitRecordManager {
 
     group.notify(queue: .global(qos: .userInitiated)) {
       writeQueue.sync {
-        dict["fields"] = resolvedFields
+        mutableDict["fields"] = resolvedFields
       }
-      completion()
+      completion(mutableDict)
     }
   }
 
