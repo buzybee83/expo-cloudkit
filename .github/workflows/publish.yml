@@ -82,7 +82,9 @@ jobs:
             puts "Using test target: #{test_target.name}"
           end
 
-          group = project.main_group.find_subpath('ExpoCloudKitTests', true)
+          File.write('/tmp/swift_test_target', test_target.name)
+
+          group = project.main_group.find_subpath(test_target.name, true)
           group.set_path(TESTS_DIR)
 
           swift_files = Dir.glob(File.join(TESTS_DIR, '*.swift'))
@@ -97,6 +99,21 @@ jobs:
           project.save
           puts "Saved #{PROJECT_PATH} — test target: #{test_target.name}"
           RUBY
+
+      - name: Patch Podfile for testability
+        working-directory: example/ios
+        run: |
+          cat >> Podfile <<'PODFILE'
+
+          post_install do |installer|
+            installer.pods_project.targets.each do |target|
+              next unless target.name == 'ExpoCloudKit'
+              target.build_configurations.each do |config|
+                config.build_settings['ENABLE_TESTABILITY'] = 'YES'
+              end
+            end
+          end
+          PODFILE
 
       - name: Cache CocoaPods downloads
         uses: actions/cache@v4
@@ -117,16 +134,20 @@ jobs:
         working-directory: example/ios
         run: |
           set -o pipefail
-          TEST_TARGET=$(xcodebuild -list -workspace ExpoCloudKitExample.xcworkspace 2>/dev/null \
-            | grep -E "ExpoCloudKitTests|ExpoCloudKitExampleTests" | head -1 | xargs)
-          TEST_TARGET=${TEST_TARGET:-ExpoCloudKitTests}
+          TEST_TARGET=$(cat /tmp/swift_test_target 2>/dev/null || echo 'ExpoCloudKitExampleTests')
           echo "Running test target: $TEST_TARGET"
           xcodebuild test \
             -workspace ExpoCloudKitExample.xcworkspace \
             -scheme ExpoCloudKitExample \
             -destination "platform=iOS Simulator,name=iPhone 15 Pro,OS=latest" \
-            -only-testing:$TEST_TARGET \
-            2>&1 | xcpretty --color
+            -only-testing:"$TEST_TARGET" \
+            2>&1 | tee /tmp/xcodebuild.log | xcpretty --color
+          EXIT=${PIPESTATUS[0]}
+          if [ "$EXIT" -ne 0 ]; then
+            echo "--- xcodebuild failed (exit $EXIT) — last 100 lines of raw log ---"
+            tail -100 /tmp/xcodebuild.log
+            exit "$EXIT"
+          fi
 
   publish:
     name: Publish to npm

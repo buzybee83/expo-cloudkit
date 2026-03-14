@@ -56,9 +56,9 @@ jobs:
         run: npx expo prebuild --platform ios --no-install
 
       # Inject the module's Swift test files into the generated Xcode test target.
-      # The xcodeproj gem (bundled with Xcode's Ruby) adds each .swift file in
-      # ios/Tests/ to the ExpoCloudKitExampleTests group and target so that
-      # xcodebuild compiles them with @testable import ExpoCloudKit access.
+      # The xcodeproj gem adds each .swift file in ios/Tests/ to the test target so
+      # that xcodebuild compiles them with @testable import ExpoCloudKit access.
+      # The resolved target name is written to /tmp/swift_test_target for the run step.
       - name: Inject Swift test sources into Xcode test target
         run: |
           gem install xcodeproj --no-document --quiet
@@ -86,8 +86,11 @@ jobs:
             puts "Using test target: #{test_target.name}"
           end
 
-          # Find or create a group for the injected test sources
-          group = project.main_group.find_subpath('ExpoCloudKitTests', true)
+          # Write the resolved target name so the run step can use it without re-parsing
+          File.write('/tmp/swift_test_target', test_target.name)
+
+          # Find or create a group for the injected test sources (named after the target)
+          group = project.main_group.find_subpath(test_target.name, true)
           group.set_path(TESTS_DIR)
 
           swift_files = Dir.glob(File.join(TESTS_DIR, '*.swift'))
@@ -102,6 +105,23 @@ jobs:
           project.save
           puts "Saved #{PROJECT_PATH} — test target: #{test_target.name}"
           RUBY
+
+      # Enable ENABLE_TESTABILITY on the ExpoCloudKit pod so @testable import works.
+      # This must run before pod install.
+      - name: Patch Podfile for testability
+        working-directory: example/ios
+        run: |
+          cat >> Podfile <<'PODFILE'
+
+          post_install do |installer|
+            installer.pods_project.targets.each do |target|
+              next unless target.name == 'ExpoCloudKit'
+              target.build_configurations.each do |config|
+                config.build_settings['ENABLE_TESTABILITY'] = 'YES'
+              end
+            end
+          end
+          PODFILE
 
       - name: Cache CocoaPods downloads
         uses: actions/cache@v4
@@ -122,14 +142,17 @@ jobs:
         working-directory: example/ios
         run: |
           set -o pipefail
-          # Determine which test target was injected (prefer ExpoCloudKitTests, fall back to *Tests)
-          TEST_TARGET=$(xcodebuild -list -workspace ExpoCloudKitExample.xcworkspace 2>/dev/null \
-            | grep -E "ExpoCloudKitTests|ExpoCloudKitExampleTests" | head -1 | xargs)
-          TEST_TARGET=${TEST_TARGET:-ExpoCloudKitTests}
+          TEST_TARGET=$(cat /tmp/swift_test_target 2>/dev/null || echo 'ExpoCloudKitExampleTests')
           echo "Running test target: $TEST_TARGET"
           xcodebuild test \
             -workspace ExpoCloudKitExample.xcworkspace \
             -scheme ExpoCloudKitExample \
             -destination "platform=iOS Simulator,name=iPhone 15 Pro,OS=latest" \
-            -only-testing:$TEST_TARGET \
-            2>&1 | xcpretty --color
+            -only-testing:"$TEST_TARGET" \
+            2>&1 | tee /tmp/xcodebuild.log | xcpretty --color
+          EXIT=${PIPESTATUS[0]}
+          if [ "$EXIT" -ne 0 ]; then
+            echo "--- xcodebuild failed (exit $EXIT) — last 100 lines of raw log ---"
+            tail -100 /tmp/xcodebuild.log
+            exit "$EXIT"
+          fi
