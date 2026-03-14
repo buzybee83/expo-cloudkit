@@ -11,6 +11,39 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.8.0] — 2026-03-14
+
+### Added
+
+**Phase I.1 — Performance**
+
+- **`batchFetchRecords(recordIDs, database?, desiredKeys?, operationConfig?)`** — fetches multiple records in a single `CKFetchRecordsOperation` network call. Returns `BatchFetchResult[]` with per-record success or error, never throwing on partial failures.
+- **`BatchFetchResult`** type — `{ recordName, record?, error? }` discriminated union.
+- **Automatic rate-limit retry** — all CloudKit operations (`saveRecords`, `fetchRecord`, `queryRecords`, `deleteRecords`, `fetchRecordZoneChanges`, `batchFetchRecords`) now silently retry up to 3 times on `CKError.requestRateLimited`, `serviceUnavailable`, or `zoneBusy`. Reads `CKErrorRetryAfterKey` (defaults to 5 s) and waits via `Task.sleep` before each retry.
+- **`addRateLimitedListener(callback)`** — subscribe to `onRateLimited` events emitted before each automatic retry. Payload: `{ retryAfter, operationName, retryCount }`.
+- **`RateLimitedEvent`** type.
+
+**Phase I.2 — Developer Experience**
+
+- **`recoverySuggestion`** property on `CloudKitError` — human-readable recovery hint for common error codes (`NOT_AUTHENTICATED`, `NETWORK_UNAVAILABLE`, `QUOTA_EXCEEDED`, `CONFLICT`, `RATE_LIMITED`, `ASSET_TOO_LARGE`). `undefined` when no guidance applies. All error subclasses inherit it automatically.
+- **`RATE_LIMITED`** added to `CloudKitErrorCode` enum.
+- **`useCloudKitStatus()`** hook — combines `accountStatus`, `isCloudKitAvailable`, and `isWebAuthenticated` into a single reactive object. Exposes `ready: boolean` shorthand (true when account is available and CloudKit is reachable). Accepts optional `pollInterval` for periodic re-checks.
+- **`CloudKitStatus`** and **`UseCloudKitStatusOptions`** types.
+
+**Phase I.3 — Observability**
+
+- **`onSyncHealth` event** — emitted after each sync cycle on both iOS 17+ (CKSyncEngine) and iOS 16 fallback paths. Payload: `{ sentCount, receivedCount, failedCount, durationMs, syncEngine }`.
+- **`addSyncHealthListener(callback)`** — subscribe to sync health events.
+- **`useSyncHealth()`** hook — reactive sync health state: `lastSyncAt`, `sentCount`, `receivedCount`, `failedCount`, `lastDurationMs`, `isHealthy`, `syncEngine`.
+- **`collectMetrics` option in `OperationConfig`** — when `true`, attaches `_metrics: { durationMs, retryCount }` to operation results. For array results, a sentinel record with `recordName: '__metrics__'` is appended.
+- **`SyncHealthEvent`**, **`OperationMetrics`**, **`SyncHealthState`** types.
+
+### Fixed
+
+- **Swift CI fully green** — upgraded example app to Expo SDK 53 / `expo-modules-core@2.x`, resolving `AppContext.appCodeSignEntitlements` compile error from `expo-file-system`. Switched `swift-tests` runner from `macos-14` to `macos-15`. Added `super.init()` to Exception subclasses required by Swift 6 / Xcode 16. Removed deleted `CKError.assetFileSizeExceeded` enum case (replaced by `CKErrorBatchRequestFailed` in iOS 18 SDK). Converted `OfflineQueueTests` to `async/await` for Swift 6 actor isolation.
+
+---
+
 ## [0.7.0] — 2026-03-12
 
 ### Added
