@@ -305,3 +305,87 @@ _Done when_: Zero `DispatchQueue` usage remains in `CloudKitSyncEngine.swift`, `
 **Batch 2 (H.3 + H.5)** delivers the two API-gap features. Multi-container (H.3) is the most architecturally significant item in Phase H — it introduces a second code path for all core operations — but it is additive and does not modify existing singleton behavior. Cursor persistence (H.5) is a quick win that solves a real usability problem.
 
 **Batch 3 (H.6) runs last and alone.** Actor migration is the highest-risk item: it rewrites concurrency primitives in three core files totaling 1,200+ lines. It must run after H.1 lands so that CI catches any regressions automatically. It must not overlap with H.3 or H.4 which also touch Swift files.
+
+---
+
+## Phase I — Performance, DX, Observability & Integration Testing
+
+### I.1 — Performance
+_Effort: M (Swift + TypeScript) | Agent: ios-native-dev + ts-sdk-dev (parallel)_
+
+Reduce network overhead and improve throughput for high-volume use cases.
+
+- [ ] **Swift**: Batch `CKFetchRecordsOperation` — when `fetchRecord` is called in rapid succession for multiple IDs, coalesce into a single operation within a configurable debounce window (default 50ms)
+- [ ] **Swift**: Automatic CloudKit rate-limit retry — detect `CKError.requestRateLimited` / `CKError.serviceUnavailable`, read `retryAfterSeconds` from `userInfo`, and re-enqueue after the indicated delay instead of surfacing the error to JS
+- [ ] **Swift**: Push notification token refresh — on `CKError.notAuthenticated` after a previously successful session, attempt one silent `accountStatus()` check and re-register subscriptions automatically
+- [ ] **TypeScript**: Expose a `batchFetchRecords(ids: string[], options?)` function that maps to the coalesced Swift operation, returning a `Record<string, CloudKitRecord>` map
+- [ ] **TypeScript**: Add `onRateLimited?: (retryAfter: number) => void` callback to `OperationConfig` so callers can display a "syncing paused" indicator
+
+_Done when_: Fetching 50 records in a loop generates a single `CKFetchRecordsOperation` network call. A rate-limited operation retries transparently without surfacing an error to JS unless the retry itself fails.
+
+---
+
+### I.2 — DX (Developer Experience)
+_Effort: M (Swift + TypeScript) | Agent: ios-native-dev + ts-sdk-dev (parallel)_
+
+Make the module easier to adopt and debug, especially for developers new to CloudKit.
+
+- [ ] **Swift**: Structured error recovery suggestions — augment `ExpoModulesCore.Exception` subclasses with a `recoverySuggestion: String` property that maps each `CKError.Code` to an actionable message (e.g., `notAuthenticated` → "Open Settings → iCloud and sign in")
+- [ ] **TypeScript**: Surface `recoverySuggestion` on all typed error classes in `src/errors.ts` (`.recoverySuggestion: string | undefined`)
+- [ ] **Swift**: SwiftUI-compatible `@Observable` wrapper — a `CloudKitStore` class (iOS 17+) conforming to `@Observable` that wraps `useCloudKitRecord`-equivalent logic for pure SwiftUI apps that embed this module via Swift Package Manager in the future
+- [ ] **TypeScript**: `useCloudKitStatus()` hook — combines `accountStatus`, `isCloudKitAvailable`, and `isWebAuthenticated` into a single reactive object with a `ready: boolean` shorthand
+- [ ] **TypeScript**: Zod schema integration helpers — `cloudKitRecordToZod(schema)` utility that validates a `CloudKitRecord.fields` object against a caller-supplied Zod schema and returns typed fields
+
+_Done when_: A `CloudKitNotAuthenticatedError` thrown from any operation includes `.recoverySuggestion = "Open Settings → iCloud and sign in"`. `useCloudKitStatus()` returns `{ ready: true }` when the user is signed in and the container is reachable.
+
+---
+
+### I.3 — Observability
+_Effort: S (Swift + TypeScript) | Agent: ios-native-dev + ts-sdk-dev (parallel)_
+
+Surface CloudKit quota, sync health, and operation telemetry so app developers can build status UIs and alert on degraded states.
+
+- [ ] **Swift**: `fetchContainerQuota()` — call `CKContainer.accountStatus` + `CKDatabase.fetchAllRecordZones` and aggregate approximate zone record counts; return `{ zonesUsed: number, estimatedRecordCount: number }` (CloudKit does not expose byte quotas directly via CKOperation)
+- [ ] **Swift**: Sync health event — emit `onSyncHealth` event after each sync cycle with `{ sentCount, receivedCount, failedCount, durationMs, syncEngine: boolean }`
+- [ ] **Swift**: Per-operation timing — when `OperationConfig.collectMetrics` is `true`, attach a `_metrics: { durationMs: number, retryCount: number }` field to the operation's resolved value
+- [ ] **TypeScript**: `useSyncHealth()` hook — subscribes to `onSyncHealth` events and exposes `{ lastSyncAt, sentCount, receivedCount, failedCount, isHealthy }` state
+- [ ] **TypeScript**: Add `collectMetrics?: boolean` to `OperationConfig`; add `_metrics?` field to all operation return types
+
+_Done when_: After a sync cycle, `useSyncHealth()` updates with the sent/received/failed counts and timestamp. A fetch with `collectMetrics: true` returns `record._metrics.durationMs` alongside the record data.
+
+---
+
+### I.4 — Integration Testing
+_Effort: L (Swift + TypeScript + CI) | Agent: qa-tester + ios-native-dev (sequential)_
+
+Add a sandboxed end-to-end test suite that exercises real CloudKit network calls in a dedicated development container. These tests run in CI on a schedule (not on every PR) to avoid blocking fast iteration.
+
+- [ ] **CI**: Add a `integration-tests` GitHub Actions workflow (`on: schedule: - cron: '0 4 * * *'`) running on `macos-15`; requires `CK_CONTAINER_ID` and `CK_API_TOKEN` secrets
+- [ ] **Swift**: `ios/IntegrationTests/` directory — XCTest classes that call real CloudKit APIs against a `iCloud.com.expo.cloudkit.sandbox` container; skip if `CK_API_TOKEN` env var is absent
+- [ ] **Swift**: Integration test coverage: `accountStatus`, `createZone`, `saveRecords`, `queryRecords`, `fetchRecord`, `deleteRecords`, `deleteZone` — verify round-trip field fidelity for all field types (String, Number, Date, Asset, Location, Data, Reference)
+- [ ] **TypeScript**: `src/__tests__/integration/` — Jest tests using the web platform (`ExpoCloudKit.web.ts`) against the same sandbox container; run with `CLOUDKIT_INTEGRATION=1 jest`
+- [ ] **Docs**: Add "Setting up a sandbox container" section to README explaining how to create the development container in CloudKit Dashboard and configure the CI secrets
+
+_Done when_: `gh workflow run integration-tests.yml` exercises real CloudKit round-trips and reports pass/fail per field type. PRs are not blocked by integration tests. A failed scheduled run creates a GitHub issue automatically.
+
+---
+
+### Batch Execution Plan
+
+#### Batch 1 (parallel — no dependencies)
+| Phase | Goal | Agent(s) | Effort |
+|-------|------|----------|--------|
+| I.1 | Performance (batching, rate-limit retry) | ios-native-dev + ts-sdk-dev | M |
+| I.2 | DX (error recovery, hooks, Zod) | ios-native-dev + ts-sdk-dev | M |
+| I.3 | Observability (quota, sync health, metrics) | ios-native-dev + ts-sdk-dev | S |
+
+#### Batch 2 (after Batch 1 — integration tests need stable APIs)
+| Phase | Goal | Agent(s) | Effort |
+|-------|------|----------|--------|
+| I.4 | Integration testing (sandbox CI) | qa-tester + ios-native-dev | L |
+
+### Priority & Rationale
+
+**Start with I.1 + I.2 + I.3 (parallel).** All three are additive — they do not modify existing code paths, only add new capabilities and surface new data. I.3 is the smallest and can ship independently. I.2 DX improvements are the most visible to adopters.
+
+**I.4 (integration tests) runs last** because it requires a real CloudKit container, secrets setup, and a scheduled workflow. It also benefits from I.1/I.2/I.3 being stable before writing round-trip assertions against them.
