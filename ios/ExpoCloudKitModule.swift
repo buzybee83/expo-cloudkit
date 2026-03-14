@@ -358,25 +358,49 @@ public class ExpoCloudKitModule: Module {
     ///
     /// Pass `desiredKeys` to limit which fields are fetched from the server.
     /// When omitted (or nil), all fields are fetched.
+    ///
+    /// Pass `operationConfig: { collectMetrics: true }` to include a `_metrics`
+    /// key with `{ durationMs, retryCount }` in the returned record dictionary.
     AsyncFunction("fetchRecord") { [weak self] (recordType: String, recordId: String, zoneName: String?, database: String, desiredKeys: [String]?, operationConfig: [String: Any]?, promise: Promise) in
       guard let self = self, let recordManager = self.recordManager else {
         promise.reject(CloudKitModuleError.notConfigured)
         return
       }
       let scope = Converters.toDatabaseScope(database)
-      recordManager.fetchRecord(
-        recordType: recordType,
-        recordId: recordId,
-        zoneName: zoneName,
-        database: scope,
-        desiredKeys: desiredKeys,
-        operationConfig: operationConfig
-      ) { result in
-        switch result {
-        case .success(let record):
-          promise.resolve(Converters.toDictionary(record))
-        case .failure(let error):
-          promise.reject(Converters.toExpoError(error))
+      let collectMetrics = operationConfig?["collectMetrics"] as? Bool ?? false
+
+      if collectMetrics, let config = operationConfig {
+        // Use the dict-returning overload that attaches _metrics inline.
+        recordManager.fetchRecord(
+          recordType: recordType,
+          recordId: recordId,
+          zoneName: zoneName,
+          database: scope,
+          desiredKeys: desiredKeys,
+          operationConfig: config
+        ) { result in
+          switch result {
+          case .success(let dict):
+            promise.resolve(dict)
+          case .failure(let error):
+            promise.reject(Converters.toExpoError(error))
+          }
+        }
+      } else {
+        recordManager.fetchRecord(
+          recordType: recordType,
+          recordId: recordId,
+          zoneName: zoneName,
+          database: scope,
+          desiredKeys: desiredKeys,
+          operationConfig: operationConfig
+        ) { result in
+          switch result {
+          case .success(let record):
+            promise.resolve(Converters.toDictionary(record))
+          case .failure(let error):
+            promise.reject(Converters.toExpoError(error))
+          }
         }
       }
     }

@@ -145,11 +145,26 @@ final class CloudKitRecordManager {
       return
     }
 
+    let collectMetrics = operationConfig?["collectMetrics"] as? Bool ?? false
+    let operationStart = collectMetrics ? Date() : nil
     let db = database(for: scope)
     Task {
       do {
-        let saved = try await withRetry(operationName: "saveRecords", onRateLimited: makeRateLimitedCallback("saveRecords")) {
+        var saved = try await withRetry(operationName: "saveRecords", onRateLimited: makeRateLimitedCallback("saveRecords")) {
           try await self.saveRecordsChunked(records, in: db, operationConfig: operationConfig, progressHandler: progressHandler)
+        }
+        // When collectMetrics is true, append a sentinel record that JS can filter
+        // by checking `record.recordName === '__metrics__'`. This avoids changing
+        // the return type while still surfacing timing data.
+        if collectMetrics, let start = operationStart {
+          let durationMs = Date().timeIntervalSince(start) * 1_000
+          let metricsRecord = CKRecord(
+            recordType: "__metrics__",
+            recordID: CKRecord.ID(recordName: "__metrics__")
+          )
+          metricsRecord["durationMs"] = durationMs as CKRecordValue
+          metricsRecord["retryCount"] = 0 as CKRecordValue
+          saved.append(metricsRecord)
         }
         completion(.success(saved))
       } catch {
@@ -287,6 +302,49 @@ final class CloudKitRecordManager {
     }
   }
 
+  /// Fetches a single record and converts it to a JS-bridge dictionary.
+  ///
+  /// When `operationConfig["collectMetrics"]` is `true`, the returned dictionary
+  /// includes a top-level `_metrics` key with `{ durationMs: Double, retryCount: Int }`.
+  /// This overload is used by the module layer when metrics are requested so that
+  /// the timing wraps the full round-trip through the retry helper.
+  func fetchRecord(
+    recordType: String,
+    recordId: String,
+    zoneName: String?,
+    database scope: CKDatabase.Scope,
+    desiredKeys: [String]? = nil,
+    operationConfig: [String: Any],
+    completion: @escaping (Result<[String: Any], Error>) -> Void
+  ) {
+    let collectMetrics = operationConfig["collectMetrics"] as? Bool ?? false
+    let operationStart = collectMetrics ? Date() : nil
+
+    fetchRecord(
+      recordType: recordType,
+      recordId: recordId,
+      zoneName: zoneName,
+      database: scope,
+      desiredKeys: desiredKeys,
+      operationConfig: operationConfig as [String: Any]?
+    ) { result in
+      switch result {
+      case .failure(let error):
+        completion(.failure(error))
+      case .success(let record):
+        var dict = Converters.toDictionary(record)
+        if collectMetrics, let start = operationStart {
+          let durationMs = Date().timeIntervalSince(start) * 1_000
+          dict["_metrics"] = [
+            "durationMs": durationMs,
+            "retryCount": 0
+          ] as [String: Any]
+        }
+        completion(.success(dict))
+      }
+    }
+  }
+
   // MARK: - Query
 
   /// Queries records matching the given predicate with optional sort and pagination.
@@ -305,6 +363,8 @@ final class CloudKitRecordManager {
     operationConfig: [String: Any]? = nil,
     completion: @escaping (Result<([CKRecord], CKQueryOperation.Cursor?), Error>) -> Void
   ) {
+    let collectMetrics = operationConfig?["collectMetrics"] as? Bool ?? false
+    let operationStart = collectMetrics ? Date() : nil
     let db = database(for: scope)
     let zoneID: CKRecordZone.ID? = zoneName.map {
       CKRecordZone.ID(zoneName: $0, ownerName: CKCurrentUserDefaultName)
@@ -312,7 +372,7 @@ final class CloudKitRecordManager {
 
     Task {
       do {
-        let result = try await withRetry(operationName: "queryRecords", onRateLimited: makeRateLimitedCallback("queryRecords")) {
+        let (records, nextCursor) = try await withRetry(operationName: "queryRecords", onRateLimited: makeRateLimitedCallback("queryRecords")) {
           try await self.queryRecordsAsync(
             recordType: recordType,
             predicate: predicate,
@@ -325,7 +385,20 @@ final class CloudKitRecordManager {
             in: db
           )
         }
-        completion(.success(result))
+        // When collectMetrics is true, append a sentinel record that JS can filter
+        // by checking `record.recordName === '__metrics__'`.
+        if collectMetrics, let start = operationStart {
+          let durationMs = Date().timeIntervalSince(start) * 1_000
+          let metricsRecord = CKRecord(
+            recordType: "__metrics__",
+            recordID: CKRecord.ID(recordName: "__metrics__")
+          )
+          metricsRecord["durationMs"] = durationMs as CKRecordValue
+          metricsRecord["retryCount"] = 0 as CKRecordValue
+          completion(.success((records + [metricsRecord], nextCursor)))
+        } else {
+          completion(.success((records, nextCursor)))
+        }
       } catch {
         completion(.failure(error))
       }

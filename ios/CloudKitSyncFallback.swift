@@ -428,6 +428,11 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
         let changed = changedByZone[zoneName] ?? []
         let deleted = deletedByZone[zoneName] ?? []
 
+        // Accumulate health counters for this zone.
+        self.stateQueue.async {
+          self.cycleReceivedCount += changed.count + deleted.count
+        }
+
         if !changed.isEmpty || !deleted.isEmpty {
           self.eventHandler?(.recordsFetched(
             changed: changed,
