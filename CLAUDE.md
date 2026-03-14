@@ -101,19 +101,23 @@ Task(subagent_type="ts-sdk-dev", prompt="Build the TS side...")
 - [ ] Example app builds and runs on iOS Simulator
 - [ ] New Swift code covered by XCTest (if unit-testable)
 - [ ] ROADMAP.md checkboxes updated for completed items
+- [ ] README.md updated if public API changed
+- [ ] CHANGELOG.md entry added
 
 Built with [Claude Code](https://claude.com/claude-code)
 ```
 
 ## Release Workflow
 
+**MANDATORY: Docs must be updated before publishing.**
+
 1. Update `CHANGELOG.md` with version number + date + changes
-2. Bump `version` in `package.json`
-3. Commit: `git commit -m "chore: release vX.Y.Z"`
-4. `code-reviewer` approves
-5. `qa-tester` validates on example app
-6. `devops` runs `npm publish` with correct tag
-7. `devops` creates git tag: `git tag v{version} && git push origin v{version}`
+2. Update `README.md` with any new APIs, options, or behavior changes
+3. Bump `version` in `package.json`
+4. Commit: `git commit -m "chore: release vX.Y.Z"`
+5. `code-reviewer` approves
+6. `qa-tester` validates on example app
+7. `devops` creates git tag: `git tag v{version} && git push origin v{version}` (GitHub Actions handles publish)
 
 **Semver rules:**
 - Patch (`0.x.Y`): bug fixes, no API changes
