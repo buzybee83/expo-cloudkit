@@ -83,13 +83,19 @@ jobs:
             app_target = project.targets.find { |t| !t.name.end_with?('Tests') }
             test_target = project.new_target(:unit_test_bundle, 'ExpoCloudKitCITests', :ios, '16.0')
             test_target.add_dependency(app_target) if app_target
-            # Set required build settings for the synthesised target
+            # Set required build settings for the synthesised target.
+            # TEST_HOST / BUNDLE_LOADER make this a hosted unit test bundle: the
+            # test bundle is loaded into the app binary at test time, so
+            # @testable import ExpoCloudKit resolves from the app's linked modules.
+            app_name = app_target ? app_target.name : 'ExpoCloudKitExample'
             test_target.build_configurations.each do |config|
               config.build_settings['SWIFT_VERSION'] = '5.0'
               config.build_settings['GENERATE_INFOPLIST_FILE'] = 'YES'
               config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'
               config.build_settings['PRODUCT_NAME'] = 'ExpoCloudKitCITests'
               config.build_settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.expo.ExpoCloudKitCITests'
+              config.build_settings['TEST_HOST'] = "$(BUILT_PRODUCTS_DIR)/#{app_name}.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/#{app_name}"
+              config.build_settings['BUNDLE_LOADER'] = '$(TEST_HOST)'
             end
             created_new_target = true
           else
