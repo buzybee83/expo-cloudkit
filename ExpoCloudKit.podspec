@@ -10,7 +10,7 @@ Pod::Spec.new do |s|
   s.license        = package['license']
   s.author         = 'Expo'
   s.homepage       = 'https://github.com/buzybee83/expo-cloudkit'
-  s.platform       = :ios, '16.0'
+  s.platform       = :ios, '13.4'
   s.swift_version  = '5.9'
   s.source         = { git: 'https://github.com/buzybee83/expo-cloudkit.git' }
   s.static_framework = true
