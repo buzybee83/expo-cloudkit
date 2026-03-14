@@ -79,6 +79,12 @@ jobs:
             app_target = project.targets.find { |t| !t.name.end_with?('Tests') }
             test_target = project.new_target(:unit_test_bundle, 'ExpoCloudKitTests', :ios, '16.0')
             test_target.add_dependency(app_target) if app_target
+            test_target.build_configurations.each do |config|
+              config.build_settings['SWIFT_VERSION'] = '5.0'
+              config.build_settings['GENERATE_INFOPLIST_FILE'] = 'YES'
+              config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'
+              config.build_settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.expo.ExpoCloudKitTests'
+            end
             created_new_target = true
           else
             puts "Using test target: #{test_target.name}"
