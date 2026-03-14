@@ -94,7 +94,7 @@ final class CloudKitDebugHelper {
     // Fetch private database zones
     group.enter()
     let privateOp = CKFetchRecordZonesOperation.fetchAllRecordZonesOperation()
-    privateOp.fetchRecordZonesResultBlock = { result in
+    privateOp.fetchRecordZonesResultBlock = { (result: Result<[CKRecordZone.ID: CKRecordZone], Error>) in
       switch result {
       case .success(let zonesByID):
         privateZones = Array(zonesByID.values)
@@ -110,7 +110,7 @@ final class CloudKitDebugHelper {
     // Fetch shared database zones
     group.enter()
     let sharedOp = CKFetchRecordZonesOperation.fetchAllRecordZonesOperation()
-    sharedOp.fetchRecordZonesResultBlock = { result in
+    sharedOp.fetchRecordZonesResultBlock = { (result: Result<[CKRecordZone.ID: CKRecordZone], Error>) in
       switch result {
       case .success(let zonesByID):
         sharedZones = Array(zonesByID.values)
