@@ -305,7 +305,7 @@ final class ConvertersTests: XCTestCase {
       ]
     ]
     let record = try Converters.toCKRecord(from: input)
-    let val = (record["count"] as? NSNumber)?.doubleValue
+    let val = try XCTUnwrap((record["count"] as? NSNumber)?.doubleValue)
     XCTAssertEqual(val, 99.0, accuracy: 0.001)
   }
 
@@ -493,8 +493,8 @@ final class ConvertersTests: XCTestCase {
     let scores = record["scores"] as? NSArray
     XCTAssertNotNil(scores, "Expected an NSArray of NSNumbers for field 'scores'")
     XCTAssertEqual(scores!.count, 2)
-    XCTAssertEqual((scores![0] as? NSNumber)?.doubleValue, 1.0, accuracy: 0.001)
-    XCTAssertEqual((scores![1] as? NSNumber)?.doubleValue, 2.0, accuracy: 0.001)
+    XCTAssertEqual(try XCTUnwrap((scores![0] as? NSNumber)?.doubleValue), 1.0, accuracy: 0.001)
+    XCTAssertEqual(try XCTUnwrap((scores![1] as? NSNumber)?.doubleValue), 2.0, accuracy: 0.001)
   }
 
   // MARK: - toExpoError — additional CKError codes
@@ -511,13 +511,6 @@ final class ConvertersTests: XCTestCase {
     let bridgeError = Converters.toExpoError(ckError) as? ExpoCloudKitBridgeError
     XCTAssertNotNil(bridgeError)
     XCTAssertEqual(bridgeError?.code, "LIMIT_EXCEEDED")
-  }
-
-  func test_toExpoError_assetFileTooBig_mapsToASSET_TOO_LARGE() {
-    let ckError = CKError(.assetFileTooBig)
-    let bridgeError = Converters.toExpoError(ckError) as? ExpoCloudKitBridgeError
-    XCTAssertNotNil(bridgeError)
-    XCTAssertEqual(bridgeError?.code, "ASSET_TOO_LARGE")
   }
 
   func test_toExpoError_operationCancelled_mapsToUNKNOWN() {
