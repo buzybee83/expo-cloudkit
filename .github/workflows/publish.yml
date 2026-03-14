@@ -142,7 +142,8 @@ jobs:
           test_target_block = <<~PODFILE_BLOCK
 
           target 'ExpoCloudKitCITests' do
-            inherit! :complete
+            inherit! :search_paths
+            pod 'ExpoCloudKit', :path => '../..'
           end
           PODFILE_BLOCK
 
@@ -156,7 +157,7 @@ jobs:
           content.sub!("post_install do |installer|\n", "post_install do |installer|\n#{inject}")
 
           File.write('Podfile', content)
-          puts 'Patched Podfile: added ExpoCloudKitCITests target (inherit! :complete) + ENABLE_TESTABILITY'
+          puts 'Patched Podfile: added ExpoCloudKitCITests target with pod ExpoCloudKit :path + ENABLE_TESTABILITY'
           RUBY
 
       - name: Cache CocoaPods downloads
