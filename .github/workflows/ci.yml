@@ -35,7 +35,7 @@ jobs:
 
   swift-tests:
     name: Swift XCTest (iOS Simulator)
-    runs-on: macos-14
+    runs-on: macos-15
     continue-on-error: false
     steps:
       - uses: actions/checkout@v4
@@ -185,7 +185,7 @@ jobs:
           xcodebuild test \
             -workspace ExpoCloudKitExample.xcworkspace \
             -scheme ExpoCloudKitExample \
-            -destination "platform=iOS Simulator,name=iPhone 15 Pro,OS=latest" \
+            -destination "platform=iOS Simulator,name=iPhone 16,OS=latest" \
             -only-testing:"$TEST_TARGET" \
             2>&1 | tee /tmp/xcodebuild.log | xcpretty --color
           EXIT=${PIPESTATUS[0]}
