@@ -1723,7 +1723,7 @@ class CloudKitRequiresiOS17Exception: Exception {
 
 class CloudKitNotImplementedException: Exception {
   private let feature: String
-  init(_ feature: String) { self.feature = feature }
+  init(_ feature: String) { self.feature = feature; super.init() }
   override var reason: String {
     "\(feature) is not yet implemented in this phase of expo-cloudkit."
   }
@@ -1737,7 +1737,7 @@ class CloudKitSyncEngineNotRunningException: Exception {
 
 class CloudKitSubscriptionNotFoundException: Exception {
   private let subscriptionID: String
-  init(_ subscriptionID: String) { self.subscriptionID = subscriptionID }
+  init(_ subscriptionID: String) { self.subscriptionID = subscriptionID; super.init() }
   override var reason: String {
     "Subscription not found: \(subscriptionID)"
   }
@@ -1745,7 +1745,7 @@ class CloudKitSubscriptionNotFoundException: Exception {
 
 class CloudKitInvalidArgumentException: Exception {
   private let message: String
-  init(_ message: String) { self.message = message }
+  init(_ message: String) { self.message = message; super.init() }
   override var reason: String {
     "Invalid argument: \(message)"
   }
@@ -1757,7 +1757,7 @@ class ShareNotFoundException: Exception {
 
 class ParticipantNotFoundException: Exception {
   private let participantRecordName: String
-  init(_ participantRecordName: String) { self.participantRecordName = participantRecordName }
+  init(_ participantRecordName: String) { self.participantRecordName = participantRecordName; super.init() }
   override var reason: String {
     "Participant '\(participantRecordName)' not found on this share."
   }
