@@ -37,6 +37,13 @@ export enum CloudKitErrorCode {
    * Split the operation into smaller chunks.
    */
   LIMIT_EXCEEDED = 'LIMIT_EXCEEDED',
+  /**
+   * CloudKit is temporarily rate limiting requests from this client.
+   * If `retryAfterSeconds` is set on the error, wait that long before retrying.
+   * CKSyncEngine handles rate limits automatically; only relevant for direct
+   * record CRUD operations.
+   */
+  RATE_LIMITED = 'RATE_LIMITED',
   /** An unexpected error occurred. Check `message` for details. */
   UNKNOWN = 'UNKNOWN',
 
@@ -152,6 +159,9 @@ export class CloudKitNotSupportedError extends Error {
  *       // Use err.serverRecord to resolve the conflict
  *       mergeWithServer(err.serverRecord);
  *     }
+ *     if (err.recoverySuggestion) {
+ *       Alert.alert('CloudKit Error', err.recoverySuggestion);
+ *     }
  *   }
  * }
  * ```
@@ -172,6 +182,20 @@ export class CloudKitError extends Error {
    */
   readonly serverRecord: import('./types').CloudKitRecord | undefined;
 
+  /**
+   * A human-readable suggestion for recovering from this error.
+   * Suitable for display in UI error messages or developer logs.
+   * `undefined` when no specific recovery guidance is available.
+   *
+   * @example
+   * ```typescript
+   * if (err instanceof CloudKitError && err.recoverySuggestion) {
+   *   Alert.alert('CloudKit Error', err.recoverySuggestion);
+   * }
+   * ```
+   */
+  readonly recoverySuggestion: string | undefined;
+
   constructor(
     code: CloudKitErrorCode,
     message: string,
@@ -185,9 +209,33 @@ export class CloudKitError extends Error {
     this.code = code;
     this.retryAfterSeconds = options?.retryAfterSeconds;
     this.serverRecord = options?.serverRecord;
+    this.recoverySuggestion = CloudKitError.recoverySuggestionFor(code);
 
     // Maintain proper prototype chain in transpiled JS
     Object.setPrototypeOf(this, new.target.prototype);
+  }
+
+  /**
+   * Returns a human-readable recovery suggestion for a given error code,
+   * or `undefined` when no guidance is available.
+   */
+  private static recoverySuggestionFor(code: CloudKitErrorCode): string | undefined {
+    switch (code) {
+      case CloudKitErrorCode.NOT_AUTHENTICATED:
+        return 'Open Settings → [Your Name] → iCloud and sign in.';
+      case CloudKitErrorCode.NETWORK_UNAVAILABLE:
+        return 'Check your internet connection and try again.';
+      case CloudKitErrorCode.QUOTA_EXCEEDED:
+        return 'Free up iCloud storage in Settings → [Your Name] → iCloud → Manage Storage.';
+      case CloudKitErrorCode.CONFLICT:
+        return 'The record was modified by another device. Fetch the latest version and retry.';
+      case CloudKitErrorCode.RATE_LIMITED:
+        return 'CloudKit is rate limiting requests. The operation will be retried automatically.';
+      case CloudKitErrorCode.ASSET_TOO_LARGE:
+        return 'The asset exceeds the CloudKit size limit (250 MB for public databases).';
+      default:
+        return undefined;
+    }
   }
 
   /**

@@ -1,6 +1,52 @@
 import CloudKit
 import Foundation
 
+// MARK: - Rate-limit retry helper (I.1)
+
+/// CloudKit error codes that signal the caller should back off and retry.
+private let retryableCKErrorCodes: Set<CKError.Code> = [
+  .requestRateLimited,
+  .serviceUnavailable,
+  .zoneBusy
+]
+
+/// Executes `operation` up to `maxRetries` additional times.
+///
+/// When CloudKit returns a retryable error (`.requestRateLimited`,
+/// `.serviceUnavailable`, or `.zoneBusy`) the wrapper reads
+/// `CKErrorRetryAfterKey` from the error's userInfo (defaulting to 5 s when
+/// absent), invokes `onRateLimited` so the module can emit an event to JS,
+/// then sleeps for that duration using `Task.sleep(nanoseconds:)` — which is
+/// actor-safe and never blocks a thread. After exhausting all retries the
+/// original error is rethrown.
+///
+/// - Parameters:
+///   - maxRetries:      Maximum number of additional attempts (default 3).
+///   - operationName:   Human-readable label surfaced in `onRateLimited` events.
+///   - onRateLimited:   Called before each retry with `(retryAfterSeconds, retryCount)`.
+///   - operation:       The async throwing closure to retry.
+func withRetry<T>(
+  maxRetries: Int = 3,
+  operationName: String = "unknown",
+  onRateLimited: ((Double, Int) -> Void)? = nil,
+  operation: @escaping () async throws -> T
+) async throws -> T {
+  var attempt = 0
+  while true {
+    do {
+      return try await operation()
+    } catch let error as CKError
+      where retryableCKErrorCodes.contains(error.code) && attempt < maxRetries {
+      attempt += 1
+      let delay = (error.userInfo[CKErrorRetryAfterKey] as? Double) ?? 5.0
+      onRateLimited?(delay, attempt)
+      let nanoseconds = UInt64(delay * 1_000_000_000)
+      try await Task.sleep(nanoseconds: nanoseconds)
+    }
+    // All other errors and exhausted-retry paths fall through and rethrow.
+  }
+}
+
 /// Manages CKRecord CRUD operations: save, fetch, query, delete,
 /// and zone change fetching (delta sync).
 ///
@@ -57,6 +103,11 @@ final class CloudKitRecordManager {
   // Key: opaque token string produced by queryRecords; Value: CKQueryOperation.Cursor
   private var cursorStore: [String: CKQueryOperation.Cursor] = [:]
 
+  /// Optional hook called by `withRetry` before each automatic retry.
+  /// The module sets this callback in `configure()` so it can emit
+  /// `onRateLimited` events to JavaScript with full context.
+  var onRateLimited: ((_ retryAfterSeconds: Double, _ operationName: String, _ retryCount: Int) -> Void)?
+
   // MARK: - Init
 
   init(ckContainer: CKContainer) {
@@ -89,80 +140,86 @@ final class CloudKitRecordManager {
     progressHandler: ((_ completed: Int, _ total: Int, _ recordName: String) -> Void)? = nil,
     completion: @escaping (Result<[CKRecord], Error>) -> Void
   ) {
-    let db = database(for: scope)
-    let total = records.count
-
-    guard total > 0 else {
+    guard records.count > 0 else {
       completion(.success([]))
       return
     }
 
+    let db = database(for: scope)
+    Task {
+      do {
+        let saved = try await withRetry(operationName: "saveRecords", onRateLimited: makeRateLimitedCallback("saveRecords")) {
+          try await self.saveRecordsChunked(records, in: db, operationConfig: operationConfig, progressHandler: progressHandler)
+        }
+        completion(.success(saved))
+      } catch {
+        completion(.failure(error))
+      }
+    }
+  }
+
+  /// Async inner implementation: chunks records into 400-record batches and
+  /// dispatches them serially. Throws on the first operation-level or per-record
+  /// error. Called exclusively by `saveRecords` via the `withRetry` wrapper.
+  private func saveRecordsChunked(
+    _ records: [CKRecord],
+    in db: CKDatabase,
+    operationConfig: [String: Any]?,
+    progressHandler: ((_ completed: Int, _ total: Int, _ recordName: String) -> Void)?
+  ) async throws -> [CKRecord] {
+    let total = records.count
     let chunks = stride(from: 0, to: total, by: CloudKitRecordManager.batchSize).map { start -> [CKRecord] in
       let end = min(start + CloudKitRecordManager.batchSize, total)
       return Array(records[start..<end])
     }
 
-    // completedCount is mutated only from CloudKit's internal operation queue
-    // (single operation at a time due to serial dispatch), so a plain var
-    // protected by serial dispatch via the recursive call chain is sufficient.
     var completedCount = 0
     var allSaved: [CKRecord] = []
     allSaved.reserveCapacity(total)
 
-    func dispatchChunk(_ index: Int) {
-      guard index < chunks.count else {
-        // All chunks finished successfully.
-        completion(.success(allSaved))
-        return
-      }
+    for chunk in chunks {
+      let chunkResult: [CKRecord] = try await withCheckedThrowingContinuation { continuation in
+        var chunkSaved: [CKRecord] = []
+        var firstError: Error?
 
-      let chunk = chunks[index]
-      var chunkSaved: [CKRecord] = []
-      var firstError: Error?
+        let operation = CKModifyRecordsOperation(
+          recordsToSave: chunk,
+          recordIDsToDelete: nil
+        )
+        operation.qualityOfService = .userInitiated
+        operation.savePolicy = .changedKeys
+        CloudKitRecordManager.applyConfig(operationConfig, to: operation)
 
-      let operation = CKModifyRecordsOperation(
-        recordsToSave: chunk,
-        recordIDsToDelete: nil
-      )
-      operation.qualityOfService = .userInitiated
-      // Use .changedKeys as the default; individual record conflict handling
-      // is done via the per-record save block below.
-      operation.savePolicy = .changedKeys
-      // Apply caller-supplied QoS / timeout overrides (G.3). When operationConfig
-      // is nil this is a no-op; when provided it may override the .userInitiated
-      // default set above.
-      CloudKitRecordManager.applyConfig(operationConfig, to: operation)
-
-      operation.perRecordSaveBlock = { _, result in
-        switch result {
-        case .success(let record):
-          chunkSaved.append(record)
-          completedCount += 1
-          progressHandler?(completedCount, total, record.recordID.recordName)
-        case .failure(let error):
-          if firstError == nil { firstError = error }
-        }
-      }
-
-      operation.modifyRecordsResultBlock = { result in
-        switch result {
-        case .success:
-          if let error = firstError {
-            // A per-record error occurred inside the chunk — surface immediately.
-            completion(.failure(error))
-          } else {
-            allSaved.append(contentsOf: chunkSaved)
-            dispatchChunk(index + 1)
+        operation.perRecordSaveBlock = { _, result in
+          switch result {
+          case .success(let record):
+            chunkSaved.append(record)
+            completedCount += 1
+            progressHandler?(completedCount, total, record.recordID.recordName)
+          case .failure(let error):
+            if firstError == nil { firstError = error }
           }
-        case .failure(let error):
-          completion(.failure(error))
         }
-      }
 
-      db.add(operation)
+        operation.modifyRecordsResultBlock = { result in
+          switch result {
+          case .success:
+            if let error = firstError {
+              continuation.resume(throwing: error)
+            } else {
+              continuation.resume(returning: chunkSaved)
+            }
+          case .failure(let error):
+            continuation.resume(throwing: error)
+          }
+        }
+
+        db.add(operation)
+      }
+      allSaved.append(contentsOf: chunkResult)
     }
 
-    dispatchChunk(0)
+    return allSaved
   }
 
   // MARK: - Fetch
@@ -191,23 +248,43 @@ final class CloudKitRecordManager {
     let recordID = CKRecord.ID(recordName: recordId, zoneID: zoneID)
     let db = database(for: scope)
 
-    let operation = CKFetchRecordsOperation(recordIDs: [recordID])
-    operation.qualityOfService = .userInitiated
-    if let desiredKeys = desiredKeys {
-      operation.desiredKeys = desiredKeys
-    }
-    CloudKitRecordManager.applyConfig(operationConfig, to: operation)
-
-    operation.perRecordResultBlock = { _, result in
-      switch result {
-      case .success(let record):
+    Task {
+      do {
+        let record = try await withRetry(operationName: "fetchRecord", onRateLimited: makeRateLimitedCallback("fetchRecord")) {
+          try await self.fetchRecordAsync(recordID: recordID, desiredKeys: desiredKeys, operationConfig: operationConfig, in: db)
+        }
         completion(.success(record))
-      case .failure(let error):
+      } catch {
         completion(.failure(error))
       }
     }
+  }
 
-    db.add(operation)
+  private func fetchRecordAsync(
+    recordID: CKRecord.ID,
+    desiredKeys: [String]?,
+    operationConfig: [String: Any]?,
+    in db: CKDatabase
+  ) async throws -> CKRecord {
+    try await withCheckedThrowingContinuation { continuation in
+      let operation = CKFetchRecordsOperation(recordIDs: [recordID])
+      operation.qualityOfService = .userInitiated
+      if let desiredKeys = desiredKeys {
+        operation.desiredKeys = desiredKeys
+      }
+      CloudKitRecordManager.applyConfig(operationConfig, to: operation)
+
+      operation.perRecordResultBlock = { _, result in
+        switch result {
+        case .success(let record):
+          continuation.resume(returning: record)
+        case .failure(let error):
+          continuation.resume(throwing: error)
+        }
+      }
+
+      db.add(operation)
+    }
   }
 
   // MARK: - Query
@@ -233,44 +310,79 @@ final class CloudKitRecordManager {
       CKRecordZone.ID(zoneName: $0, ownerName: CKCurrentUserDefaultName)
     }
 
-    var matchedRecords: [CKRecord] = []
-    let operation: CKQueryOperation
-
-    if let cursor = cursor {
-      operation = CKQueryOperation(cursor: cursor)
-    } else {
-      let query = CKQuery(recordType: recordType, predicate: predicate)
-      query.sortDescriptors = sortDescriptors
-      operation = CKQueryOperation(query: query)
-    }
-
-    operation.zoneID = zoneID
-    operation.resultsLimit = resultsLimit
-    operation.qualityOfService = .userInitiated
-    if let desiredKeys = desiredKeys {
-      operation.desiredKeys = desiredKeys
-    }
-    CloudKitRecordManager.applyConfig(operationConfig, to: operation)
-
-    operation.recordMatchedBlock = { _, result in
-      switch result {
-      case .success(let record):
-        matchedRecords.append(record)
-      case .failure:
-        break // individual record errors are non-fatal for query; surfaced via queryResultBlock
-      }
-    }
-
-    operation.queryResultBlock = { result in
-      switch result {
-      case .success(let nextCursor):
-        completion(.success((matchedRecords, nextCursor)))
-      case .failure(let error):
+    Task {
+      do {
+        let result = try await withRetry(operationName: "queryRecords", onRateLimited: makeRateLimitedCallback("queryRecords")) {
+          try await self.queryRecordsAsync(
+            recordType: recordType,
+            predicate: predicate,
+            sortDescriptors: sortDescriptors,
+            zoneID: zoneID,
+            resultsLimit: resultsLimit,
+            cursor: cursor,
+            desiredKeys: desiredKeys,
+            operationConfig: operationConfig,
+            in: db
+          )
+        }
+        completion(.success(result))
+      } catch {
         completion(.failure(error))
       }
     }
+  }
 
-    db.add(operation)
+  private func queryRecordsAsync(
+    recordType: String,
+    predicate: NSPredicate,
+    sortDescriptors: [NSSortDescriptor]?,
+    zoneID: CKRecordZone.ID?,
+    resultsLimit: Int,
+    cursor: CKQueryOperation.Cursor?,
+    desiredKeys: [CKRecord.FieldKey]?,
+    operationConfig: [String: Any]?,
+    in db: CKDatabase
+  ) async throws -> ([CKRecord], CKQueryOperation.Cursor?) {
+    try await withCheckedThrowingContinuation { continuation in
+      var matchedRecords: [CKRecord] = []
+      let operation: CKQueryOperation
+
+      if let cursor = cursor {
+        operation = CKQueryOperation(cursor: cursor)
+      } else {
+        let query = CKQuery(recordType: recordType, predicate: predicate)
+        query.sortDescriptors = sortDescriptors
+        operation = CKQueryOperation(query: query)
+      }
+
+      operation.zoneID = zoneID
+      operation.resultsLimit = resultsLimit
+      operation.qualityOfService = .userInitiated
+      if let desiredKeys = desiredKeys {
+        operation.desiredKeys = desiredKeys
+      }
+      CloudKitRecordManager.applyConfig(operationConfig, to: operation)
+
+      operation.recordMatchedBlock = { _, result in
+        switch result {
+        case .success(let record):
+          matchedRecords.append(record)
+        case .failure:
+          break // individual record errors are non-fatal; surfaced via queryResultBlock
+        }
+      }
+
+      operation.queryResultBlock = { result in
+        switch result {
+        case .success(let nextCursor):
+          continuation.resume(returning: (matchedRecords, nextCursor))
+        case .failure(let error):
+          continuation.resume(throwing: error)
+        }
+      }
+
+      db.add(operation)
+    }
   }
 
   // MARK: - Delete
@@ -286,45 +398,58 @@ final class CloudKitRecordManager {
     operationConfig: [String: Any]? = nil,
     completion: @escaping (Result<Void, Error>) -> Void
   ) {
-    let db = database(for: scope)
-    let total = recordIDs.count
-
-    guard total > 0 else {
+    guard recordIDs.count > 0 else {
       completion(.success(()))
       return
     }
 
+    let db = database(for: scope)
+    Task {
+      do {
+        try await withRetry(operationName: "deleteRecords", onRateLimited: makeRateLimitedCallback("deleteRecords")) {
+          try await self.deleteRecordsChunked(recordIDs, in: db, operationConfig: operationConfig)
+        }
+        completion(.success(()))
+      } catch {
+        completion(.failure(error))
+      }
+    }
+  }
+
+  /// Async inner implementation: chunks record IDs into 400-record batches and
+  /// dispatches them serially. Throws on the first operation-level error.
+  private func deleteRecordsChunked(
+    _ recordIDs: [CKRecord.ID],
+    in db: CKDatabase,
+    operationConfig: [String: Any]?
+  ) async throws {
+    let total = recordIDs.count
     let chunks = stride(from: 0, to: total, by: CloudKitRecordManager.batchSize).map { start -> [CKRecord.ID] in
       let end = min(start + CloudKitRecordManager.batchSize, total)
       return Array(recordIDs[start..<end])
     }
 
-    func dispatchChunk(_ index: Int) {
-      guard index < chunks.count else {
-        completion(.success(()))
-        return
-      }
+    for chunk in chunks {
+      try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        let operation = CKModifyRecordsOperation(
+          recordsToSave: nil,
+          recordIDsToDelete: chunk
+        )
+        operation.qualityOfService = .userInitiated
+        CloudKitRecordManager.applyConfig(operationConfig, to: operation)
 
-      let operation = CKModifyRecordsOperation(
-        recordsToSave: nil,
-        recordIDsToDelete: chunks[index]
-      )
-      operation.qualityOfService = .userInitiated
-      CloudKitRecordManager.applyConfig(operationConfig, to: operation)
-
-      operation.modifyRecordsResultBlock = { result in
-        switch result {
-        case .success:
-          dispatchChunk(index + 1)
-        case .failure(let error):
-          completion(.failure(error))
+        operation.modifyRecordsResultBlock = { result in
+          switch result {
+          case .success:
+            continuation.resume()
+          case .failure(let error):
+            continuation.resume(throwing: error)
+          }
         }
+
+        db.add(operation)
       }
-
-      db.add(operation)
     }
-
-    dispatchChunk(0)
   }
 
   // MARK: - Zone Changes
@@ -342,79 +467,176 @@ final class CloudKitRecordManager {
     completion: @escaping (Result<[String: Any], Error>) -> Void
   ) {
     let db = database(for: scope)
-
     let zoneIDs = zoneNames.map {
       CKRecordZone.ID(zoneName: $0, ownerName: CKCurrentUserDefaultName)
     }
 
-    var changedRecords: [CKRecord] = []
-    var deletedRecordNames: [String] = []
-    var serverChangeToken: CKServerChangeToken?
-    var moreComing = false
-
-    let configs = zoneIDs.reduce(into: [CKRecordZone.ID: CKFetchRecordZoneChangesOperation.ZoneConfiguration]()) { dict, id in
-      var config = CKFetchRecordZoneChangesOperation.ZoneConfiguration()
-      if let desiredKeys = desiredKeys {
-        config.desiredKeys = desiredKeys
-      }
-      dict[id] = config
-    }
-
-    let operation = CKFetchRecordZoneChangesOperation(
-      recordZoneIDs: zoneIDs,
-      configurationsByRecordZoneID: configs
-    )
-    operation.qualityOfService = .userInitiated
-    operation.fetchAllChanges = false // respect moreComing
-    CloudKitRecordManager.applyConfig(operationConfig, to: operation)
-
-    operation.recordWasChangedBlock = { _, result in
-      switch result {
-      case .success(let record):
-        changedRecords.append(record)
-      case .failure:
-        break
-      }
-    }
-
-    operation.recordWithIDWasDeletedBlock = { recordID, _ in
-      deletedRecordNames.append(recordID.recordName)
-    }
-
-    operation.recordZoneFetchResultBlock = { _, result in
-      switch result {
-      case .success(let (token, _, more)):
-        serverChangeToken = token
-        moreComing = more
-      case .failure:
-        break
-      }
-    }
-
-    operation.fetchRecordZoneChangesResultBlock = { result in
-      switch result {
-      case .success:
-        // Encode the server change token as base64 for JS transport
-        var syncTokenString = ""
-        if let token = serverChangeToken,
-           let tokenData = try? NSKeyedArchiver.archivedData(withRootObject: token, requiringSecureCoding: true) {
-          syncTokenString = tokenData.base64EncodedString()
+    Task {
+      do {
+        let result = try await withRetry(operationName: "fetchRecordZoneChanges", onRateLimited: makeRateLimitedCallback("fetchRecordZoneChanges")) {
+          try await self.fetchRecordZoneChangesAsync(zoneIDs: zoneIDs, desiredKeys: desiredKeys, operationConfig: operationConfig, in: db)
         }
-
-        let response: [String: Any] = [
-          "changedRecords": changedRecords.map { Converters.toDictionary($0) },
-          "deletedRecordNames": deletedRecordNames,
-          "syncToken": syncTokenString,
-          "moreComing": moreComing
-        ]
-        completion(.success(response))
-
-      case .failure(let error):
+        completion(.success(result))
+      } catch {
         completion(.failure(error))
       }
     }
+  }
 
-    db.add(operation)
+  private func fetchRecordZoneChangesAsync(
+    zoneIDs: [CKRecordZone.ID],
+    desiredKeys: [CKRecord.FieldKey]?,
+    operationConfig: [String: Any]?,
+    in db: CKDatabase
+  ) async throws -> [String: Any] {
+    try await withCheckedThrowingContinuation { continuation in
+      var changedRecords: [CKRecord] = []
+      var deletedRecordNames: [String] = []
+      var serverChangeToken: CKServerChangeToken?
+      var moreComing = false
+
+      let configs = zoneIDs.reduce(into: [CKRecordZone.ID: CKFetchRecordZoneChangesOperation.ZoneConfiguration]()) { dict, id in
+        var config = CKFetchRecordZoneChangesOperation.ZoneConfiguration()
+        if let desiredKeys = desiredKeys {
+          config.desiredKeys = desiredKeys
+        }
+        dict[id] = config
+      }
+
+      let operation = CKFetchRecordZoneChangesOperation(
+        recordZoneIDs: zoneIDs,
+        configurationsByRecordZoneID: configs
+      )
+      operation.qualityOfService = .userInitiated
+      operation.fetchAllChanges = false // respect moreComing
+      CloudKitRecordManager.applyConfig(operationConfig, to: operation)
+
+      operation.recordWasChangedBlock = { _, result in
+        switch result {
+        case .success(let record):
+          changedRecords.append(record)
+        case .failure:
+          break
+        }
+      }
+
+      operation.recordWithIDWasDeletedBlock = { recordID, _ in
+        deletedRecordNames.append(recordID.recordName)
+      }
+
+      operation.recordZoneFetchResultBlock = { _, result in
+        switch result {
+        case .success(let (token, _, more)):
+          serverChangeToken = token
+          moreComing = more
+        case .failure:
+          break
+        }
+      }
+
+      operation.fetchRecordZoneChangesResultBlock = { result in
+        switch result {
+        case .success:
+          var syncTokenString = ""
+          if let token = serverChangeToken,
+             let tokenData = try? NSKeyedArchiver.archivedData(withRootObject: token, requiringSecureCoding: true) {
+            syncTokenString = tokenData.base64EncodedString()
+          }
+
+          let response: [String: Any] = [
+            "changedRecords": changedRecords.map { Converters.toDictionary($0) },
+            "deletedRecordNames": deletedRecordNames,
+            "syncToken": syncTokenString,
+            "moreComing": moreComing
+          ]
+          continuation.resume(returning: response)
+
+        case .failure(let error):
+          continuation.resume(throwing: error)
+        }
+      }
+
+      db.add(operation)
+    }
+  }
+
+  // MARK: - Batch Fetch (I.1)
+
+  /// Fetches multiple records in a single `CKFetchRecordsOperation`.
+  ///
+  /// Unlike `fetchRecord`, this method does **not** abort on per-record failure.
+  /// Each record that cannot be fetched is represented in the returned array
+  /// with a `_error: { code, message }` key so the caller can handle partial
+  /// results without a second round-trip. The `onRateLimited` event fires before
+  /// each automatic retry so callers can surface backoff UX.
+  ///
+  /// - Parameters:
+  ///   - recordIDs:       Tuples of `(name: String, zoneID: CKRecordZone.ID?)`.
+  ///                      When `zoneID` is nil the default zone is used.
+  ///   - database:        Database scope to fetch from.
+  ///   - desiredKeys:     Specific field keys to fetch. Pass nil for all keys.
+  ///   - operationConfig: Optional QoS / timeout overrides (same as other methods).
+  func batchFetchRecords(
+    recordIDs: [(name: String, zoneID: CKRecordZone.ID?)],
+    database scope: CKDatabase.Scope,
+    desiredKeys: [String]?,
+    operationConfig: [String: Any]?
+  ) async throws -> [[String: Any]] {
+    let db = database(for: scope)
+    return try await withRetry(operationName: "batchFetchRecords", onRateLimited: makeRateLimitedCallback("batchFetchRecords")) {
+      try await self.batchFetchRecordsAsync(recordIDs: recordIDs, desiredKeys: desiredKeys, operationConfig: operationConfig, in: db)
+    }
+  }
+
+  private func batchFetchRecordsAsync(
+    recordIDs: [(name: String, zoneID: CKRecordZone.ID?)],
+    desiredKeys: [String]?,
+    operationConfig: [String: Any]?,
+    in db: CKDatabase
+  ) async throws -> [[String: Any]] {
+    try await withCheckedThrowingContinuation { continuation in
+      let ckRecordIDs = recordIDs.map { pair -> CKRecord.ID in
+        let zoneID = pair.zoneID ?? CKRecordZone.ID.default
+        return CKRecord.ID(recordName: pair.name, zoneID: zoneID)
+      }
+
+      // Keyed by recordID so we can preserve caller order and surface per-record errors.
+      var resultsByID: [CKRecord.ID: [String: Any]] = [:]
+
+      let operation = CKFetchRecordsOperation(recordIDs: ckRecordIDs)
+      operation.qualityOfService = .userInitiated
+      operation.desiredKeys = desiredKeys
+      CloudKitRecordManager.applyConfig(operationConfig, to: operation)
+
+      operation.perRecordResultBlock = { recordID, result in
+        switch result {
+        case .success(let record):
+          resultsByID[recordID] = Converters.toDictionary(record)
+        case .failure(let error):
+          // Represent per-record failure with a `_error` key so the batch
+          // continues and the caller can handle individual failures.
+          let bridgedError = Converters.toErrorDict(error)
+          resultsByID[recordID] = [
+            "recordName": recordID.recordName,
+            "zoneName": recordID.zoneID.zoneName,
+            "_error": bridgedError
+          ]
+        }
+      }
+
+      operation.fetchRecordsResultBlock = { result in
+        switch result {
+        case .success:
+          // Preserve the original caller-supplied ordering.
+          let ordered = ckRecordIDs.compactMap { resultsByID[$0] }
+          continuation.resume(returning: ordered)
+        case .failure(let error):
+          continuation.resume(throwing: error)
+        }
+      }
+
+      db.add(operation)
+    }
   }
 
   // MARK: - Reference Deep Linking
@@ -827,6 +1049,17 @@ final class CloudKitRecordManager {
       return ckContainer.publicCloudDatabase
     @unknown default:
       return ckContainer.privateCloudDatabase
+    }
+  }
+
+  /// Builds the `onRateLimited` closure for `withRetry` that captures
+  /// the operation name and forwards events through the module-level callback.
+  ///
+  /// Using a weak reference to self avoids a retain cycle if the manager is
+  /// replaced (e.g. by a second `configure()` call) while a retry is in flight.
+  private func makeRateLimitedCallback(_ operationName: String) -> (Double, Int) -> Void {
+    return { [weak self] retryAfterSeconds, retryCount in
+      self?.onRateLimited?(retryAfterSeconds, operationName, retryCount)
     }
   }
 }

@@ -95,7 +95,8 @@ public class ExpoCloudKitModule: Module {
       "onShareAccepted",
       "onBatchProgress",
       "onOfflineQueueEvent",
-      "onSyncConflict"
+      "onSyncConflict",
+      "onRateLimited"
     )
 
     // -------------------------------------------------------------------------
@@ -154,6 +155,16 @@ public class ExpoCloudKitModule: Module {
 
       // Single RecordManager instance shared by the module and the offline queue.
       let rm = CloudKitRecordManager(ckContainer: ck)
+      // Forward rate-limit backoff events from the retry wrapper to JS.
+      rm.onRateLimited = { [weak self] retryAfterSeconds, operationName, retryCount in
+        DispatchQueue.main.async {
+          self?.sendEvent("onRateLimited", [
+            "retryAfter": retryAfterSeconds,
+            "operationName": operationName,
+            "retryCount": retryCount
+          ])
+        }
+      }
       self.recordManager = rm
       self.offlineQueue = OfflineQueue(
         container: ck,
@@ -477,6 +488,54 @@ public class ExpoCloudKitModule: Module {
         case .success:
           promise.resolve(nil)
         case .failure(let error):
+          promise.reject(Converters.toExpoError(error))
+        }
+      }
+    }
+
+    /// Fetches multiple records in a single `CKFetchRecordsOperation`.
+    ///
+    /// Each item in `recordIDs` must contain `recordName: String`.
+    /// Optional keys per item: `zoneName: String`, `zoneOwner: String`.
+    ///
+    /// Records that fail individually (e.g. not found, permission denied) are
+    /// included in the result array with a `_error: { code, message }` key rather
+    /// than failing the whole batch. The `onRateLimited` event fires before each
+    /// automatic retry so callers can surface backoff UX.
+    AsyncFunction("batchFetchRecords") { [weak self] (
+      recordIDDicts: [[String: Any]],
+      database: String,
+      desiredKeys: [String]?,
+      operationConfig: [String: Any]?,
+      promise: Promise
+    ) in
+      guard let self = self, let recordManager = self.recordManager else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+
+      let scope = Converters.toDatabaseScope(database)
+
+      let recordIDPairs: [(name: String, zoneID: CKRecordZone.ID?)] = recordIDDicts.compactMap { dict in
+        guard let recordName = dict["recordName"] as? String else { return nil }
+        let zoneName = dict["zoneName"] as? String
+        let zoneOwner = dict["zoneOwner"] as? String ?? CKCurrentUserDefaultName
+        let zoneID: CKRecordZone.ID? = zoneName.map {
+          CKRecordZone.ID(zoneName: $0, ownerName: zoneOwner)
+        }
+        return (name: recordName, zoneID: zoneID)
+      }
+
+      Task {
+        do {
+          let results = try await recordManager.batchFetchRecords(
+            recordIDs: recordIDPairs,
+            database: scope,
+            desiredKeys: desiredKeys,
+            operationConfig: operationConfig
+          )
+          promise.resolve(results)
+        } catch {
           promise.reject(Converters.toExpoError(error))
         }
       }

@@ -221,3 +221,7 @@ export type {
   UseCloudKitSubscriptionOptions,
   UseCloudKitSubscriptionReturn,
 } from './useCloudKitSubscription';
+
+// Phase I — useCloudKitStatus hook
+export { useCloudKitStatus } from './useCloudKitStatus';
+export type { CloudKitStatus, UseCloudKitStatusOptions } from './useCloudKitStatus';
