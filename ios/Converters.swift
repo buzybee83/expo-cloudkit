@@ -223,7 +223,8 @@ enum Converters {
   static func toZoneDictionary(_ zone: CKRecordZone) -> [String: Any] {
     var capabilities: [String] = []
     if zone.capabilities.contains(.fetchChanges) { capabilities.append("fetchChanges") }
-    if zone.capabilities.contains(.atomicChanges) { capabilities.append("atomicChanges") }
+    // .atomicChanges was renamed to .atomic in iOS 15+
+    if zone.capabilities.contains(.atomic) { capabilities.append("atomicChanges") }
     if zone.capabilities.contains(.sharing) { capabilities.append("sharing") }
 
     return [
@@ -345,7 +346,7 @@ enum Converters {
       code = "PERMISSION_DENIED"
     case .serverRejectedRequest, .invalidArguments:
       code = "SERVER_REJECTED"
-    case .assetFileTooBig:
+    case .assetFileSizeExceeded:  // formerly .assetFileTooBig (renamed in iOS 15+)
       code = "ASSET_TOO_LARGE"
     case .limitExceeded:
       code = "LIMIT_EXCEEDED"

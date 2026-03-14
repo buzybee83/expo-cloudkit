@@ -95,12 +95,24 @@ final class CloudKitZoneManager {
     let operation = CKFetchRecordZonesOperation.fetchAllRecordZonesOperation()
     operation.qualityOfService = .userInitiated
 
-    operation.fetchRecordZonesResultBlock = { result in
+    // Use perRecordZoneResultBlock to collect zones (iOS 18: fetchRecordZonesResultBlock
+    // returns Result<Void, Error> so individual zones are reported per-zone).
+    let zonesLock = NSLock()
+    var collectedZones: [CKRecordZone] = []
+
+    operation.perRecordZoneResultBlock = { (zoneID: CKRecordZone.ID, result: Result<CKRecordZone, Error>) in
+      if case .success(let zone) = result {
+        zonesLock.lock()
+        collectedZones.append(zone)
+        zonesLock.unlock()
+      }
+    }
+
+    operation.fetchRecordZonesResultBlock = { (result: Result<Void, Error>) in
       switch result {
-      case .success(let zonesByID):
-        let zones = Array(zonesByID.values)
+      case .success:
         // Filter out the default zone — callers can assume it always exists
-        let customZones = zones.filter { $0.zoneID.zoneName != CKRecordZone.ID.default.zoneName }
+        let customZones = collectedZones.filter { $0.zoneID.zoneName != CKRecordZone.ID.default.zoneName }
         completion(.success(customZones))
       case .failure(let error):
         completion(.failure(error))

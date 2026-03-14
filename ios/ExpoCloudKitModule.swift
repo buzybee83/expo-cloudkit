@@ -371,29 +371,34 @@ public class ExpoCloudKitModule: Module {
 
     /// Queries records by type with optional predicate, sort, and pagination.
     ///
-    /// Pass `desiredKeys` to limit which fields are fetched from the server.
-    /// When omitted (or nil), all fields are fetched.
+    /// All parameters are passed in a single `options` dictionary to stay within
+    /// ExpoModulesCore's 8-argument limit for AsyncFunction closures.
+    ///
+    /// Required keys: `recordType` (String), `database` (String), `resultsLimit` (Int).
+    /// Optional keys: `predicate`, `sortDescriptors`, `zoneName`, `cursor`,
+    ///                `desiredKeys`, `operationConfig`, `persistCursor`.
     AsyncFunction("queryRecords") { [weak self] (
-      recordType: String,
-      predicateDict: [String: Any]?,
-      sortDescriptorDicts: [[String: Any]]?,
-      zoneName: String?,
-      database: String,
-      resultsLimit: Int,
-      cursor: String?,
-      desiredKeys: [String]?,
-      operationConfig: [String: Any]?,
-      persistCursor: Bool?,
+      options: [String: Any],
       promise: Promise
     ) in
       guard let self = self, let recordManager = self.recordManager else {
         promise.reject(CloudKitModuleError.notConfigured)
         return
       }
+      let recordType = options["recordType"] as? String ?? ""
+      let database = options["database"] as? String ?? "private"
+      let resultsLimit = options["resultsLimit"] as? Int ?? 200
+      let predicateDict = options["predicate"] as? [String: Any]
+      let sortDescriptorDicts = options["sortDescriptors"] as? [[String: Any]]
+      let zoneName = options["zoneName"] as? String
+      let cursor = options["cursor"] as? String
+      let desiredKeys = options["desiredKeys"] as? [String]
+      let operationConfig = options["operationConfig"] as? [String: Any]
+      let shouldPersistCursor = options["persistCursor"] as? Bool ?? false
+
       let scope = Converters.toDatabaseScope(database)
       let predicate = predicateDict.map { Converters.toPredicate(from: $0) } ?? NSPredicate(value: true)
       let sortDescriptors = sortDescriptorDicts?.compactMap { Converters.toNSSortDescriptor(from: $0) }
-      let shouldPersistCursor = persistCursor ?? false
 
       // Resolve the cursor token to a live CKQueryOperation.Cursor.
       // Primary lookup: in-memory cursorCache (valid for the current app session).
@@ -888,16 +893,11 @@ public class ExpoCloudKitModule: Module {
       }
     }
 
-    // Forward incoming remote notifications to the CloudKit notification handler.
-    // Non-CloudKit payloads are ignored (handler returns false).
-    OnAppDidReceiveRemoteNotification { [weak self] userInfo in
-      guard let self = self else { return }
-      _ = CloudKitNotificationHandler.handle(userInfo: userInfo) { [weak self] payload in
-        // CloudKitNotificationHandler already dispatches the closure on the main
-        // queue, so sendEvent is always called from the correct thread.
-        self?.sendEvent("onSubscriptionEvent", payload)
-      }
-    }
+    // NOTE: OnAppDidReceiveRemoteNotification was removed in ExpoModulesCore 2.x.
+    // Push notification forwarding for CloudKit subscriptions must be handled
+    // at the AppDelegate level. See README for the required AppDelegate setup.
+    // TODO: Restore automatic subscription event forwarding once a
+    // replacement lifecycle hook is available in ExpoModulesCore.
 
     // -------------------------------------------------------------------------
     // CKShare — Phase B
@@ -1216,29 +1216,11 @@ public class ExpoCloudKitModule: Module {
       #endif
     }
 
-    // Listen for CloudKit share URL opens and emit onShareAccepted.
-    // The app delegate method `application(_:userDidAcceptCloudKitShareWith:)` is not
-    // hookable via Expo Modules lifecycle. Instead we intercept the URL opened event
-    // here and filter for CloudKit share URLs (scheme "cloudkit-" or the iCloud host).
-    OnAppOpenURL { [weak self] url in
-      guard let self = self else { return }
-
-      // CloudKit share URLs use the iCloud host or custom deep link schemes.
-      // CKContainer can validate the URL via fetchShareMetadata — we emit the event
-      // optimistically and let JS call acceptShare() if it wants to proceed.
-      let urlString = url.absoluteString
-      let isCloudKitShare = urlString.contains("www.icloud.com/iclouddrive")
-        || urlString.contains("cloudkit")
-        || url.host?.hasSuffix("icloud.com") == true
-
-      guard isCloudKitShare else { return }
-
-      DispatchQueue.main.async { [weak self] in
-        self?.sendEvent("onShareAccepted", [
-          "shareURL": urlString
-        ])
-      }
-    }
+    // NOTE: OnAppOpenURL was removed in ExpoModulesCore 2.x.
+    // CloudKit share URL interception for onShareAccepted must be handled
+    // at the AppDelegate level. See README for the required AppDelegate setup.
+    // TODO: Restore automatic share URL detection once a replacement
+    // lifecycle hook is available in ExpoModulesCore.
 
     // -------------------------------------------------------------------------
     // Debug Helpers — Phase C (dev-only, never call from production)
