@@ -1520,15 +1520,7 @@ public class ExpoCloudKitModule: Module {
     /// - Throws: `invalidArgument` if `clientId` is not found.
     AsyncFunction("clientQueryRecords") { [weak self] (
       clientId: String,
-      recordType: String,
-      predicateDict: [String: Any]?,
-      sortDescriptorDicts: [[String: Any]]?,
-      zoneName: String?,
-      database: String,
-      resultsLimit: Int,
-      cursor: String?,
-      desiredKeys: [String]?,
-      operationConfig: [String: Any]?,
+      options: [String: Any],
       promise: Promise
     ) in
       guard let self = self else {
@@ -1539,6 +1531,15 @@ public class ExpoCloudKitModule: Module {
         promise.reject(CloudKitModuleError.invalidArgument("No client found for clientId: \(clientId)"))
         return
       }
+      let recordType = options["recordType"] as? String ?? ""
+      let database = options["database"] as? String ?? "private"
+      let resultsLimit = options["resultsLimit"] as? Int ?? 200
+      let predicateDict = options["predicate"] as? [String: Any]
+      let sortDescriptorDicts = options["sortDescriptors"] as? [[String: Any]]
+      let zoneName = options["zoneName"] as? String
+      let cursor = options["cursor"] as? String
+      let desiredKeys = options["desiredKeys"] as? [String]
+      let operationConfig = options["operationConfig"] as? [String: Any]
       let scope = Converters.toDatabaseScope(database)
       let predicate = predicateDict.map { Converters.toPredicate(from: $0) } ?? NSPredicate(value: true)
       let sortDescriptors = sortDescriptorDicts?.compactMap { Converters.toNSSortDescriptor(from: $0) }

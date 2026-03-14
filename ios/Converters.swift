@@ -346,8 +346,6 @@ enum Converters {
       code = "PERMISSION_DENIED"
     case .serverRejectedRequest, .invalidArguments:
       code = "SERVER_REJECTED"
-    case .assetFileSizeExceeded:  // formerly .assetFileTooBig (renamed in iOS 15+)
-      code = "ASSET_TOO_LARGE"
     case .limitExceeded:
       code = "LIMIT_EXCEEDED"
     case .changeTokenExpired:
