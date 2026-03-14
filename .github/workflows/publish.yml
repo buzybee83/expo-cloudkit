@@ -75,15 +75,16 @@ jobs:
 
           created_new_target = false
           if test_target.nil?
-            puts "No test target found — creating ExpoCloudKitTests"
+            puts "No test target found — creating ExpoCloudKitCITests"
             app_target = project.targets.find { |t| !t.name.end_with?('Tests') }
-            test_target = project.new_target(:unit_test_bundle, 'ExpoCloudKitTests', :ios, '16.0')
+            test_target = project.new_target(:unit_test_bundle, 'ExpoCloudKitCITests', :ios, '16.0')
             test_target.add_dependency(app_target) if app_target
             test_target.build_configurations.each do |config|
               config.build_settings['SWIFT_VERSION'] = '5.0'
               config.build_settings['GENERATE_INFOPLIST_FILE'] = 'YES'
               config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'
-              config.build_settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.expo.ExpoCloudKitTests'
+              config.build_settings['PRODUCT_NAME'] = 'ExpoCloudKitCITests'
+              config.build_settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.expo.ExpoCloudKitCITests'
             end
             created_new_target = true
           else
@@ -105,7 +106,7 @@ jobs:
                 br = REXML::Element.new('BuildableReference')
                 br.attributes['BuildableIdentifier'] = 'primary'
                 br.attributes['BlueprintIdentifier'] = test_target.uuid
-                br.attributes['BuildableName'] = "#{test_target.name}.xctest"
+                br.attributes['BuildableName'] = "ExpoCloudKitCITests.xctest"
                 br.attributes['BlueprintName'] = test_target.name
                 br.attributes['ReferencedContainer'] = "container:#{File.basename(PROJECT_PATH)}"
                 ref.add_element(br)
