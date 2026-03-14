@@ -1385,18 +1385,17 @@ export async function createCloudKitClient(containerId: string): Promise<CloudKi
       operationConfig
     ) =>
       callAsync(() =>
-        NativeModule!.clientQueryRecords(
-          clientId,
+        NativeModule!.clientQueryRecords(clientId, {
           recordType,
-          predicate ?? null,
-          sortDescriptors ?? null,
-          zoneName ?? null,
+          predicate: predicate ?? null,
+          sortDescriptors: sortDescriptors ?? null,
+          zoneName: zoneName ?? null,
           database,
           resultsLimit,
-          cursor ?? null,
-          desiredKeys ?? null,
-          operationConfig ?? null
-        )
+          cursor: cursor ?? null,
+          desiredKeys: desiredKeys ?? null,
+          operationConfig: operationConfig ?? null,
+        })
       ),
     deleteRecords: (recordIds, database = 'private', operationConfig) =>
       callAsync(() =>
