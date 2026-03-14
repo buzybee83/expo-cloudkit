@@ -14,10 +14,29 @@ import CloudKit
 
 final class OfflineQueueTests: XCTestCase {
 
+  // MARK: - Storage cleanup
+
+  /// Path where OfflineQueue writes its backing file.
+  /// Must match the path constructed in OfflineQueue.init.
+  private var queueStorageURL: URL {
+    let appSupport = FileManager.default.urls(
+      for: .applicationSupportDirectory, in: .userDomainMask
+    ).first!
+    return appSupport
+      .appendingPathComponent("expo-cloudkit", isDirectory: true)
+      .appendingPathComponent("offline-queue.json")
+  }
+
+  /// Delete the backing file before each test so tests don't accumulate state.
+  override func setUp() {
+    super.setUp()
+    try? FileManager.default.removeItem(at: queueStorageURL)
+  }
+
   // MARK: - Helpers
 
-  /// Creates an OfflineQueue that persists to a unique temp directory.
-  /// The sendEvent closure records all emitted events so tests can inspect them.
+  /// Creates an OfflineQueue backed by the real Application Support directory.
+  /// setUp() wipes the backing file before each test, so the queue starts empty.
   private func makeQueue(
     receivedEvents: inout [[String: Any]]
   ) -> OfflineQueue {
@@ -28,8 +47,6 @@ final class OfflineQueueTests: XCTestCase {
       recordManager: CloudKitRecordManager(ckContainer: CKContainer.default()),
       sendEvent: { capture.events.append($0) }
     )
-    // Keep `capture` alive for the duration of the test via the inout binding trick.
-    // (In practice, the closure captures it strongly.)
     receivedEvents = capture.events   // initial snapshot (will be empty)
     return queue
   }
