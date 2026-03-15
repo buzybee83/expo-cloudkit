@@ -389,3 +389,135 @@ _Done when_: `gh workflow run integration-tests.yml` exercises real CloudKit rou
 **Start with I.1 + I.2 + I.3 (parallel).** All three are additive — they do not modify existing code paths, only add new capabilities and surface new data. I.3 is the smallest and can ship independently. I.2 DX improvements are the most visible to adopters.
 
 **I.4 (integration tests) runs last** because it requires a real CloudKit container, secrets setup, and a scheduled workflow. It also benefits from I.1/I.2/I.3 being stable before writing round-trip assertions against them.
+
+---
+
+## Phase J — SwiftUI Integration, Zod Validation, Android Fallback & Docs Overhaul
+
+### J.1 — SwiftUI / `@Observable` Integration (`CloudKitStore`)
+_Effort: M (Swift only) | Agent: ios-native-dev_
+
+An iOS 17+ `@Observable` macro wrapper that exposes record fetching, saving, and sync state reactively for pure SwiftUI apps. Ships as an optional import path (`import ExpoCloudKitSwiftUI`) — apps not using SwiftUI pay zero overhead. Works alongside (does not replace) the existing React Native hooks.
+
+**Architecture decisions:**
+
+- `CloudKitStore` wraps the existing module singleton (`CloudKitRecordManager`, `CloudKitZoneManager`) — it does **not** create its own `CKContainer`. All CloudKit operations route through the same configured container. This keeps change token state, offline queue, and sync engine consistent between SwiftUI and React Native layers.
+- Sync events surface via `@Observable` published properties (`syncState: SyncState`, `lastSyncError: CloudKitError?`, `isSyncing: Bool`) that `CloudKitStore` populates by subscribing to the same internal `NotificationCenter` events that the JS event emitter uses.
+- Conflicts use the same resolution path as Phase G.6 — if `resolveConflicts` is enabled, `CloudKitStore` exposes a `pendingConflicts: [SyncConflict]` array and a `resolveConflict(_:with:)` method.
+
+**Tasks:**
+
+- [ ] **Swift**: Create `ios/SwiftUI/CloudKitStore.swift` — `@Observable` class (guarded with `#if canImport(SwiftUI)` and `@available(iOS 17, *)`) with properties: `records: [String: CloudKitRecord]`, `syncState: SyncState`, `isSyncing: Bool`, `lastError: Error?`, `pendingConflicts: [SyncConflict]`
+- [ ] **Swift**: Implement `func fetch(recordType: String, predicate: NSPredicate?, desiredKeys: [String]?) async throws` — delegates to `CloudKitRecordManager.queryRecords()`, updates `records` dictionary on completion
+- [ ] **Swift**: Implement `func save(_ record: CloudKitRecord) async throws` — delegates to `CloudKitRecordManager.saveRecords()`, updates `records` on success, populates `lastError` on failure
+- [ ] **Swift**: Implement `func delete(recordName: String) async throws` — delegates to `CloudKitRecordManager.deleteRecords()`, removes from `records`
+- [ ] **Swift**: Subscribe to internal sync events (`NotificationCenter` or direct delegate callback) to update `syncState`, `isSyncing`, and `pendingConflicts` reactively
+- [ ] **Swift**: Add `func resolveConflict(_ conflict: SyncConflict, with resolution: CloudKitRecord) async throws` that calls through to the existing `resolveSyncConflict` machinery
+- [ ] **Swift**: Ensure `CloudKitStore` is compiled only when `EXPO_CLOUDKIT_SWIFTUI=1` build flag is set (or via a separate Swift Package product) so non-SwiftUI apps incur zero binary size overhead
+- [ ] **Swift**: Add `ios/Tests/CloudKitStoreTests.swift` — at least 5 test cases covering fetch → records population, save → records update, delete → records removal, sync state changes, and conflict surfacing
+
+_Risks_: The `@Observable` macro requires iOS 17+ and Swift 5.9+. The Expo Modules build pipeline may not support conditional compilation targets cleanly — the build flag approach (`EXPO_CLOUDKIT_SWIFTUI`) needs validation in a fresh `expo prebuild`. If the flag approach fails, fall back to a runtime `#available` check with the `@Observable` class always compiled but never instantiated on iOS 16.
+
+_Done when_: A SwiftUI `View` can instantiate `@State var store = CloudKitStore()`, call `store.fetch(recordType: "Note")`, and render `store.records` in a `List` — all reactively updating when records change or sync events fire. Non-SwiftUI apps that do not import the module see no binary size increase.
+
+---
+
+### J.2 — Zod / Runtime Schema Validation
+_Effort: S (TypeScript only) | Agent: ts-sdk-dev_
+
+A zero-dependency TypeScript utility that validates `CloudKitRecord.fields` against a caller-supplied Zod schema, returning fully typed fields. Zod is a peer dependency (not a hard dep) — tree-shakable when not used.
+
+**Architecture decisions:**
+
+- `createCloudKitSchema<T>(zodSchema)` returns a `CloudKitParser<T>` object with a `.parse(record)` method and a `.safeParse(record)` method (mirroring Zod's own API shape).
+- Field type coercions are applied **before** Zod validation: CloudKit `Date` fields (JS `number` — Unix ms timestamps) are coerced to `Date` objects when the Zod schema expects `z.date()`. `CKAsset` fields (`{ uri, size }`) are passed through as-is. `Data` fields (base64 strings) are not coerced — the schema must expect `z.string()`.
+- `CloudKitValidationError` extends `CloudKitError` (from `src/errors.ts`) with a `zodErrors` property containing the raw Zod issue array.
+
+**Tasks:**
+
+- [ ] **TypeScript**: Create `src/schema.ts` — export `createCloudKitSchema<T>(schema: ZodType<T>): CloudKitParser<T>` where `CloudKitParser<T>` has `.parse(record: CloudKitRecord): T` (throws on failure) and `.safeParse(record: CloudKitRecord): { success: true, data: T } | { success: false, error: CloudKitValidationError }`
+- [ ] **TypeScript**: Implement field coercion layer in `src/schema.ts` — `coerceFields(fields: Record<string, RecordField>): Record<string, unknown>` that converts `number` timestamps to `Date` when the value looks like a Unix ms timestamp (> 1e12), passes `CKAsset` objects through, and leaves all other types unchanged
+- [ ] **TypeScript**: Create `CloudKitValidationError` class in `src/errors.ts` — extends `CloudKitError` with `code: CloudKitErrorCode.VALIDATION_FAILED`, `zodErrors: ZodIssue[]`, and a human-readable `message` summarizing the first 3 issues
+- [ ] **TypeScript**: Add `CloudKitErrorCode.VALIDATION_FAILED = 'VALIDATION_FAILED'` to the `CloudKitErrorCode` enum in `src/errors.ts`
+- [ ] **TypeScript**: Add `CloudKitParser<T>` and `CloudKitValidationError` to `src/types.ts` exports; re-export `createCloudKitSchema` from `src/index.ts`
+- [ ] **TypeScript**: Add JSDoc on `createCloudKitSchema` with a usage example showing a `z.object({ title: z.string(), createdAt: z.date() })` schema parsing a CloudKit record
+- [ ] **TypeScript**: Add `src/__tests__/schema.test.ts` — at least 6 test cases: valid parse, invalid field type, missing required field, date coercion, asset passthrough, safeParse returning error object
+- [ ] **TypeScript**: Add `zod` to `peerDependencies` in `package.json` with `">=3.0.0"` range and `peerDependenciesMeta` marking it as `optional: true`
+
+_Risks_: Zod v4 (currently in RC) changes the `ZodIssue` type shape. Pin the peer dep range to `>=3.0.0` and document that v4 compatibility will be validated when it ships stable. The timestamp coercion heuristic (> 1e12) could misclassify large numbers — document the coercion rules in JSDoc.
+
+_Done when_: `const parser = createCloudKitSchema(z.object({ title: z.string(), dueDate: z.date() })); const typed = parser.parse(record);` returns `{ title: "Buy milk", dueDate: Date }` with full TypeScript inference. An invalid record throws `CloudKitValidationError` with `zodErrors` attached.
+
+---
+
+### J.3 — Android / Web Fallback Improvement
+_Effort: M (TypeScript + config) | Agent: ts-sdk-dev_
+
+Route Android to the existing web platform implementation (`ExpoCloudKit.web.ts`) when `tsl-apple-cloudkit` is available, instead of throwing `CloudKitNotSupportedError` for every operation. Native-only operations (CKSyncEngine, CKShare, push subscriptions) continue to throw `CloudKitNotSupportedError` on Android.
+
+**Architecture decisions:**
+
+- Platform detection: `Platform.OS === 'android'` triggers the same code path as `Platform.OS === 'web'`. The existing `ExpoCloudKit.web.ts` already implements 20/44 functions via CloudKit JS — Android gets the same 20 for free.
+- Sign-in on Android: CloudKit JS requires a browser-based Apple ID sign-in. On Android, this is presented via a system Custom Tab (Chrome Custom Tab) rather than an embedded WebView, to satisfy Apple's OAuth security requirements. The `authenticateWeb()` function on Android opens the sign-in URL in a Custom Tab and listens for the redirect deep link.
+- Metro resolver: No new Metro config needed. Create `src/ExpoCloudKit.android.ts` that re-exports from `src/ExpoCloudKit.web.ts` for the 20 supported functions. The remaining 24 native-only functions throw `CloudKitNotSupportedError` with a specific message: `"This operation requires iOS and is not available on Android."`.
+- Error types: Reuses `CloudKitNotSupportedError` from `src/errors.ts` (defined in Phase C). J.2's `CloudKitValidationError` pattern is referenced for consistency but not a functional dependency.
+
+**Tasks:**
+
+- [ ] **TypeScript**: Create `src/ExpoCloudKit.android.ts` — import all 20 web-compatible functions from `src/ExpoCloudKit.web.ts` and re-export them; for the remaining 24 native-only functions (`startSync`, `stopSync`, `getSyncState`, `createShare`, `acceptShare`, `fetchShareParticipants`, `updateSharePermission`, `removeShareParticipant`, `fetchSharedDatabaseZones`, `presentSharingUI`, `deleteShare`, all subscription functions, and all sync-related event listeners), export stubs that throw `CloudKitNotSupportedError`
+- [ ] **TypeScript**: Update `authenticateWeb()` in the Android path to use `Linking.openURL()` for Custom Tab sign-in flow; add `handleAuthRedirect(url: string)` export that parses the OAuth callback URL and completes the sign-in
+- [ ] **TypeScript**: Create `src/android/auth.ts` — Custom Tab auth flow: build Apple ID OAuth URL with CloudKit JS redirect parameters, open via `Linking`, listen for redirect via `Linking.addEventListener`, extract token, call `configureWeb()` with the token
+- [ ] **TypeScript**: Add platform support matrix to `src/types.ts` as a JSDoc table on the module-level comment — documenting which of the 44 functions work on iOS, web, and Android
+- [ ] **TypeScript**: Update `CloudKitProvider` to auto-call `configureWeb()` when `Platform.OS === 'android'` (same as existing `Platform.OS === 'web'` behavior), using the `webConfig` prop
+- [ ] **TypeScript**: Add `src/__tests__/android-fallback.test.ts` — at least 5 test cases: supported function delegates to web impl, unsupported function throws `CloudKitNotSupportedError`, `configureWeb` called on provider mount, `authenticateWeb` triggers `Linking.openURL`, `handleAuthRedirect` parses callback
+
+_Risks_: Chrome Custom Tabs are not available on all Android devices (e.g., Amazon Fire tablets use Silk). Fall back to `Linking.openURL` which opens the default browser. Apple's CloudKit JS sign-in flow may not work in all Android browsers — this needs manual testing on Chrome, Samsung Internet, and Firefox. The 20/44 function split may change as new web functions are added in future phases — `ExpoCloudKit.android.ts` must be updated in lockstep with `ExpoCloudKit.web.ts`.
+
+_Done when_: An Android app with `tsl-apple-cloudkit` installed can call `configureWeb()`, `authenticateWeb()`, `saveRecords()`, `queryRecords()`, `fetchRecord()`, and `deleteRecords()` successfully against CloudKit. Calling `startSync()` on Android throws `CloudKitNotSupportedError` with a clear message. `CloudKitProvider` with `webConfig` works on Android without code changes.
+
+---
+
+### J.4 — README / Docs Overhaul
+_Effort: M (docs only) | Agent: technical-writer_
+
+Restructure the README from its current ~600-line sequential-addition format into a coherent API reference useful to first-time adopters.
+
+**Tasks:**
+
+- [ ] **Docs**: Restructure README into these top-level sections (in order): Quick Start (10-line copy-paste example), Installation (`npx expo install`, peer deps), Configuration (config plugin setup, container ID, entitlements), What is CloudKit? (2-paragraph primer for React Native devs unfamiliar with iCloud/CloudKit concepts), Core Concepts (containers, databases, zones, records, sync), API Reference (organized by category — see below), Platform Support Matrix (iOS/web/Android table with checkmarks), Hooks Reference, Error Handling, Migration Guide (breaking changes per version from CHANGELOG)
+- [ ] **Docs**: API Reference sub-sections: Container & Account, Records (CRUD), Zones, Sharing, Sync Engine, Subscriptions, Offline Queue, Web Platform, Debug Utilities — each with function signature, parameters table, return type, and a 3-5 line usage example
+- [ ] **Docs**: Move lengthy code examples (current inline demo blocks > 20 lines) from README to `example/snippets/` directory and link from README with "See full example" links
+- [ ] **Docs**: Generate API reference stubs from JSDoc comments in `src/types.ts` and `src/errors.ts` — extract function signatures, parameter descriptions, and return types into the API Reference sections
+- [ ] **Docs**: Add Platform Support Matrix table — all 44 exported functions listed with iOS / Web / Android columns using checkmark/cross/dash notation, with footnotes for conditional support (e.g., "iOS 17+ only", "Requires tsl-apple-cloudkit")
+- [ ] **Docs**: Add "What is CloudKit?" section — explain CKContainer, CKDatabase (private/public/shared), CKRecordZone, CKRecord, and CKSyncEngine in React Native developer terms (compare to Firebase Firestore concepts where helpful)
+- [ ] **Docs**: Update CHANGELOG.md with Phase J entry stubs
+
+_Risks_: The API reference will drift from code if not generated or validated automatically. Consider adding a CI step in a future phase that diffs JSDoc exports against README function lists. The "What is CloudKit?" section risks being too long — cap it at 500 words.
+
+_Done when_: A developer unfamiliar with CloudKit can read the README top-to-bottom and: (1) install the module in under 2 minutes, (2) understand what CloudKit is and how it maps to concepts they know, (3) find the function signature and usage example for any of the 44 exported APIs within 30 seconds, (4) know which functions work on their target platform (iOS/web/Android).
+
+---
+
+### Batch Execution Plan
+
+#### Batch 1 (parallel — no shared files)
+| Phase | Goal | Agent(s) | Effort |
+|-------|------|----------|--------|
+| J.1 | SwiftUI `@Observable` `CloudKitStore` | ios-native-dev | M |
+| J.2 | Zod schema validation helpers | ts-sdk-dev | S |
+| J.4 | README / docs overhaul | technical-writer | M |
+
+#### Batch 2 (after Batch 1 — J.3 depends on J.2 error type patterns)
+| Phase | Goal | Agent(s) | Effort |
+|-------|------|----------|--------|
+| J.3 | Android / web fallback routing | ts-sdk-dev | M |
+
+### Priority & Rationale
+
+**Start with J.1 + J.2 + J.4 (Batch 1, parallel).**
+
+- **J.1 (SwiftUI `CloudKitStore`)** is the highest-impact item for expanding the module's audience beyond React Native. SwiftUI adoption is accelerating and an `@Observable` wrapper positions the module for Swift Package Manager distribution in the future. It touches only `ios/SwiftUI/` — no conflicts with TypeScript work.
+- **J.2 (Zod validation)** is the lowest-risk item: pure TypeScript, no native code, no platform-specific logic. It delivers immediate DX value for TypeScript-heavy teams and establishes the `CloudKitValidationError` pattern that J.3 references for error consistency.
+- **J.4 (README overhaul)** is independent of all code work and can run in parallel. The current README's sequential-addition structure is the biggest barrier to adoption. A well-structured README is table-stakes for an OSS module.
+
+**J.3 (Android fallback) runs in Batch 2** because it references J.2's `CloudKitValidationError` error subclass pattern for consistency, and because the `ExpoCloudKit.android.ts` file must be kept in sync with `ExpoCloudKit.web.ts` — waiting for Batch 1 ensures the web layer is stable. J.3 is also the highest-risk item in Phase J due to the Custom Tab auth flow on Android, which needs manual testing across browsers.
