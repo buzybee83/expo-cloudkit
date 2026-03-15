@@ -1,6 +1,6 @@
 {
   "name": "expo-cloudkit",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Expo native module for CloudKit — records, zones, sharing, and sync",
   "main": "build/index.js",
   "types": "build/index.d.ts",

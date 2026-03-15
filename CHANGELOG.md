@@ -11,6 +11,36 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.9.0] — 2026-03-15
+
+### Added
+
+**Phase J.1 — SwiftUI `@Observable` store**
+
+- **`CloudKitStore`** (`ios/SwiftUI/CloudKitStore.swift`) — `@Observable` class (iOS 17+/macOS 14+) wrapping the record manager. Exposes `records`, `isSyncing`, `syncState`, `lastError`, and `pendingConflicts`. Provides `fetch()`, `save()`, `delete()` convenience methods. Automatically updates on sync state change notifications. Guarded by `#if canImport(SwiftUI)`.
+
+**Phase J.2 — Zod / schema validation**
+
+- **`createCloudKitSchema<T>(schema)`** — wraps any Zod-compatible schema (duck-typed `ZodLike<T>`) to parse and validate CloudKit record fields before returning them to callers. No hard `zod` import — works with any library that implements `.parse()` / `.safeParse()`.
+- **`CloudKitParser<T>`** interface — returned by `createCloudKitSchema`; exposes `.parseRecord()` and `.safeParseRecord()`.
+- **`CloudKitValidationError`** — thrown when schema validation fails; includes `zodErrors: unknown[]` for field-level detail.
+- **`VALIDATION_FAILED`** added to `CloudKitErrorCode`.
+- **`coerceFields()`** helper — auto-converts epoch-millisecond numbers to `Date` before validation.
+
+**Phase J.3 — Android / web fallback routing**
+
+- **`src/ExpoCloudKit.android.ts`** — Metro platform extension that re-exports all web/CloudKit-JS stubs and adds Android-specific overrides: `resolveSyncConflict` throws `CloudKitNotSupportedError`; `addSyncHealthListener` returns a no-op subscription.
+- **`src/android/auth.ts`** — `authenticateAndroid(containerId, options?)` calls `configureWeb` then opens Apple ID sign-in via `Linking.openURL`; `handleAuthRedirect(url)` detects CloudKit auth redirect URLs.
+- **`CloudKitProvider`** now auto-calls `configureWeb` on Android (same as web).
+- Exports: `authenticateAndroid`, `handleAuthRedirect`.
+
+**Phase J.4 — README overhaul**
+
+- Complete README restructure: Quick Start, Installation, What is CloudKit?, full API Reference (14 subsections), Platform Support Matrix, Migration Guide. ~750 lines replacing the previous incremental additions.
+- Example snippets in `example/snippets/`: `quick-start.ts`, `sync-engine.ts`, `schema-validation.ts`.
+
+---
+
 ## [0.8.0] — 2026-03-14
 
 ### Added
