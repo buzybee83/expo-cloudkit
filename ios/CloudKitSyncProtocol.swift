@@ -33,12 +33,23 @@ enum SyncProviderState: String {
 /// The module file holds a `CloudKitSyncProvider?` reference and calls through it.
 /// The `#available` check happens exactly once at `startSyncEngine()` time to select
 /// the correct implementation. All subsequent calls are dispatch-agnostic.
-protocol CloudKitSyncProvider: AnyObject {
+///
+/// # Actor Conformance
+/// Both concrete implementations (`CloudKitSyncEngineAdapter` and
+/// `CloudKitSyncFallbackAdapter`) are Swift `actor` types. Protocol methods are
+/// therefore implicitly `async` when called through the protocol — callers must
+/// use `await` or wrap in a `Task { await provider.method() }`.
+///
+/// `usesSyncEngine` and `state` are `nonisolated` on both implementations so that
+/// the synchronous `getSyncState()` JS function can read them without `await`.
+protocol CloudKitSyncProvider: AnyObject, Sendable {
 
   /// Whether this provider uses CKSyncEngine (true) or the manual fallback (false).
+  /// Declared `nonisolated` on actor conformers so it can be read synchronously.
   var usesSyncEngine: Bool { get }
 
   /// Current lifecycle state of the sync provider.
+  /// Declared `nonisolated(unsafe)` on actor conformers for synchronous module access.
   var state: SyncProviderState { get }
 
   /// Start syncing the specified zones.
@@ -49,27 +60,27 @@ protocol CloudKitSyncProvider: AnyObject {
   ///   - automaticallySync: Whether the provider should schedule syncs automatically.
   ///     On iOS 17+ this uses CKSyncEngine's built-in scheduling.
   ///     On iOS 16 this starts a polling timer.
-  ///   - eventHandler: Closure called on each sync event. The module layer dispatches
-  ///     emission to the main queue before calling `sendEvent`.
+  ///   - eventHandler: Closure called on each sync event. Both adapters dispatch
+  ///     emission to @MainActor before calling the handler.
   func start(
     zones: [CKRecordZone.ID],
     database: CKDatabase.Scope,
     automaticallySync: Bool,
     eventHandler: @escaping (SyncProviderEvent) -> Void
-  )
+  ) async
 
   /// Stop syncing and release resources (timers, engine references, etc.).
-  func stop()
+  func stop() async
 
   /// Manually trigger a sync cycle. On iOS 17+ this asks CKSyncEngine to fetch;
   /// on iOS 16 it immediately runs a fetch+push cycle outside the timer.
-  func triggerSync()
+  func triggerSync() async
 
   /// Enqueue a record save for the next sync cycle.
-  func enqueueSave(_ record: CKRecord)
+  func enqueueSave(_ record: CKRecord) async
 
   /// Enqueue a record deletion for the next sync cycle.
-  func enqueueDelete(_ recordID: CKRecord.ID)
+  func enqueueDelete(_ recordID: CKRecord.ID) async
 
   /// When true, conflict errors are surfaced to JS via `onSyncConflict` instead of
   /// being resolved automatically with server-record-wins. JS must always call
@@ -83,7 +94,7 @@ protocol CloudKitSyncProvider: AnyObject {
   ///   - requestId: The UUID string that was included in the `onSyncConflict` event.
   ///   - resolvedRecord: A JS-bridge dictionary for the resolved record, or nil to accept
   ///     the server version unchanged.
-  func resumeConflictResolution(requestId: String, resolvedRecord: [String: Any]?)
+  func resumeConflictResolution(requestId: String, resolvedRecord: [String: Any]?) async
 }
 
 // MARK: - Change Token Store

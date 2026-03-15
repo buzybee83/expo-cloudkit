@@ -17,29 +17,27 @@ import Foundation
 /// 3. Emit `stateChanged(.idle)` when the cycle completes.
 ///
 /// # Thread Safety
-/// All mutable state (`pendingSaves`, `pendingDeletes`, `trackedZones`, `state`,
-/// `isSyncInFlight`, `pendingConflicts`) is accessed through `stateQueue` — a private
-/// serial DispatchQueue acting as a synchronisation domain equivalent to an actor's
-/// executor. Timer callbacks and CKOperation completion blocks re-enter via
-/// `stateQueue.async`; synchronous reads use `stateQueue.sync`.
+/// `CloudKitSyncFallbackAdapter` is a Swift `actor`. All mutable state
+/// (`pendingSaves`, `pendingDeletes`, `trackedZones`, `state`, `isSyncInFlight`,
+/// `pendingConflicts`, and the health metric accumulators) is actor-isolated,
+/// providing compile-time data-race safety.
 ///
-/// # Why not a Swift actor?
-/// The push phase (`pushChanges`) uses CKModifyRecordsOperation's
-/// `perRecordSaveBlock` — a synchronous callback called on CloudKit's internal queue.
-/// Inside that callback, the current implementation calls `stateQueue.sync` to
-/// register conflict continuations. Wrapping this in an actor would require converting
-/// the entire push/pull callback chain to structured concurrency (async/await) before
-/// actor isolation is safe to apply.
-///
-/// TODO: migrate to actor after converting pushChanges/pullChanges to async throws.
-final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
+/// Timer callbacks and CKOperation completion blocks re-enter actor isolation via
+/// `Task { await self.method() }`. The push and pull phases are fully async,
+/// bridging the CloudKit callback API with `withCheckedContinuation`.
+actor CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
 
   // MARK: - Protocol conformance
 
   let usesSyncEngine = false
-  private(set) var state: SyncProviderState = .notStarted
 
-  // MARK: - Private properties
+  /// Exposed `nonisolated(unsafe)` so that the synchronous `getSyncState()` JS
+  /// function can read it without `await`. Written exclusively from actor-isolated
+  /// code, so the single-writer guarantee makes the unsafe annotation safe in
+  /// practice.
+  nonisolated(unsafe) private(set) var state: SyncProviderState = .notStarted
+
+  // MARK: - Private actor-isolated properties
 
   private let ckContainer: CKContainer
   private let tokenStore: ChangeTokenStore
@@ -54,9 +52,6 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
   /// Default: 1 retry on conflict before surfacing the error.
   private let maxConflictRetries = 1
 
-  /// Serial DispatchQueue acting as the synchronisation domain for all mutable state.
-  /// Named after the actor-equivalent pattern it approximates.
-  private let stateQueue = DispatchQueue(label: "expo.cloudkit.syncfallback.state", qos: .userInitiated)
   private var pendingSaves: [CKRecord] = []
   private var pendingDeletes: [CKRecord.ID] = []
 
@@ -65,14 +60,16 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
 
   /// When true, CONFLICT errors are forwarded to JS via `onSyncConflict` instead of
   /// being auto-resolved with server-record-wins. Default: false.
-  var conflictResolutionEnabled = false
+  ///
+  /// Declared `nonisolated(unsafe)` so the module can set it synchronously before
+  /// calling `start()`. It is written exactly once at configuration time and never
+  /// mutated during an in-flight sync cycle, making the unsynchronised write safe.
+  nonisolated(unsafe) var conflictResolutionEnabled = false
 
   /// Continuations keyed by requestId, awaiting JS resolution of a conflict.
-  /// Access only from `stateQueue`.
   private var pendingConflicts: [String: CheckedContinuation<[String: Any]?, Never>] = [:]
 
   // MARK: - Health Metrics Accumulators (I.3)
-  // All fields accessed exclusively from stateQueue.
 
   /// Wall-clock start time of the current sync cycle.
   private var cycleStartTime: Date?
@@ -99,134 +96,126 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
     eventHandler: @escaping (SyncProviderEvent) -> Void
   ) {
     self.eventHandler = eventHandler
-    stateQueue.sync { [weak self] in
-      guard let self = self else { return }
-      self.trackedZones = zones
-      self.databaseScope = database
-      self.state = .idle
-    }
+    trackedZones = zones
+    databaseScope = database
+    state = .idle
 
-    eventHandler(.stateChanged(.idle))
+    emit(.stateChanged(.idle))
 
-    // Run an initial sync immediately, then start the polling timer if requested.
-    runSyncCycle()
+    // Run an initial sync immediately.
+    Task { await runSyncCycle() }
 
     if automaticallySync {
-      // Timer must be scheduled on the main run loop.
-      DispatchQueue.main.async { [weak self] in
-        guard let self = self else { return }
-        self.pollingTimer = Timer.scheduledTimer(
-          withTimeInterval: self.pollingInterval,
+      // Timer must be scheduled on the main run loop; we hop back to the actor
+      // from the timer callback via Task.
+      // Capture pollingInterval inside actor isolation before crossing to @MainActor.
+      let interval = pollingInterval
+      Task { @MainActor in
+        let timer = Timer.scheduledTimer(
+          withTimeInterval: interval,
           repeats: true
         ) { [weak self] _ in
-          self?.runSyncCycle()
+          guard let self = self else { return }
+          Task { await self.runSyncCycle() }
         }
+        await self.storePollingTimer(timer)
       }
     }
   }
 
+  /// Stores the timer reference from the @MainActor context into actor-isolated state.
+  private func storePollingTimer(_ timer: Timer) {
+    pollingTimer = timer
+  }
+
   func stop() {
-    DispatchQueue.main.async { [weak self] in
-      self?.pollingTimer?.invalidate()
-      self?.pollingTimer = nil
+    // Invalidate the timer on the main run loop.
+    let timer = pollingTimer
+    pollingTimer = nil
+    Task { @MainActor in
+      timer?.invalidate()
     }
-    stateQueue.sync { [weak self] in
-      guard let self = self else { return }
-      self.state = .notStarted
-      self.pendingSaves.removeAll()
-      self.pendingDeletes.removeAll()
-      self.trackedZones = []
-      // Drain any pending conflict continuations with nil (server-record-wins)
-      // so no Task is left suspended after stop().
-      let drained = self.pendingConflicts
-      self.pendingConflicts.removeAll()
-      for (_, continuation) in drained {
-        continuation.resume(returning: nil)
-      }
+
+    state = .notStarted
+    pendingSaves.removeAll()
+    pendingDeletes.removeAll()
+    trackedZones = []
+
+    // Drain any pending conflict continuations with nil (server-record-wins)
+    // so no Task is left suspended after stop().
+    let drained = pendingConflicts
+    pendingConflicts.removeAll()
+    for (_, continuation) in drained {
+      continuation.resume(returning: nil)
     }
-    eventHandler?(.stateChanged(.notStarted))
+
+    emit(.stateChanged(.notStarted))
     eventHandler = nil
   }
 
   func triggerSync() {
-    runSyncCycle()
+    Task { await runSyncCycle() }
   }
 
   func enqueueSave(_ record: CKRecord) {
-    stateQueue.async { [weak self] in
-      self?.pendingSaves.append(record)
-    }
+    pendingSaves.append(record)
   }
 
   func enqueueDelete(_ recordID: CKRecord.ID) {
-    stateQueue.async { [weak self] in
-      self?.pendingDeletes.append(recordID)
-    }
+    pendingDeletes.append(recordID)
   }
 
   func resumeConflictResolution(requestId: String, resolvedRecord: [String: Any]?) {
-    stateQueue.async { [weak self] in
-      guard let self = self else { return }
-      guard let continuation = self.pendingConflicts.removeValue(forKey: requestId) else {
-        print("[ExpoCloudKit] resumeConflictResolution: no pending conflict for requestId '\(requestId)'")
-        return
-      }
-      continuation.resume(returning: resolvedRecord)
+    guard let continuation = pendingConflicts.removeValue(forKey: requestId) else {
+      print("[ExpoCloudKit] resumeConflictResolution: no pending conflict for requestId '\(requestId)'")
+      return
     }
+    continuation.resume(returning: resolvedRecord)
   }
 
   // MARK: - Sync Cycle
 
   /// Runs a push-then-pull cycle. Guards against overlapping cycles.
-  private func runSyncCycle() {
-    stateQueue.async { [weak self] in
-      guard let self = self else { return }
-      guard !self.isSyncInFlight else { return }
-      self.isSyncInFlight = true
-      self.state = .syncing
-      self.cycleStartTime = Date()
-      self.cycleReceivedCount = 0
-      self.cycleSentCount = 0
-      self.cycleFailedCount = 0
-      self.eventHandler?(.stateChanged(.syncing))
+  private func runSyncCycle() async {
+    guard !isSyncInFlight else { return }
+    isSyncInFlight = true
+    state = .syncing
+    cycleStartTime = Date()
+    cycleReceivedCount = 0
+    cycleSentCount = 0
+    cycleFailedCount = 0
+    emit(.stateChanged(.syncing))
 
-      // Capture current pending changes and zone configuration.
-      let saves = self.pendingSaves
-      let deletes = self.pendingDeletes
-      self.pendingSaves.removeAll()
-      self.pendingDeletes.removeAll()
-      let zones = self.trackedZones
-      let scope = self.databaseScope
+    // Capture current pending changes and zone configuration.
+    let saves = pendingSaves
+    let deletes = pendingDeletes
+    pendingSaves.removeAll()
+    pendingDeletes.removeAll()
+    let zones = trackedZones
+    let scope = databaseScope
 
-      // Push phase first, then pull.
-      self.pushChanges(saves: saves, deletes: deletes, scope: scope, retryCount: 0) { [weak self] in
-        guard let self = self else { return }
-        self.pullChanges(zones: zones, scope: scope) {
-          self.stateQueue.async {
-            self.isSyncInFlight = false
-            self.state = .idle
+    // Push phase first, then pull.
+    await pushChanges(saves: saves, deletes: deletes, scope: scope, retryCount: 0)
+    await pullChanges(zones: zones, scope: scope)
 
-            // Compute duration and emit health event for this cycle.
-            let durationMs: Double
-            if let start = self.cycleStartTime {
-              durationMs = Date().timeIntervalSince(start) * 1_000
-            } else {
-              durationMs = 0
-            }
-            self.eventHandler?(.syncHealth(
-              sentCount: self.cycleSentCount,
-              receivedCount: self.cycleReceivedCount,
-              failedCount: self.cycleFailedCount,
-              durationMs: durationMs,
-              syncEngine: false
-            ))
-            self.cycleStartTime = nil
-
-            self.eventHandler?(.stateChanged(.idle))
-          }
-        }
-      }
+    // Compute duration and emit health event for this cycle.
+    let durationMs: Double
+    if let start = cycleStartTime {
+      durationMs = Date().timeIntervalSince(start) * 1_000
+    } else {
+      durationMs = 0
     }
+    emit(.syncHealth(
+      sentCount: cycleSentCount,
+      receivedCount: cycleReceivedCount,
+      failedCount: cycleFailedCount,
+      durationMs: durationMs,
+      syncEngine: false
+    ))
+    cycleStartTime = nil
+    isSyncInFlight = false
+    state = .idle
+    emit(.stateChanged(.idle))
   }
 
   // MARK: - Push Phase
@@ -235,13 +224,9 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
     saves: [CKRecord],
     deletes: [CKRecord.ID],
     scope: CKDatabase.Scope,
-    retryCount: Int,
-    completion: @escaping () -> Void
-  ) {
-    guard !saves.isEmpty || !deletes.isEmpty else {
-      completion()
-      return
-    }
+    retryCount: Int
+  ) async {
+    guard !saves.isEmpty || !deletes.isEmpty else { return }
 
     let db = database(for: scope)
     let operation = CKModifyRecordsOperation(
@@ -251,135 +236,146 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
     operation.savePolicy = .changedKeys
     operation.qualityOfService = .userInitiated
 
-    var savedRecords: [CKRecord] = []
-    var failedSaves: [(CKRecord.ID, Error)] = []
-    var conflictedRecords: [CKRecord] = []
+    // Bridge the completion callback API to async/await using a SendableBox.
+    // perRecordSaveBlock and modifyRecordsResultBlock are called by CloudKit on its
+    // own serial internal queue. The SendableBox accumulates results on that queue;
+    // all reads happen after the continuation resumes (i.e. back in actor isolation).
 
-    operation.perRecordSaveBlock = { [weak self] recordID, result in
-      guard let self = self else { return }
-      switch result {
-      case .success(let record):
-        savedRecords.append(record)
-
-      case .failure(let error):
-        guard let ckError = error as? CKError,
-              ckError.code == .serverRecordChanged,
-              let serverRecord = ckError.serverRecord else {
-          // Non-conflict error — surface as a failed save.
-          failedSaves.append((recordID, error))
-          return
-        }
-
-        guard let clientRecord = saves.first(where: { $0.recordID == recordID }) else {
-          // Client record not found in saves list (shouldn't happen, but be safe).
-          failedSaves.append((recordID, error))
-          return
-        }
-
-        if self.conflictResolutionEnabled {
-          // Custom conflict resolution: emit to JS and await the result asynchronously.
-          // The current perRecordSaveBlock is synchronous, so we spawn a Task to bridge
-          // into async. The resolved record will be enqueued for the next sync cycle.
-          let requestId = UUID().uuidString
-          let clientDict = Converters.toDictionary(clientRecord)
-          let serverDict = Converters.toDictionary(serverRecord)
-
-          let eventPayload: [String: Any] = [
-            "requestId": requestId,
-            "clientRecord": clientDict,
-            "serverRecord": serverDict
-          ]
-
-          Task { [weak self] in
-            guard let self = self else { return }
-
-            // Register the continuation slot synchronously before emitting the
-            // event to JS, preventing the race where JS calls resolveSyncConflict
-            // before the slot is available.
-            // Note: `perRecordSaveBlock` runs on a CloudKit internal queue (not
-            // stateQueue), so `stateQueue.sync` is safe here.
-            let resolvedDict: [String: Any]? = await withCheckedContinuation { continuation in
-              self.stateQueue.sync {
-                self.pendingConflicts[requestId] = continuation
-              }
-              // Emit the event only after the slot is registered.
-              DispatchQueue.main.async { [weak self] in
-                self?.eventHandler?(.conflictPending(requestId: requestId, payload: eventPayload))
-              }
-            }
-
-            // Determine the record to enqueue based on JS response.
-            let recordToEnqueue: CKRecord
-            if let dict = resolvedDict, let resolved = try? Converters.toCKRecord(from: dict) {
-              recordToEnqueue = resolved
-            } else {
-              recordToEnqueue = serverRecord
-            }
-            self.enqueueSave(recordToEnqueue)
-            // Kick off a new sync cycle to send the resolved record.
-            self.runSyncCycle()
-          }
-          // Do NOT add to conflictedRecords — this conflict is handled asynchronously above.
-        } else {
-          // Default: server-record-wins with client field overlay.
-          conflictedRecords.append(self.resolveConflict(clientRecord: clientRecord, serverRecord: serverRecord))
-        }
-      }
+    /// A per-conflict record awaiting async JS resolution.
+    struct PendingAsyncConflict {
+      let requestId: String
+      let payload: [String: Any]
+      let serverRecord: CKRecord
     }
 
-    operation.modifyRecordsResultBlock = { [weak self] result in
-      guard let self = self else { return }
+    /// Container for results collected across CloudKit's per-record callbacks.
+    /// Marked @unchecked Sendable because it is mutated serially on CloudKit's
+    /// internal queue and read only after the continuation fires.
+    final class PushResultBox: @unchecked Sendable {
+      var savedRecords: [CKRecord] = []
+      var failedSaves: [(CKRecord.ID, Error)] = []
+      var conflictedRecords: [CKRecord] = []
+      var asyncConflicts: [PendingAsyncConflict] = []
+    }
+    let box = PushResultBox()
 
-      switch result {
-      case .failure(let error):
-        self.eventHandler?(.syncError(error))
-      case .success:
-        // Accumulate health counters on stateQueue.
-        self.stateQueue.async {
-          self.cycleSentCount += savedRecords.count
-          self.cycleFailedCount += failedSaves.count
-        }
-        // Emit what was sent (including partial failures).
-        if !savedRecords.isEmpty || !failedSaves.isEmpty {
-          self.eventHandler?(.recordsSent(saved: savedRecords, failed: failedSaves))
+    // `conflictResolutionEnabled` is nonisolated(unsafe) — safe to capture in the
+    // @escaping block which fires on CloudKit's queue.
+    let resolveConflicts = conflictResolutionEnabled
+
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+
+      operation.perRecordSaveBlock = { recordID, result in
+        switch result {
+        case .success(let record):
+          box.savedRecords.append(record)
+
+        case .failure(let error):
+          guard let ckError = error as? CKError,
+                ckError.code == .serverRecordChanged,
+                let serverRecord = ckError.serverRecord else {
+            box.failedSaves.append((recordID, error))
+            return
+          }
+
+          guard let clientRecord = saves.first(where: { $0.recordID == recordID }) else {
+            box.failedSaves.append((recordID, error))
+            return
+          }
+
+          if resolveConflicts {
+            // Collect for async JS resolution after the operation completes.
+            let requestId = UUID().uuidString
+            let clientDict = Converters.toDictionary(clientRecord)
+            let serverDict = Converters.toDictionary(serverRecord)
+            let payload: [String: Any] = [
+              "requestId": requestId,
+              "clientRecord": clientDict,
+              "serverRecord": serverDict
+            ]
+            box.asyncConflicts.append(PendingAsyncConflict(requestId: requestId, payload: payload, serverRecord: serverRecord))
+          } else {
+            // Default: server-record-wins with client field overlay.
+            box.conflictedRecords.append(
+              CloudKitSyncFallbackAdapter.resolveConflictStatic(clientRecord: clientRecord, serverRecord: serverRecord)
+            )
+          }
         }
       }
 
-      // Retry conflict-resolved records once.
-      if !conflictedRecords.isEmpty && retryCount < self.maxConflictRetries {
-        self.pushChanges(
-          saves: conflictedRecords,
-          deletes: [],
-          scope: scope,
-          retryCount: retryCount + 1,
-          completion: completion
-        )
+      operation.modifyRecordsResultBlock = { [weak self] result in
+        if case .failure(let error) = result {
+          Task { await self?.emit(.syncError(error)) }
+        }
+        continuation.resume()
+      }
+
+      db.add(operation)
+    }
+
+    // Back in actor isolation: read results from the box.
+    let savedRecords = box.savedRecords
+    let failedSaves = box.failedSaves
+    let conflictedRecords = box.conflictedRecords
+    let asyncConflicts = box.asyncConflicts
+
+    // Back in actor isolation: accumulate health counters and emit.
+    cycleSentCount += savedRecords.count
+    cycleFailedCount += failedSaves.count
+
+    if !savedRecords.isEmpty || !failedSaves.isEmpty {
+      emit(.recordsSent(saved: savedRecords, failed: failedSaves))
+    }
+
+    // Handle async conflict resolutions (conflictResolutionEnabled=true path).
+    var asyncResolvedRecords: [CKRecord] = []
+    for conflict in asyncConflicts {
+      // Register the continuation slot before emitting the event, preventing
+      // the race where JS calls resolveSyncConflict before the slot is ready.
+      let resolvedDict: [String: Any]? = await withCheckedContinuation { continuation in
+        pendingConflicts[conflict.requestId] = continuation
+        emit(.conflictPending(requestId: conflict.requestId, payload: conflict.payload))
+      }
+
+      let recordToEnqueue: CKRecord
+      if let dict = resolvedDict, let resolved = try? Converters.toCKRecord(from: dict) {
+        recordToEnqueue = resolved
       } else {
-        // Surface any conflict records that exhausted retries as failed.
-        if !conflictedRecords.isEmpty {
-          let exhaustedFails: [(CKRecord.ID, Error)] = conflictedRecords.map {
-            ($0.recordID, CKError(.serverRecordChanged))
-          }
-          self.eventHandler?(.recordsSent(saved: [], failed: exhaustedFails))
-        }
-        completion()
+        recordToEnqueue = conflict.serverRecord
       }
+      asyncResolvedRecords.append(recordToEnqueue)
     }
 
-    db.add(operation)
+    // Enqueue async-resolved records for the next sync cycle.
+    if !asyncResolvedRecords.isEmpty {
+      for record in asyncResolvedRecords {
+        pendingSaves.append(record)
+      }
+      // Kick off a new sync cycle to send the resolved records.
+      Task { await runSyncCycle() }
+    }
+
+    // Retry conflict-resolved records once (server-record-wins path).
+    if !conflictedRecords.isEmpty && retryCount < maxConflictRetries {
+      await pushChanges(
+        saves: conflictedRecords,
+        deletes: [],
+        scope: scope,
+        retryCount: retryCount + 1
+      )
+    } else if !conflictedRecords.isEmpty {
+      // Surface conflict records that exhausted retries as failed.
+      let exhaustedFails: [(CKRecord.ID, Error)] = conflictedRecords.map {
+        ($0.recordID, CKError(.serverRecordChanged))
+      }
+      emit(.recordsSent(saved: [], failed: exhaustedFails))
+    }
   }
 
   // MARK: - Pull Phase
 
-  private func pullChanges(
-    zones: [CKRecordZone.ID],
-    scope: CKDatabase.Scope,
-    completion: @escaping () -> Void
-  ) {
-    guard !zones.isEmpty else {
-      completion()
-      return
-    }
+  private func pullChanges(zones: [CKRecordZone.ID], scope: CKDatabase.Scope) async {
+    guard !zones.isEmpty else { return }
 
     let db = database(for: scope)
 
@@ -398,71 +394,81 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
     operation.fetchAllChanges = true
     operation.qualityOfService = .utility
 
-    // Accumulate changes per zone.
-    var changedByZone: [String: [CKRecord]] = [:]
-    var deletedByZone: [String: [CKRecord.ID]] = [:]
+    // Accumulate changes per zone using a box to safely bridge across the escaping
+    // CloudKit callbacks. CloudKit calls these blocks on its own serial internal
+    // queue; the box is mutated serially and read only after the continuation fires.
+    struct ZoneResult {
+      let zoneID: CKRecordZone.ID
+      let token: CKServerChangeToken?
+      let error: Error?
+    }
+    final class PullResultBox: @unchecked Sendable {
+      var changedByZone: [String: [CKRecord]] = [:]
+      var deletedByZone: [String: [CKRecord.ID]] = [:]
+      var zoneResults: [ZoneResult] = []
+    }
+    let box = PullResultBox()
 
     operation.recordWasChangedBlock = { recordID, result in
       switch result {
       case .success(let record):
-        let zoneName = recordID.zoneID.zoneName
-        changedByZone[zoneName, default: []].append(record)
+        box.changedByZone[recordID.zoneID.zoneName, default: []].append(record)
       case .failure:
-        break // individual record errors are non-fatal; the zone result block handles zone-level errors
+        break // individual record errors are non-fatal
       }
     }
 
     operation.recordWithIDWasDeletedBlock = { recordID, _ in
-      let zoneName = recordID.zoneID.zoneName
-      deletedByZone[zoneName, default: []].append(recordID)
+      box.deletedByZone[recordID.zoneID.zoneName, default: []].append(recordID)
     }
 
-    operation.recordZoneFetchResultBlock = { [weak self] zoneID, result in
-      guard let self = self else { return }
+    operation.recordZoneFetchResultBlock = { zoneID, result in
       switch result {
       case .success(let (newToken, _, _)):
-        // Persist the new token for this zone immediately.
-        self.tokenStore.saveZoneToken(newToken, zoneID: zoneID, scope: scope)
-
-        let zoneName = zoneID.zoneName
-        let changed = changedByZone[zoneName] ?? []
-        let deleted = deletedByZone[zoneName] ?? []
-
-        // Accumulate health counters for this zone.
-        self.stateQueue.async {
-          self.cycleReceivedCount += changed.count + deleted.count
-        }
-
-        if !changed.isEmpty || !deleted.isEmpty {
-          self.eventHandler?(.recordsFetched(
-            changed: changed,
-            deleted: deleted,
-            zoneName: zoneName
-          ))
-        }
-
+        box.zoneResults.append(ZoneResult(zoneID: zoneID, token: newToken, error: nil))
       case .failure(let error):
-        // If the change token expired, clear just this zone's token.
-        // The next sync cycle will do a full fetch from the beginning for this zone.
-        // Other zones' tokens are left intact.
+        box.zoneResults.append(ZoneResult(zoneID: zoneID, token: nil, error: error))
+      }
+    }
+
+    // Bridge the completion callback to async/await.
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      operation.fetchRecordZoneChangesResultBlock = { [weak self] result in
+        if case .failure(let error) = result {
+          Task { await self?.emit(.syncError(error)) }
+        }
+        continuation.resume()
+      }
+      db.add(operation)
+    }
+
+    // Back in actor isolation: process zone results.
+    for zoneResult in box.zoneResults {
+      if let error = zoneResult.error {
         if let ckError = error as? CKError, ckError.code == .changeTokenExpired {
-          self.tokenStore.clearZoneToken(zoneID: zoneID, scope: scope)
+          tokenStore.clearZoneToken(zoneID: zoneResult.zoneID, scope: scope)
         }
-        self.eventHandler?(.syncError(error))
+        emit(.syncError(error))
+        continue
+      }
+
+      guard let newToken = zoneResult.token else { continue }
+      tokenStore.saveZoneToken(newToken, zoneID: zoneResult.zoneID, scope: scope)
+
+      let zoneName = zoneResult.zoneID.zoneName
+      let changed = box.changedByZone[zoneName] ?? []
+      let deleted = box.deletedByZone[zoneName] ?? []
+
+      cycleReceivedCount += changed.count + deleted.count
+
+      if !changed.isEmpty || !deleted.isEmpty {
+        emit(.recordsFetched(
+          changed: changed,
+          deleted: deleted,
+          zoneName: zoneName
+        ))
       }
     }
-
-    operation.fetchRecordZoneChangesResultBlock = { [weak self] result in
-      switch result {
-      case .success:
-        break
-      case .failure(let error):
-        self?.eventHandler?(.syncError(error))
-      }
-      completion()
-    }
-
-    db.add(operation)
   }
 
   // MARK: - Conflict Resolution
@@ -470,6 +476,11 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
   /// Server-record-wins merge: start with server record and overlay client's
   /// changed fields. Mirrors the strategy in `CloudKitSyncEngineAdapter`.
   private func resolveConflict(clientRecord: CKRecord, serverRecord: CKRecord) -> CKRecord {
+    CloudKitSyncFallbackAdapter.resolveConflictStatic(clientRecord: clientRecord, serverRecord: serverRecord)
+  }
+
+  /// Static version so it can be called from `nonisolated` closures (perRecordSaveBlock).
+  private static func resolveConflictStatic(clientRecord: CKRecord, serverRecord: CKRecord) -> CKRecord {
     for key in clientRecord.changedKeys() {
       serverRecord[key] = clientRecord[key]
     }
@@ -484,6 +495,17 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
     case .shared:   return ckContainer.sharedCloudDatabase
     case .public:   return ckContainer.publicCloudDatabase
     @unknown default: return ckContainer.privateCloudDatabase
+    }
+  }
+
+  // MARK: - Event Emission Helper
+
+  /// Dispatches the event to @MainActor before invoking `eventHandler`.
+  /// Expo Modules Core requires event emission on the main queue.
+  private func emit(_ event: SyncProviderEvent) {
+    guard let handler = eventHandler else { return }
+    Task { @MainActor in
+      handler(event)
     }
   }
 }
