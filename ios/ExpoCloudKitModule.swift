@@ -24,6 +24,13 @@ public class ExpoCloudKitModule: Module {
   private var zoneManager: CloudKitZoneManager?
   private var recordManager: CloudKitRecordManager?
 
+  // MARK: - Shared record manager (Phase J.1 — CloudKitStore)
+
+  /// Weak reference to the configured `CloudKitRecordManager`, accessible to
+  /// `CloudKitStore` without creating a hard dependency on the Expo module lifecycle.
+  /// Set to `nil` automatically when the module is deallocated.
+  static weak var sharedRecordManager: CloudKitRecordManager?
+
   // MARK: - Subscription manager (Phase B)
 
   /// Manages push subscriptions (CKQuerySubscription, CKDatabaseSubscription).
@@ -167,6 +174,8 @@ public class ExpoCloudKitModule: Module {
         }
       }
       self.recordManager = rm
+      // Expose to CloudKitStore (@Observable SwiftUI wrapper, Phase J.1)
+      ExpoCloudKitModule.sharedRecordManager = rm
       self.offlineQueue = OfflineQueue(
         container: ck,
         containerID: containerId,
@@ -1718,6 +1727,16 @@ extension ExpoCloudKitModule {
 
     switch event {
     case .stateChanged(let newState):
+      // Post a NotificationCenter notification so CloudKitStore (@Observable
+      // SwiftUI wrapper, Phase J.1) can update isSyncing / syncState without
+      // depending on the Expo module event bus.
+      DispatchQueue.main.async {
+        NotificationCenter.default.post(
+          name: .expoCloudKitSyncStateChanged,
+          object: nil,
+          userInfo: ["state": newState.rawValue]
+        )
+      }
       payload = [
         "type": "stateChanged",
         "state": [
@@ -1895,4 +1914,18 @@ enum CloudKitModuleError {
   static func subscriptionNotFound(_ id: String) -> Exception { CloudKitSubscriptionNotFoundException(id) }
   static func invalidArgument(_ msg: String) -> Exception    { CloudKitInvalidArgumentException(msg) }
   static func participantNotFound(_ name: String) -> Exception { ParticipantNotFoundException(name) }
+}
+
+// MARK: - Notification Names (Phase J.1)
+
+extension Notification.Name {
+  /// Posted on the main queue whenever the sync provider transitions to a new state.
+  /// UserInfo:
+  ///   - `"state"`: `String` — one of "idle", "syncing", "suspended", "notStarted"
+  ///
+  /// `CloudKitStore` observes this notification to keep its `syncState` and
+  /// `isSyncing` properties current without importing ExpoModulesCore.
+  static let expoCloudKitSyncStateChanged = Notification.Name(
+    "ExpoCloudKitSyncStateChanged"
+  )
 }
