@@ -260,13 +260,13 @@ _Effort: M (Swift only) | Agent: ios-native-dev_
 
 `CloudKitSyncEngine.swift` (352 lines) and `CloudKitSyncFallback.swift` (434 lines) protect shared mutable state (`pendingConflicts`, configuration) with a serial `DispatchQueue`. `OfflineQueue.swift` (426 lines) uses two `DispatchQueue`s. Swift actors (available since Swift 5.5, iOS 15+) provide compile-time data-race safety and are the modern replacement. Since the module targets iOS 16+, actors are available on all supported versions.
 
-- [ ] **Swift**: Convert `CloudKitSyncEngineAdapter` from class + `DispatchQueue` to `actor` — move `pendingConflicts`, `syncEngine`, `configuration` into actor-isolated state
-- [ ] **Swift**: Convert `CloudKitSyncFallbackAdapter` from class + `DispatchQueue` to `actor`
-- [ ] **Swift**: Convert `OfflineQueue` from class + two `DispatchQueue`s to `actor`
-- [ ] **Swift**: Update `ExpoCloudKitModule.swift` call sites to use `await` for actor-isolated method calls
-- [ ] **Swift**: Ensure `CKSyncEngineDelegate` protocol conformance works with actor isolation (may need `nonisolated` annotations on delegate methods)
+- [x] **Swift**: Convert `CloudKitSyncEngineAdapter` from class + `DispatchQueue` to `actor` — move `pendingConflicts`, `syncEngine`, `configuration` into actor-isolated state
+- [x] **Swift**: Convert `CloudKitSyncFallbackAdapter` from class + `DispatchQueue` to `actor`
+- [x] **Swift**: Convert `OfflineQueue` from class + two `DispatchQueue`s to `actor` _(already an actor since Phase H — no change needed)_
+- [x] **Swift**: Update `ExpoCloudKitModule.swift` call sites to use `await` for actor-isolated method calls
+- [x] **Swift**: Ensure `CKSyncEngineDelegate` protocol conformance works with actor isolation (`nonisolated` annotations on `handleEvent` and `nextRecordZoneChangeBatch`)
 - [ ] **Swift**: Run all existing XCTests — they must continue to pass with the actor-based implementations
-- [ ] **Swift**: Verify no `DispatchQueue.main.async` calls remain in migrated files (replace with `@MainActor` where needed for UI/event dispatch)
+- [x] **Swift**: Verify no `DispatchQueue.main.async` calls remain in migrated files (replaced with `Task { @MainActor in ... }` or `Task { await self.emit(...) }` dispatch)
 
 _Risks_: `CKSyncEngineDelegate` methods are called by the system on arbitrary threads. Actor re-entrancy and `nonisolated` annotations add complexity. The `ExpoModulesCore` event system (`sendEvent`) may require `@MainActor` dispatch, which interacts with actor isolation. `OfflineQueue`'s timer-based retry uses `DispatchQueue.global().asyncAfter` which needs reworking for actor context. This is the highest-risk phase in H and should not be parallelized with other Swift work.
 

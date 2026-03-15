@@ -744,10 +744,6 @@ public class ExpoCloudKitModule: Module {
         return
       }
 
-      // Stop any existing provider before starting a new one.
-      self.syncProvider?.stop()
-      self.syncProvider = nil
-
       let provider: CloudKitSyncProvider
       if #available(iOS 17.0, macOS 14.0, *) {
         provider = CloudKitSyncEngineAdapter(
@@ -761,23 +757,36 @@ public class ExpoCloudKitModule: Module {
         )
       }
 
+      // Stop any existing provider before starting a new one.
+      // Both stop() and start() are actor-isolated (async) — wrap in a Task so
+      // the Promise is resolved only after start() completes its actor turn.
+      let resolveConflicts = config["resolveConflicts"] as? Bool == true
+      let existingProvider = self.syncProvider
       self.syncProvider = provider
 
       // G.6 — enable custom JS conflict resolution if the caller opted in.
-      if config["resolveConflicts"] as? Bool == true {
+      // conflictResolutionEnabled is nonisolated(unsafe) on both actor implementations,
+      // written here once before start() is called and never mutated again during a sync
+      // cycle, making the unsynchronised write safe in practice.
+      if resolveConflicts {
         provider.conflictResolutionEnabled = true
       }
 
-      provider.start(
-        zones: zoneIDs,
-        database: scope,
-        automaticallySync: autoSync,
-        eventHandler: { [weak self] event in
-          self?.handleSyncEvent(event)
-        }
-      )
+      Task { [weak self] in
+        // Stop the old provider (if any) before starting the new one.
+        await existingProvider?.stop()
 
-      promise.resolve(nil)
+        await provider.start(
+          zones: zoneIDs,
+          database: scope,
+          automaticallySync: autoSync,
+          eventHandler: { [weak self] event in
+            self?.handleSyncEvent(event)
+          }
+        )
+
+        promise.resolve(nil)
+      }
     }
 
     /// Resolves a pending conflict that was surfaced via the `onSyncConflict` event.
@@ -791,7 +800,11 @@ public class ExpoCloudKitModule: Module {
     /// call is a no-op — it does not reject, so callers do not need to guard against
     /// double-resolution.
     AsyncFunction("resolveSyncConflict") { [weak self] (requestId: String, resolvedRecord: [String: Any]?) in
-      self?.syncProvider?.resumeConflictResolution(requestId: requestId, resolvedRecord: resolvedRecord)
+      guard let provider = self?.syncProvider else { return }
+      // actor-isolated method — must use Task to dispatch asynchronously.
+      Task {
+        await provider.resumeConflictResolution(requestId: requestId, resolvedRecord: resolvedRecord)
+      }
     }
 
     /// Returns the current sync state synchronously from in-memory provider state.
@@ -814,8 +827,10 @@ public class ExpoCloudKitModule: Module {
         promise.reject(CloudKitModuleError.syncEngineNotRunning)
         return
       }
-      provider.triggerSync()
-      promise.resolve(nil)
+      Task {
+        await provider.triggerSync()
+        promise.resolve(nil)
+      }
     }
 
     /// Enqueues a pending record save or delete for the next sync cycle.
@@ -827,7 +842,8 @@ public class ExpoCloudKitModule: Module {
 
       if changeType == "save", let recordDict = changeDict["record"] as? [String: Any] {
         guard let record = try? Converters.toCKRecord(from: recordDict) else { return }
-        provider.enqueueSave(record)
+        // actor-isolated method — dispatch asynchronously via Task.
+        Task { await provider.enqueueSave(record) }
       } else if changeType == "delete",
                 let idDict = changeDict["recordIdentifier"] as? [String: Any],
                 let recordName = idDict["recordName"] as? String {
@@ -836,20 +852,23 @@ public class ExpoCloudKitModule: Module {
           CKRecordZone.ID(zoneName: $0, ownerName: CKCurrentUserDefaultName)
         } ?? CKRecordZone.ID.default
         let recordID = CKRecord.ID(recordName: recordName, zoneID: zoneID)
-        provider.enqueueDelete(recordID)
+        // actor-isolated method — dispatch asynchronously via Task.
+        Task { await provider.enqueueDelete(recordID) }
       }
     }
 
     /// Stops the sync provider and releases its resources.
     /// Rejects if sync engine is not running.
     AsyncFunction("stopSyncEngine") { [weak self] (promise: Promise) in
-      guard let provider = self?.syncProvider else {
+      guard let self = self, let provider = self.syncProvider else {
         promise.reject(CloudKitModuleError.syncEngineNotRunning)
         return
       }
-      provider.stop()
-      self?.syncProvider = nil
-      promise.resolve(nil)
+      self.syncProvider = nil
+      Task {
+        await provider.stop()
+        promise.resolve(nil)
+      }
     }
 
     // -------------------------------------------------------------------------
