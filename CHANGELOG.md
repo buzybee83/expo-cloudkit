@@ -11,6 +11,21 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.10.0] — 2026-03-15
+
+### Changed
+
+**Phase H.6 — Swift actor migration for sync adapters**
+
+- `CloudKitSyncEngineAdapter` converted from `class + DispatchQueue` to a Swift `actor`. All mutable state (`pendingSaves`, `pendingDeletes`, `pendingConflicts`, health accumulators, `engine`) is now actor-isolated. The serial `stateQueue` DispatchQueue is removed entirely.
+- `CloudKitSyncFallbackAdapter` converted to a Swift `actor`. CloudKit callback bridging uses `withCheckedContinuation` + `@unchecked Sendable` result boxes, eliminating all `DispatchQueue.sync` patterns.
+- `CloudKitSyncProtocol` protocol methods (`start`, `stop`, `triggerSync`, `enqueueSave`, `enqueueDelete`, `resumeConflictResolution`) marked `async`; protocol constrained to `Sendable`.
+- `CKSyncEngineDelegate` methods annotated `nonisolated` so the system can call them directly; delegate methods `await` back into actor isolation for state mutations.
+- `ExpoCloudKitModule.swift` sync call sites wrapped in `Task { await ... }` to bridge the synchronous Expo Modules Core functions to the async actor API.
+- Zero `DispatchQueue` usage remains in either sync adapter file.
+
+---
+
 ## [0.9.0] — 2026-03-15
 
 ### Added
