@@ -125,6 +125,9 @@ export {
 export { createCloudKitSchema } from './schema';
 export type { CloudKitParser } from './schema';
 
+// Phase J.3 — Android sign-in helpers
+export { authenticateAndroid, handleAuthRedirect } from './android/auth';
+
 // Phase A — Container & Account
 export { configure, getAccountStatus, fetchUserRecordID, addAccountStatusListener, isCloudKitAvailable } from './ExpoCloudKit';
 

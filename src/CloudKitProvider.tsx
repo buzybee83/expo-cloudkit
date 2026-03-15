@@ -141,7 +141,7 @@ export function CloudKitProvider({
 
     async function setup() {
       // 1. Configure the container (platform-specific)
-      if (Platform.OS === 'web') {
+      if (Platform.OS === 'web' || Platform.OS === 'android') {
         if (webConfig) {
           // eslint-disable-next-line @typescript-eslint/no-require-imports
           const { configureWeb } = require('./ExpoCloudKit') as typeof import('./ExpoCloudKit.web');
