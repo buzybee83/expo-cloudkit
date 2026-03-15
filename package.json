@@ -40,10 +40,14 @@
     "expo": ">=51.0.0",
     "expo-modules-core": ">=1.12.0",
     "react": ">=18.0.0",
-    "tsl-apple-cloudkit": ">=0.2.0"
+    "tsl-apple-cloudkit": ">=0.2.0",
+    "zod": ">=3.0.0"
   },
   "peerDependenciesMeta": {
     "tsl-apple-cloudkit": {
+      "optional": true
+    },
+    "zod": {
       "optional": true
     }
   },

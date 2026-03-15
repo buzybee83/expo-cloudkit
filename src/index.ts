@@ -114,7 +114,16 @@ export type {
 } from './types';
 
 // Errors
-export { CloudKitError, CloudKitErrorCode, CloudKitNotSupportedError } from './errors';
+export {
+  CloudKitError,
+  CloudKitErrorCode,
+  CloudKitNotSupportedError,
+  CloudKitValidationError,
+} from './errors';
+
+// Phase J.2 — Zod schema validation helpers
+export { createCloudKitSchema } from './schema';
+export type { CloudKitParser } from './schema';
 
 // Phase A — Container & Account
 export { configure, getAccountStatus, fetchUserRecordID, addAccountStatusListener, isCloudKitAvailable } from './ExpoCloudKit';

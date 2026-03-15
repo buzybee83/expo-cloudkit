@@ -47,6 +47,13 @@ export enum CloudKitErrorCode {
   /** An unexpected error occurred. Check `message` for details. */
   UNKNOWN = 'UNKNOWN',
 
+  /**
+   * A CloudKit record failed runtime schema validation.
+   * The `zodErrors` field on `CloudKitValidationError` contains the full list
+   * of Zod issues describing which fields failed and why.
+   */
+  VALIDATION_FAILED = 'VALIDATION_FAILED',
+
   // Phase B — CKSyncEngine
 
   /**
@@ -233,6 +240,8 @@ export class CloudKitError extends Error {
         return 'CloudKit is rate limiting requests. The operation will be retried automatically.';
       case CloudKitErrorCode.ASSET_TOO_LARGE:
         return 'The asset exceeds the CloudKit size limit (250 MB for public databases).';
+      case CloudKitErrorCode.VALIDATION_FAILED:
+        return 'Check that the CloudKit record fields match the expected schema.';
       default:
         return undefined;
     }
@@ -265,5 +274,45 @@ export class CloudKitError extends Error {
           ? (err['serverRecord'] as import('./types').CloudKitRecord)
           : undefined,
     });
+  }
+}
+
+/**
+ * Thrown when a CloudKit record fails runtime schema validation via
+ * `createCloudKitSchema`.
+ *
+ * The `zodErrors` array contains the raw Zod `ZodIssue` objects (typed as
+ * `unknown[]` to avoid a hard runtime dependency on the `zod` package).
+ *
+ * @example
+ * ```typescript
+ * const result = NoteSchema.safeParse(record)
+ * if (!result.success) {
+ *   console.log(result.error.zodErrors) // ZodIssue[]
+ * }
+ * ```
+ */
+export class CloudKitValidationError extends CloudKitError {
+  /**
+   * The raw Zod issues that caused validation to fail.
+   * Each element is a `ZodIssue` — typed as `unknown` to avoid a hard
+   * compile-time dependency on the `zod` package.
+   */
+  readonly zodErrors: unknown[];
+
+  constructor(zodErrors: unknown[], record?: import('./types').CloudKitRecord) {
+    const issues = zodErrors as Array<{ path: (string | number)[]; message: string }>;
+    const summary = issues
+      .slice(0, 3)
+      .map((i) => `${i.path.join('.')}: ${i.message}`)
+      .join('; ');
+    super(
+      CloudKitErrorCode.VALIDATION_FAILED,
+      `CloudKit record validation failed: ${summary}`,
+      record != null ? { serverRecord: record } : undefined
+    );
+    this.name = 'CloudKitValidationError';
+    this.zodErrors = zodErrors;
+    Object.setPrototypeOf(this, new.target.prototype);
   }
 }
