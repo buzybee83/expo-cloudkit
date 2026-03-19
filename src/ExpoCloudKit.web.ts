@@ -1425,3 +1425,23 @@ export function addRateLimitedListener(
 export function isNativeModuleAvailable(): boolean {
   return false;
 }
+
+// ---------------------------------------------------------------------------
+// Background Sync — not supported on web
+// ---------------------------------------------------------------------------
+
+/**
+ * Not supported on web — background tasks are an iOS-only capability.
+ * Throws `CloudKitNotSupportedError`.
+ */
+export function registerBackgroundSync(_taskIdentifier: string): Promise<void> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+/**
+ * Not supported on web — background tasks are an iOS-only capability.
+ * Throws `CloudKitNotSupportedError`.
+ */
+export function scheduleBackgroundSync(): Promise<void> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}

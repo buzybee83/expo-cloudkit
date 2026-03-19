@@ -875,6 +875,59 @@ public class ExpoCloudKitModule: Module {
     }
 
     // -------------------------------------------------------------------------
+    // Background Sync — BGTaskScheduler (iOS 13+)
+    // -------------------------------------------------------------------------
+
+    /// Registers the BGAppRefreshTask handler with the system scheduler.
+    ///
+    /// Must be called early in the app's lifecycle — ideally from the root
+    /// component's mount effect — so the registration is in place before the
+    /// app first moves to the background. If `startSyncEngine()` has not been
+    /// called yet the registration still succeeds; the sync provider reference
+    /// is captured lazily when the first background task fires.
+    ///
+    /// - Parameter taskIdentifier: Must match an entry in
+    ///   `BGTaskSchedulerPermittedIdentifiers` in `Info.plist` (injected by
+    ///   the config plugin when `backgroundSyncTaskIdentifier` is set).
+    ///
+    /// Resolves with `nil` on success.
+    /// Rejects with `BackgroundSyncUnavailableException` on iOS < 13 (unreachable
+    /// in practice — iOS 13 is below the module's minimum deployment target).
+    AsyncFunction("registerBackgroundSync") { [weak self] (taskIdentifier: String, promise: Promise) in
+      if #available(iOS 13.0, *) {
+        // Pass a resolver closure so the background task reads the module's
+        // *current* syncProvider when it fires, not a snapshot from registration time.
+        // This handles the common pattern: register at app launch, start engine after sign-in.
+        CloudKitBackgroundSync.shared.register(
+          taskIdentifier: taskIdentifier,
+          providerResolver: { [weak self] in self?.syncProvider }
+        )
+        // Schedule the first refresh now so the system knows a refresh is wanted.
+        CloudKitBackgroundSync.shared.scheduleNextRefresh()
+        promise.resolve(nil)
+      } else {
+        promise.reject(CloudKitModuleError.backgroundSyncUnavailable)
+      }
+    }
+
+    /// Asks the system to schedule a BGAppRefreshTask as soon as conditions allow.
+    ///
+    /// Call this if you want to proactively reschedule a background refresh
+    /// outside of the automatic rescheduling that occurs at the end of each task.
+    /// Safe to call multiple times — duplicate requests are coalesced by the system.
+    ///
+    /// Resolves with `nil` on success (note: success means the request was submitted,
+    /// not that the task will necessarily run — the system decides when).
+    AsyncFunction("scheduleBackgroundSync") { (promise: Promise) in
+      if #available(iOS 13.0, *) {
+        CloudKitBackgroundSync.shared.scheduleNextRefresh()
+        promise.resolve(nil)
+      } else {
+        promise.reject(CloudKitModuleError.backgroundSyncUnavailable)
+      }
+    }
+
+    // -------------------------------------------------------------------------
     // Push Subscriptions — Phase B
     // -------------------------------------------------------------------------
 
@@ -1920,6 +1973,12 @@ class OfflineQueueFullException: Exception {
   }
 }
 
+class BackgroundSyncUnavailableException: Exception {
+  override var reason: String {
+    "Background sync via BGTaskScheduler requires iOS 13 or later."
+  }
+}
+
 // MARK: - CloudKitModuleError namespace
 //
 // This typealias-style enum is kept so that existing call sites compile
@@ -1927,11 +1986,12 @@ class OfflineQueueFullException: Exception {
 // subclass, which Expo Modules Core serializes correctly to JS.
 
 enum CloudKitModuleError {
-  static var notConfigured: Exception         { CloudKitNotConfiguredException() }
-  static var requiresiOS17: Exception         { CloudKitRequiresiOS17Exception() }
-  static var syncEngineNotRunning: Exception  { CloudKitSyncEngineNotRunningException() }
-  static var sharingUIUnavailable: Exception  { SharingUIUnavailableException() }
+  static var notConfigured: Exception              { CloudKitNotConfiguredException() }
+  static var requiresiOS17: Exception              { CloudKitRequiresiOS17Exception() }
+  static var syncEngineNotRunning: Exception       { CloudKitSyncEngineNotRunningException() }
+  static var sharingUIUnavailable: Exception       { SharingUIUnavailableException() }
   static var sharingUINotSupportedOnMacOS: Exception { SharingUINotSupportedOnMacOSException() }
+  static var backgroundSyncUnavailable: Exception { BackgroundSyncUnavailableException() }
   static func notImplemented(_ f: String) -> Exception  { CloudKitNotImplementedException(f) }
   static func subscriptionNotFound(_ id: String) -> Exception { CloudKitSubscriptionNotFoundException(id) }
   static func invalidArgument(_ msg: String) -> Exception    { CloudKitInvalidArgumentException(msg) }
