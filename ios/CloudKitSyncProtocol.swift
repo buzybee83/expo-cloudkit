@@ -14,6 +14,11 @@ enum SyncProviderEvent {
   case conflictPending(requestId: String, payload: [String: Any])
   /// Emitted after each complete sync cycle with aggregate health metrics.
   case syncHealth(sentCount: Int, receivedCount: Int, failedCount: Int, durationMs: Double, syncEngine: Bool)
+  /// Emitted once after a full zone pull cycle finishes — the "sync is done" signal.
+  /// `recordCount` is the total across all `recordsFetched` batches in this cycle.
+  /// `zoneNames` lists every zone that was polled.
+  /// `isInitialSync` is true when there was no persisted change token before this cycle.
+  case syncCompleted(recordCount: Int, zoneNames: [String], isInitialSync: Bool)
 }
 
 // MARK: - Sync Provider State

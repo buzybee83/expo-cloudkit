@@ -80,6 +80,15 @@ actor CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
   /// Total record save failures during the current push phase.
   private var cycleFailedCount: Int = 0
 
+  // MARK: - syncCompleted Accumulators
+
+  /// Zone names that contributed records in the current pull phase.
+  private var cycleZoneNames: Set<String> = []
+  /// True if no change token existed for any tracked zone before the first cycle.
+  /// Computed lazily at the start of `runSyncCycle()` on the first invocation
+  /// and reset to false after that first cycle completes.
+  private var isFirstSyncCycle: Bool = true
+
   // MARK: - Init
 
   init(ckContainer: CKContainer, tokenStore: ChangeTokenStore) {
@@ -140,6 +149,8 @@ actor CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
     pendingSaves.removeAll()
     pendingDeletes.removeAll()
     trackedZones = []
+    cycleZoneNames.removeAll()
+    isFirstSyncCycle = true
 
     // Drain any pending conflict continuations with nil (server-record-wins)
     // so no Task is left suspended after stop().
@@ -184,7 +195,20 @@ actor CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
     cycleReceivedCount = 0
     cycleSentCount = 0
     cycleFailedCount = 0
+    cycleZoneNames.removeAll()
     emit(.stateChanged(.syncing))
+
+    // Determine if this is an initial sync: no persisted token for any tracked zone
+    // means the entire zone history will be fetched from scratch.
+    let isInitialSync: Bool
+    if isFirstSyncCycle {
+      let scope = databaseScope
+      isInitialSync = trackedZones.allSatisfy {
+        tokenStore.loadZoneToken(zoneID: $0, scope: scope) == nil
+      }
+    } else {
+      isInitialSync = false
+    }
 
     // Capture current pending changes and zone configuration.
     let saves = pendingSaves
@@ -212,6 +236,17 @@ actor CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
       durationMs: durationMs,
       syncEngine: false
     ))
+
+    // Emit the "sync is done" signal with cycle-level aggregates.
+    emit(.syncCompleted(
+      recordCount: cycleReceivedCount,
+      zoneNames: Array(cycleZoneNames),
+      isInitialSync: isInitialSync
+    ))
+
+    // After the first cycle, subsequent cycles are incremental.
+    isFirstSyncCycle = false
+
     cycleStartTime = nil
     isSyncInFlight = false
     state = .idle
@@ -460,6 +495,10 @@ actor CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
       let deleted = box.deletedByZone[zoneName] ?? []
 
       cycleReceivedCount += changed.count + deleted.count
+
+      // Track zone names for the syncCompleted event even if there were no changes —
+      // the zone was still polled this cycle, which is meaningful for isInitialSync.
+      cycleZoneNames.insert(zoneName)
 
       if !changed.isEmpty || !deleted.isEmpty {
         emit(.recordsFetched(
