@@ -1123,6 +1123,63 @@ public class ExpoCloudKitModule: Module {
       }
     }
 
+    /// Creates a zone-level CKShare without requiring a pre-existing root record.
+    ///
+    /// Internally creates a `_zoneShare` sentinel anchor record (recordName = "\(zoneName)_share")
+    /// inside the specified zone. If a CKShare already exists for that anchor, the existing
+    /// share is returned immediately with no UI presented.
+    ///
+    /// When no share exists yet, saves the anchor + share and presents
+    /// `UICloudSharingController` so the user can customise participants.
+    ///
+    /// Resolves with `nil` when the user cancels the sharing sheet (not an error).
+    ///
+    /// Options keys:
+    ///   - zoneName (String, required)
+    ///   - database (String, default "private")
+    ///   - publicPermission ("none"|"readOnly"|"readWrite", default "readWrite")
+    AsyncFunction("createZoneShare") { [weak self] (options: [String: Any], promise: Promise) in
+      #if canImport(UIKit)
+      guard let self = self, let shareManager = self.shareManager, let container = self.container else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+
+      guard let zoneName = options["zoneName"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("zoneName is required"))
+        return
+      }
+
+      guard let viewController = self.appContext?.utilities?.currentViewController() else {
+        promise.reject(CloudKitModuleError.sharingUIUnavailable)
+        return
+      }
+
+      let dbString = options["database"] as? String ?? "private"
+      let scope = Converters.toDatabaseScope(dbString)
+      let database = container.ckContainer.database(with: scope)
+
+      let permissionString = options["publicPermission"] as? String ?? "readWrite"
+      let publicPermission = Converters.toSharePermission(permissionString)
+
+      shareManager.createZoneShare(
+        zoneName: zoneName,
+        database: database,
+        publicPermission: publicPermission,
+        presentingViewController: viewController
+      ) { result in
+        switch result {
+        case .success(let shareDict):
+          promise.resolve(shareDict as Any?)
+        case .failure(let error):
+          promise.reject(Converters.toExpoError(error))
+        }
+      }
+      #else
+      promise.reject(CloudKitModuleError.sharingUINotSupportedOnMacOS)
+      #endif
+    }
+
     /// Deletes the CKShare record identified by shareRecordName, effectively
     /// unsharing the associated root record.
     ///

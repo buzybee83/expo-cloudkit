@@ -1041,6 +1041,17 @@ export async function deleteShare(options: DeleteShareOptions): Promise<void> {
 }
 
 /**
+ * Throws `CloudKitNotSupportedError` — `UICloudSharingController` is not available on web.
+ * Use `createShare()` to create a share record and share the resulting URL through your own UI.
+ */
+export function createZoneShare(
+  _zoneName: string,
+  _database: DatabaseScope = 'private'
+): Promise<Share | null> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+/**
  * Throws `CloudKitNotSupportedError` — `UICloudSharingController` is not
  * available on web. Use `createShare()` to create a share record directly
  * and share the resulting URL through your own UI.

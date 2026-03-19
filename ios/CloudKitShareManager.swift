@@ -522,6 +522,121 @@ final class CloudKitShareManager {
   }
   #endif // canImport(UIKit)
 
+  // MARK: - Create Zone Share
+
+  /// Creates or retrieves a zone-level CKShare without requiring a pre-existing root record.
+  ///
+  /// Internally creates a `_zoneShare` sentinel anchor record (`recordName = "\(zoneName)_share"`)
+  /// in the specified zone. If a CKShare already exists for that anchor, returns the existing
+  /// share immediately without creating a new one or presenting any UI.
+  ///
+  /// When the anchor has no share yet, creates a new CKShare with the given public permission,
+  /// saves both records, then presents `UICloudSharingController` so the user can customise
+  /// participants. Resolves with `nil` if the user cancels the sheet.
+  ///
+  /// - Parameters:
+  ///   - zoneName: The zone to share.
+  ///   - database: The database containing the zone.
+  ///   - publicPermission: Permission granted to public participants. Default `.readWrite`.
+  ///   - presentingViewController: The view controller to present `UICloudSharingController` from.
+  ///   - completion: Called with a share dictionary on success, `nil` on user-cancel, or an error.
+  #if canImport(UIKit)
+  func createZoneShare(
+    zoneName: String,
+    database: CKDatabase,
+    publicPermission: CKShare.ParticipantPermission,
+    presentingViewController: UIViewController,
+    completion: @escaping (Result<[String: Any]?, Error>) -> Void
+  ) {
+    let anchorRecordName = "\(zoneName)_share"
+    let zoneID = CKRecordZone.ID(zoneName: zoneName, ownerName: CKCurrentUserDefaultName)
+    let anchorRecordID = CKRecord.ID(recordName: anchorRecordName, zoneID: zoneID)
+
+    // Attempt to fetch the existing anchor record.
+    database.fetch(withRecordID: anchorRecordID) { [weak self] existingRecord, fetchError in
+      guard let self = self else { return }
+
+      let anchorRecord: CKRecord
+
+      if let existing = existingRecord {
+        // Anchor record exists.
+        anchorRecord = existing
+
+        // If it already has a share, return the existing share immediately.
+        if let shareReference = anchorRecord.share {
+          database.fetch(withRecordID: shareReference.recordID) { shareRecord, shareError in
+            if let shareError = shareError {
+              completion(.failure(shareError))
+              return
+            }
+            guard let existingShare = shareRecord as? CKShare else {
+              completion(.failure(CKError(.unknownItem)))
+              return
+            }
+            completion(.success(Converters.toShareDictionary(existingShare)))
+          }
+          return
+        }
+        // Anchor exists but has no share yet — fall through to create a new share.
+      } else if let ckFetchError = fetchError as? CKError, ckFetchError.code == .unknownItem {
+        // Anchor does not exist yet — create a fresh one.
+        anchorRecord = CKRecord(recordType: "_zoneShare", recordID: anchorRecordID)
+      } else if let error = fetchError {
+        // Genuine fetch error (network, auth, etc.).
+        completion(.failure(error))
+        return
+      } else {
+        // Nil record without an error — should not happen but handle defensively.
+        completion(.failure(CKError(.internalError)))
+        return
+      }
+
+      // Create the share and set public permission.
+      let share = CKShare(rootRecord: anchorRecord)
+      share.publicPermission = publicPermission
+
+      // Save the anchor record and the share together.
+      let operation = CKModifyRecordsOperation(
+        recordsToSave: [anchorRecord, share],
+        recordIDsToDelete: nil
+      )
+      operation.savePolicy = .changedKeys
+      operation.qualityOfService = .userInitiated
+
+      operation.modifyRecordsResultBlock = { result in
+        switch result {
+        case .failure(let error):
+          completion(.failure(error))
+
+        case .success:
+          // Present UICloudSharingController on the main thread after a successful save.
+          DispatchQueue.main.async {
+            let delegate = ZoneShareSharingDelegate(completion: completion)
+            let controller = UICloudSharingController(share: share, container: self.ckContainer)
+            controller.delegate = delegate
+            // Also act as presentation controller delegate so we can detect swipe-dismiss / Cancel.
+            controller.presentationController?.delegate = delegate
+            // Retain the delegate for the lifetime of the presented controller.
+            objc_setAssociatedObject(
+              controller,
+              &ZoneShareAssociatedKeys.delegate,
+              delegate,
+              .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+            )
+            presentingViewController.present(controller, animated: true) {
+              // presentationController is set after present() completes; wire it up here
+              // in case it was nil before the presentation began.
+              controller.presentationController?.delegate = delegate
+            }
+          }
+        }
+      }
+
+      database.add(operation)
+    }
+  }
+  #endif // canImport(UIKit)
+
   // MARK: - Private Helpers
 
   /// Builds a CKRecordZone.ID from an optional zone name.
@@ -633,6 +748,74 @@ private final class CloudKitSharingControllerDelegate: NSObject, UICloudSharingC
     guard !didComplete else { return }
     didComplete = true
     completion(.success(["outcome": "shared", "share": NSNull()]))
+  }
+}
+
+#endif // canImport(UIKit)
+
+#if canImport(UIKit)
+
+// MARK: - Zone Share Associated Object Keys
+
+private enum ZoneShareAssociatedKeys {
+  static var delegate = "ZoneShareSharingDelegate"
+}
+
+// MARK: - UICloudSharingControllerDelegate for createZoneShare
+
+/// Bridges UICloudSharingController delegate callbacks to the `createZoneShare` completion.
+/// Also acts as `UIAdaptivePresentationControllerDelegate` to detect swipe-to-dismiss / Cancel.
+/// Retained via `objc_setAssociatedObject` on the presented controller.
+private final class ZoneShareSharingDelegate: NSObject,
+  UICloudSharingControllerDelegate,
+  UIAdaptivePresentationControllerDelegate
+{
+
+  private let completion: (Result<[String: Any]?, Error>) -> Void
+  private var didComplete = false
+
+  init(completion: @escaping (Result<[String: Any]?, Error>) -> Void) {
+    self.completion = completion
+  }
+
+  // MARK: UICloudSharingControllerDelegate
+
+  func cloudSharingController(
+    _ csc: UICloudSharingController,
+    failedToSaveShareWithError error: Error
+  ) {
+    guard !didComplete else { return }
+    didComplete = true
+    completion(.failure(error))
+  }
+
+  func itemTitle(for csc: UICloudSharingController) -> String? {
+    return nil
+  }
+
+  func cloudSharingControllerDidSaveShare(_ csc: UICloudSharingController) {
+    guard !didComplete else { return }
+    didComplete = true
+    let shareDict = csc.share.map { Converters.toShareDictionary($0) }
+    completion(.success(shareDict))
+  }
+
+  func cloudSharingControllerDidStopSharing(_ csc: UICloudSharingController) {
+    guard !didComplete else { return }
+    didComplete = true
+    // User stopped sharing (removed the share). Resolve with nil — not an error.
+    completion(.success(nil))
+  }
+
+  // MARK: UIAdaptivePresentationControllerDelegate
+
+  /// Called when the sheet is dismissed interactively (swipe down or Cancel button).
+  /// `UICloudSharingController` does not fire a sharing delegate method in this case,
+  /// so we use the presentation controller callback to resolve the promise with nil.
+  func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
+    guard !didComplete else { return }
+    didComplete = true
+    completion(.success(nil))
   }
 }
 
