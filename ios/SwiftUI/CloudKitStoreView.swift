@@ -57,7 +57,7 @@ public struct CloudKitStoreView<Content: View>: View {
           store.error = nil
         }
         .transition(.move(edge: .top).combined(with: .opacity))
-        .animation(.easeInOut(duration: 0.25), value: store.error != nil)
+        .animation(.easeInOut(duration: 0.25), value: store.error?.localizedDescription)
       }
     }
   }
@@ -116,7 +116,7 @@ public struct CloudKitStoreViewLegacy<Content: View>: View {
           store.error = nil
         }
         .transition(.move(edge: .top).combined(with: .opacity))
-        .animation(.easeInOut(duration: 0.25), value: store.error != nil)
+        .animation(.easeInOut(duration: 0.25), value: store.error?.localizedDescription)
       }
     }
   }

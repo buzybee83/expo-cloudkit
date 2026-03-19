@@ -217,6 +217,7 @@ public struct SyncEngineConfig {
 ///   is used. If the module is not configured, operations will set `error` to a
 ///   `CloudKitError` with code `"NOT_CONFIGURED"`.
 @available(iOS 17.0, macOS 14.0, *)
+@MainActor
 @Observable
 public final class CloudKitStore {
 
@@ -414,8 +415,8 @@ public final class CloudKitStore {
       zones: [zoneID],
       database: scope,
       automaticallySync: config.automaticallySync
-    ) { [weak self] event in
-      guard let self else { return }
+    ) { [weak self, weak provider] event in
+      guard let self, let provider else { return }
       switch event {
       case .stateChanged(let state):
         let usesSyncEngine = provider.usesSyncEngine
@@ -660,8 +661,8 @@ public final class CloudKitStoreLegacy: ObservableObject {
       zones: [zoneID],
       database: scope,
       automaticallySync: config.automaticallySync
-    ) { [weak self] event in
-      guard let self else { return }
+    ) { [weak self, weak provider] event in
+      guard let self, let provider else { return }
       switch event {
       case .stateChanged(let state):
         let usesSyncEngine = provider.usesSyncEngine
