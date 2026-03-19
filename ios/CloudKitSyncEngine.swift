@@ -67,6 +67,16 @@ actor CloudKitSyncEngineAdapter: CloudKitSyncProvider {
   /// Records that failed to send in the current send cycle.
   private var cycleFailedCount: Int = 0
 
+  // MARK: - syncCompleted Accumulators
+
+  /// Zone names seen across all recordsFetched events in the current fetch cycle.
+  private var cycleZoneNames: Set<String> = []
+  /// True when the sync engine was started with no persisted state (first ever sync
+  /// or after token loss). Captured once at start() time and used for every fetch
+  /// cycle until stop() resets it, which is correct — each subsequent cycle after
+  /// the first one has a valid token.
+  private var initialSyncFlag: Bool = false
+
   // MARK: - Init
 
   init(ckContainer: CKContainer, tokenStore: ChangeTokenStore) {
@@ -86,6 +96,10 @@ actor CloudKitSyncEngineAdapter: CloudKitSyncProvider {
 
     let db = ckContainer.database(with: database)
     let lastKnownState = tokenStore.loadSyncEngineState()
+
+    // Capture before-start token presence so the first fetch cycle can report
+    // `isInitialSync: true` when no prior state existed (first launch or token loss).
+    initialSyncFlag = (lastKnownState == nil)
 
     var config = CKSyncEngine.Configuration(
       database: db,
@@ -116,6 +130,8 @@ actor CloudKitSyncEngineAdapter: CloudKitSyncProvider {
     state = .notStarted
     pendingSaves.removeAll()
     pendingDeletes.removeAll()
+    cycleZoneNames.removeAll()
+    initialSyncFlag = false
 
     // Drain any pending conflict continuations. Resuming with nil means the
     // adapter falls back to server-record-wins — safe default on shutdown.
@@ -202,6 +218,7 @@ actor CloudKitSyncEngineAdapter: CloudKitSyncProvider {
       zoneName = CKRecordZone.default().zoneID.zoneName
     }
     cycleReceivedCount += changed.count + deleted.count
+    cycleZoneNames.insert(zoneName)
     emit(.recordsFetched(changed: changed, deleted: deleted, zoneName: zoneName))
   }
 
@@ -279,11 +296,12 @@ actor CloudKitSyncEngineAdapter: CloudKitSyncProvider {
   private func handleWillFetchChanges() {
     cycleStartTime = Date()
     cycleReceivedCount = 0
+    cycleZoneNames.removeAll()
     state = .syncing
     emit(.stateChanged(.syncing))
   }
 
-  /// Closes a fetch cycle and emits health metrics.
+  /// Closes a fetch cycle and emits health metrics + syncCompleted.
   private func handleDidFetchChanges() {
     let fetchDurationMs: Double
     if let start = cycleStartTime {
@@ -298,8 +316,24 @@ actor CloudKitSyncEngineAdapter: CloudKitSyncProvider {
       durationMs: fetchDurationMs,
       syncEngine: true
     ))
+
+    // Emit the "sync is done" signal with cycle-level aggregates.
+    // Snapshot mutable state before clearing it below.
+    let completedRecordCount = cycleReceivedCount
+    let completedZoneNames = Array(cycleZoneNames)
+    let wasInitialSync = initialSyncFlag
+    // After the first full fetch cycle, subsequent cycles are incremental.
+    initialSyncFlag = false
+
+    emit(.syncCompleted(
+      recordCount: completedRecordCount,
+      zoneNames: completedZoneNames,
+      isInitialSync: wasInitialSync
+    ))
+
     cycleStartTime = nil
     cycleReceivedCount = 0
+    cycleZoneNames.removeAll()
     state = .idle
     emit(.stateChanged(.idle))
   }

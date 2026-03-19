@@ -1981,6 +1981,14 @@ extension ExpoCloudKitModule {
         self?.sendEvent("onSyncHealth", healthPayload)
       }
       return
+
+    case .syncCompleted(let recordCount, let zoneNames, let isInitialSync):
+      payload = [
+        "type": "syncCompleted",
+        "recordCount": recordCount,
+        "zoneNames": zoneNames,
+        "isInitialSync": isInitialSync
+      ]
     }
 
     // Expo requires sendEvent on the main thread.
