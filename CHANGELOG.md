@@ -11,6 +11,28 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.14.0] — 2026-03-19
+
+### Added
+
+- **Parallel database scopes in `startSyncEngine`** — `SyncEngineConfig` now accepts `databases?: DatabaseScope | DatabaseScope[]`. Pass `['private', 'shared']` to run one sync engine per scope simultaneously. Independent `CKSyncEngine` (iOS 17+) or fallback adapter (iOS 16) instances per scope with separate change token stores.
+- **`databaseScope` on all sync events** — Every `SyncEngineEvent` now includes `databaseScope: DatabaseScope` so listeners can distinguish which engine produced the event.
+- **`SyncStateMap` type** — `getSyncState()` returns `Partial<Record<DatabaseScope, SyncState>>` (e.g. `{ private: { status: 'idle' }, shared: { status: 'syncing' } }`).
+- **Scoped `stopSyncEngine(database?)`** — optional scope stops just that engine; no argument stops all.
+- **Scoped `triggerSync(database?)`** — optional scope targets one engine; no argument fans out.
+- **`database?` on `PendingRecordChange`** — route enqueued changes to the correct engine.
+- **Conflict routing via `conflictScopeMap`** — O(1) lookup maps `requestId` to scope for correct `resolveSyncConflict` routing.
+
+### Fixed
+
+- **`ChangeTokenStore` scope-qualified CKSyncEngine state key** — latent bug where two engines overwrote each other's serialization in `UserDefaults`. Key is now `expo.cloudkit.<id>.syncEngineState.<scope>`. Existing single-scope users will do a one-time full re-sync on first launch after upgrade.
+
+### Deprecated
+
+- **`SyncEngineConfig.database`** — use `databases` instead. Still works; normalized to `databases: [value]` internally.
+
+---
+
 ## [0.13.0] — 2026-03-19
 
 ### Added
