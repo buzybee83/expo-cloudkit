@@ -772,6 +772,37 @@ export function createShare(options: CreateShareOptions): Promise<Share> {
 }
 
 /**
+ * Creates a zone-level CKShare without requiring a pre-existing anchor record.
+ * Internally creates a `_zoneShare` anchor record and presents UICloudSharingController.
+ *
+ * This is a convenience wrapper over `createShare()` for the common case of sharing
+ * an entire zone with other iCloud users.
+ *
+ * If a share already exists for the zone's anchor record, returns the existing share
+ * immediately without presenting any UI.
+ *
+ * @param zoneName  - The zone to share.
+ * @param database  - Which database. Default: 'private'.
+ * @returns The share details, or null if the user cancelled the sharing UI.
+ * @throws {CloudKitError} code NOT_AUTHENTICATED if the user is not signed in.
+ * @throws {CloudKitError} code NETWORK_UNAVAILABLE if the device is offline.
+ *
+ * @example
+ * ```typescript
+ * const share = await createZoneShare('MyZone');
+ * if (share) {
+ *   console.log(share.shareURL); // https://www.icloud.com/share/...
+ * }
+ * ```
+ */
+export function createZoneShare(
+  zoneName: string,
+  database: DatabaseScope = 'private'
+): Promise<Share | null> {
+  return callAsync(() => NativeModule!.createZoneShare({ zoneName, database }));
+}
+
+/**
  * Deletes an existing CKShare record, revoking access for all participants.
  *
  * The root record is not deleted — only the share relationship is removed.

@@ -182,6 +182,7 @@ export {
 // Phase B — CKShare
 export {
   createShare,
+  createZoneShare,
   deleteShare,
   presentSharingUI,
   fetchShareParticipants,
