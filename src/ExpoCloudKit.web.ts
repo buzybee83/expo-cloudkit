@@ -1092,6 +1092,7 @@ export async function fetchShareParticipants(
       acceptanceStatus: p?.acceptanceStatus ?? 'unknown',
       firstName: p?.userIdentity?.nameComponents?.givenName ?? null,
       lastName: p?.userIdentity?.nameComponents?.familyName ?? null,
+      isCurrentUser: p?.isCurrentUser ?? false,
     }));
   } catch (err) {
     throw mapCKJSError(err, 'share');

@@ -393,6 +393,8 @@ export interface ShareParticipant {
   firstName: string | null;
   /** User's iCloud last name, if available. */
   lastName: string | null;
+  /** True if this participant is the currently signed-in iCloud user. */
+  isCurrentUser: boolean;
 }
 
 /** A zone accessible via the shared database. */
