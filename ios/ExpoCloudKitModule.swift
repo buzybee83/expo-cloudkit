@@ -27,12 +27,18 @@ public class ExpoCloudKitModule: Module {
   private var zoneManager: CloudKitZoneManager?
   private var recordManager: CloudKitRecordManager?
 
-  // MARK: - Shared record manager (Phase J.1 — CloudKitStore)
+  // MARK: - Shared references (Phase J.1 — CloudKitStore)
 
   /// Weak reference to the configured `CloudKitRecordManager`, accessible to
   /// `CloudKitStore` without creating a hard dependency on the Expo module lifecycle.
   /// Set to `nil` automatically when the module is deallocated.
   static weak var sharedRecordManager: CloudKitRecordManager?
+
+  /// Weak reference to the active `CloudKitSyncProvider`, accessible to
+  /// `CloudKitStore.startSync` without importing ExpoModulesCore.
+  /// Nil until `startSyncEngine()` is called, and nil again after `stopSyncEngine()`.
+  /// The protocol already inherits from `AnyObject` so weak storage is legal.
+  static weak var sharedSyncProvider: CloudKitSyncProvider?
 
   // MARK: - Subscription manager (Phase B)
 
@@ -766,6 +772,8 @@ public class ExpoCloudKitModule: Module {
       let resolveConflicts = config["resolveConflicts"] as? Bool == true
       let existingProvider = self.syncProvider
       self.syncProvider = provider
+      // Expose the active provider to CloudKitStore (Phase J.1).
+      ExpoCloudKitModule.sharedSyncProvider = provider
 
       // G.6 — enable custom JS conflict resolution if the caller opted in.
       // conflictResolutionEnabled is nonisolated(unsafe) on both actor implementations,
@@ -868,6 +876,8 @@ public class ExpoCloudKitModule: Module {
         return
       }
       self.syncProvider = nil
+      // Clear the Phase J.1 shared reference so CloudKitStore sees nil immediately.
+      ExpoCloudKitModule.sharedSyncProvider = nil
       Task {
         await provider.stop()
         promise.resolve(nil)
