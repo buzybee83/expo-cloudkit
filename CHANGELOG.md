@@ -11,6 +11,34 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.11.0] — 2026-03-19
+
+### Added
+
+**Expo Go graceful fallback**
+
+- `CloudKitUnavailableError` — thrown by all API calls when the native module fails to load (Expo Go, missing dev client). Extends `CloudKitError` with `code: MODULE_UNAVAILABLE` and an actionable message pointing to `npx expo run:ios`.
+- `MODULE_UNAVAILABLE` added to `CloudKitErrorCode`.
+- `isNativeModuleAvailable(): boolean` — returns `true` only when the native module loaded successfully. Use this to gate CloudKit UI without try/catch. Returns `false` on Expo Go, Android, and web.
+- `assertNativeAvailable()` now throws `CloudKitUnavailableError` (instead of `UNKNOWN`) on iOS when the module is absent.
+
+**Swift Package Manager support (experimental)**
+
+- `Package.swift` added at repo root. Pure Swift (non-Expo) projects can consume `CloudKitRecordManager`, `CloudKitZoneManager`, `CloudKitShareManager`, `CloudKitSyncEngine`, and other managers via SPM today.
+- `#if canImport(ExpoModulesCore)` guards added to `ExpoCloudKitModule.swift`, `Converters.swift`, and `CloudKitClient.swift` so the package compiles without Expo when ExpoModulesCore is absent.
+- `Package.swift` included in the npm tarball via `files` in `package.json`.
+- Full SPM support (including the Expo module entry point) is pending ExpoModulesCore adding SPM distribution.
+- Expo projects: no changes needed — CocoaPods auto-linking is unchanged.
+
+**Background sync via `BGTaskScheduler`**
+
+- `registerBackgroundSync(taskIdentifier: string): Promise<void>` — registers a `BGAppRefreshTask` handler that calls `triggerSync()` when the system fires the task. Call once at app launch; safe to call before `startSyncEngine()` (the provider is resolved lazily at task-fire time).
+- `scheduleBackgroundSync(): Promise<void>` — asks the system to schedule the next refresh as soon as conditions allow (minimum 15 min).
+- Config plugin: new optional `backgroundSyncTaskIdentifier` prop. When set, injects the identifier into `BGTaskSchedulerPermittedIdentifiers` and adds `fetch` and `processing` to `UIBackgroundModes` in `Info.plist`.
+- Web stubs reject with `CloudKitNotSupportedError` — background tasks are iOS-only.
+
+---
+
 ## [0.10.0] — 2026-03-15
 
 ### Changed
