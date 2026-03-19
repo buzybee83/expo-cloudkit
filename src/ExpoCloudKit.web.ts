@@ -1158,6 +1158,18 @@ export async function fetchSharedDatabaseZones(): Promise<SharedZone[]> {
 }
 
 /**
+ * Throws `CloudKitNotSupportedError` — CKShare URL retrieval requires the
+ * native CloudKit SDK and is not available on web.
+ */
+export function getShareURL(
+  _recordName: string,
+  _zoneName: string,
+  _database: DatabaseScope = 'private'
+): Promise<string> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+/**
  * Returns a no-op Subscription — universal link / intent handling is not
  * available on web.
  */

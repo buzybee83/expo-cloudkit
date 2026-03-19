@@ -922,6 +922,31 @@ export function fetchSharedDatabaseZones(): Promise<SharedZone[]> {
 }
 
 /**
+ * Returns the URL of an existing CKShare for the given record without
+ * re-presenting UICloudSharingController. Useful for "Copy invite link" flows.
+ *
+ * @param recordName - The CKRecord.ID.recordName of the shared record.
+ * @param zoneName   - The zone the record lives in.
+ * @param database   - Which database. Default: 'private'.
+ * @returns The share URL string, e.g. "https://www.icloud.com/iclouddrive/..."
+ * @throws {CloudKitError} RECORD_NOT_FOUND if the record doesn't exist.
+ * @throws {CloudKitError} SHARE_NOT_FOUND if no share is attached to the record.
+ *
+ * @example
+ * ```typescript
+ * const url = await getShareURL('my-record-name', 'MyZone');
+ * Clipboard.setStringAsync(url);
+ * ```
+ */
+export function getShareURL(
+  recordName: string,
+  zoneName: string,
+  database: DatabaseScope = 'private'
+): Promise<string> {
+  return callAsync(() => NativeModule!.getShareURL({ recordName, zoneName, database }));
+}
+
+/**
  * Registers a listener for `onShareAccepted` events.
  *
  * Fires when the system routes a CloudKit share URL to the app (e.g. via
