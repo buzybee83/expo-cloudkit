@@ -74,6 +74,7 @@ export type {
   RecordsFetchedEvent,
   RecordsSentEvent,
   SyncErrorEvent,
+  SyncCompletedEvent,
   Zone,
   ZoneChanges,
   // Phase B — Push Subscriptions
@@ -189,6 +190,7 @@ export {
   acceptShare,
   fetchSharedDatabaseZones,
   addShareAcceptedListener,
+  getShareURL,
 } from './ExpoCloudKit';
 
 // Phase C — React Hooks

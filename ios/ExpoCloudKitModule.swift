@@ -1341,6 +1341,92 @@ public class ExpoCloudKitModule: Module {
       }
     }
 
+    /// Returns the URL of an existing CKShare for the specified root record.
+    ///
+    /// Fetches the root record by ID, inspects `record.share` for an associated
+    /// CKShare reference, then fetches that share to retrieve its `url`.
+    ///
+    /// - Does NOT present UICloudSharingController.
+    /// - Useful for "Copy invite link" flows where the share already exists.
+    ///
+    /// Options keys:
+    ///   - recordName (String, required) — CKRecord.ID.recordName of the root record
+    ///   - zoneName   (String, optional) — defaults to the default zone
+    ///   - database   (String, default "private")
+    ///
+    /// Resolves with: String — the share URL (e.g. "https://www.icloud.com/…")
+    ///
+    /// Rejects with:
+    ///   - RECORD_NOT_FOUND  — the root record does not exist
+    ///   - SHARE_NOT_FOUND   — no share attached, or the share has no URL yet
+    AsyncFunction("getShareURL") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self, let container = self.container else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+
+      guard let recordName = options["recordName"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("recordName is required"))
+        return
+      }
+
+      let zoneName = options["zoneName"] as? String
+      let dbString = options["database"] as? String ?? "private"
+      let scope = Converters.toDatabaseScope(dbString)
+      let database = container.ckContainer.database(with: scope)
+
+      let zoneID: CKRecordZone.ID
+      if let name = zoneName {
+        zoneID = CKRecordZone.ID(zoneName: name, ownerName: CKCurrentUserDefaultName)
+      } else {
+        zoneID = CKRecordZone.ID.default
+      }
+      let recordID = CKRecord.ID(recordName: recordName, zoneID: zoneID)
+
+      // Step 1: Fetch the root record to obtain its share reference.
+      database.fetch(withRecordID: recordID) { rootRecord, fetchError in
+        if let fetchError = fetchError {
+          promise.reject(Converters.toExpoError(fetchError))
+          return
+        }
+
+        guard let rootRecord = rootRecord else {
+          promise.reject(Converters.toExpoError(CKError(.unknownItem)))
+          return
+        }
+
+        // Step 2: Check whether the record has an associated CKShare.
+        guard let shareReference = rootRecord.share else {
+          promise.reject(CloudKitModuleError.shareNotFound(
+            "The record '\(recordName)' has no associated share."
+          ))
+          return
+        }
+
+        // Step 3: Fetch the CKShare record to get its URL.
+        database.fetch(withRecordID: shareReference.recordID) { shareRecord, shareError in
+          if let shareError = shareError {
+            promise.reject(Converters.toExpoError(shareError))
+            return
+          }
+
+          guard let share = shareRecord as? CKShare else {
+            promise.reject(CloudKitModuleError.shareNotFound())
+            return
+          }
+
+          guard let shareURL = share.url?.absoluteString else {
+            promise.reject(CloudKitModuleError.shareNotFound(
+              "Share exists but has no URL yet — ensure the share has been saved to CloudKit."
+            ))
+            return
+          }
+
+          promise.resolve(shareURL)
+        }
+      }
+    }
+
     /// Presents the system UICloudSharingController for the given root record.
     ///
     /// If the record already has a share, presents in manage-participants mode.
@@ -1957,6 +2043,16 @@ class ShareNotFoundException: Exception {
   override var reason: String { "Share record not found." }
 }
 
+class ShareURLNotFoundException: Exception {
+  private let detail: String
+  init(_ detail: String = "") { self.detail = detail; super.init() }
+  override var reason: String {
+    detail.isEmpty
+      ? "No share is attached to this record, or the share has no URL yet — ensure the share has been saved to CloudKit."
+      : detail
+  }
+}
+
 class ParticipantNotFoundException: Exception {
   private let participantRecordName: String
   init(_ participantRecordName: String) { self.participantRecordName = participantRecordName; super.init() }
@@ -2006,6 +2102,7 @@ enum CloudKitModuleError {
   static func subscriptionNotFound(_ id: String) -> Exception { CloudKitSubscriptionNotFoundException(id) }
   static func invalidArgument(_ msg: String) -> Exception    { CloudKitInvalidArgumentException(msg) }
   static func participantNotFound(_ name: String) -> Exception { ParticipantNotFoundException(name) }
+  static func shareNotFound(_ detail: String = "") -> Exception { ShareURLNotFoundException(detail) }
 }
 
 #endif // canImport(ExpoModulesCore)
