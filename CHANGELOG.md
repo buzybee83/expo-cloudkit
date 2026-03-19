@@ -15,6 +15,26 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+**Phase J.1 — SwiftUI `@Observable` CloudKitStore**
+
+- `ios/SwiftUI/CloudKitStore.swift` — `@MainActor @Observable CloudKitStore` (iOS 17+) and `CloudKitStoreLegacy: ObservableObject` (iOS 16+) with `fetch`, `save`, `delete`, and `startSync` methods. All errors land in `store.error`; never thrown to the view layer.
+- `ios/SwiftUI/CloudKitStoreView.swift` — generic `CloudKitStoreView` and `CloudKitStoreViewLegacy` with loading overlay and dismissible error banner.
+- Both variants use `#if canImport(ExpoModulesCore)` guards for SPM compatibility.
+
+**Phase J.2 — Zod schema validation helpers** _(previously released in v0.11.0)_
+
+- `createCloudKitSchema(schema)` — wraps any Zod-compatible schema to parse `CloudKitRecord` field maps into fully typed objects. Extracts `.value` from each field, coerces Unix ms timestamps to `Date`, and passes assets through as-is.
+- `CloudKitValidationError` — `CloudKitError` subclass with `zodErrors: unknown[]` field for programmatic error handling.
+- `CloudKitErrorCode.VALIDATION_ERROR` added to the error code enum.
+- `zod >= 3.0.0` added as an optional peer dependency.
+
+**Phase J.3 — Android / web fallback routing**
+
+- `src/ExpoCloudKit.android.ts` — routes Android to the web (`tsl-apple-cloudkit`) implementation for all supported CloudKit JS functions. Native-only ops (CKSyncEngine, CKShare, push subscriptions) throw `CloudKitNotSupportedError` with a clear message.
+- `src/android/auth.ts` — `authenticateAndroid()` opens Apple ID sign-in via `Linking.openURL()` (Custom Tab); `handleAuthRedirect()` parses the OAuth callback URL.
+- `CloudKitProvider` auto-calls `configureWeb()` on Android when `webConfig` is provided (same as web).
+- Platform support table added to `src/types.ts` module JSDoc: iOS / Web / Android availability for all 55+ exported functions.
+
 **Phase J.4 — Documentation overhaul**
 
 - Complete README restructure with 16 top-level sections in a fixed reading order: Quick Start, Installation, Configuration, What is CloudKit?, Core Concepts, API Reference (14 subsections), Platform Support Matrix, Error Handling, Migration Guide.
