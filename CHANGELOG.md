@@ -11,6 +11,23 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.12.0] — 2026-03-19
+
+### Added
+
+**Phase J.4 — Documentation overhaul**
+
+- Complete README restructure with 16 top-level sections in a fixed reading order: Quick Start, Installation, Configuration, What is CloudKit?, Core Concepts, API Reference (14 subsections), Platform Support Matrix, Error Handling, Migration Guide.
+- Per-function parameter tables across all 55+ exported functions — each entry includes parameter name, type, default, and description.
+- Full Platform Support Matrix with iOS 16 / iOS 17+ / Web / Android columns for every exported function, plus 7 explanatory footnotes for partial-support cases.
+- "What is CloudKit?" primer: CKContainer, CKDatabase, CKRecordZone, CKRecord, and CKSyncEngine explained with Firestore/Supabase comparisons for React Native developers.
+- Config plugin options table extended with `backgroundSyncTaskIdentifier` (added in 0.11.0).
+- Migration Guide table updated through v0.11.0 with all additions since v0.2.0.
+- Error Handling section promoted to a top-level section with `CloudKitUnavailableError` and `isNativeModuleAvailable()` usage patterns.
+- Long inline code blocks (>20 lines) replaced with "See full example" links to `example/snippets/`: `quick-start.ts`, `sync-engine.ts`, `schema-validation.ts`.
+
+---
+
 ## [0.11.0] — 2026-03-19
 
 ### Added
