@@ -1,8 +1,52 @@
 /**
  * expo-cloudkit — TypeScript type definitions
  *
- * Covers all Phase A–E API surface. Phase B–E types are included here
+ * Covers all Phase A–I API surface. Phase B–I types are included here
  * so consumers can import them even before the native implementations ship.
+ *
+ * ## Platform Support
+ *
+ * expo-cloudkit targets three platforms. The table below summarises which
+ * function groups are available on each:
+ *
+ * | Function group                              | iOS (native) | Web | Android |
+ * |---------------------------------------------|:------------:|:---:|:-------:|
+ * | `configure` / `getAccountStatus`            | ✓            | ✓   | ✓       |
+ * | `fetchUserRecordID`                         | ✓            | ✓   | ✓       |
+ * | `createZone` / `deleteZone` / `fetchZones`  | ✓            | ✓   | ✓       |
+ * | `saveRecords` / `fetchRecord` / `queryRecords` / `deleteRecords` | ✓ | ✓ | ✓ |
+ * | `fetchRecordZoneChanges`                    | ✓            | ✓   | ✓       |
+ * | `configureWeb` / `authenticateWeb`          | no-op        | ✓   | ✓       |
+ * | `saveQuerySubscription` / `saveDatabaseSubscription` | ✓   | ✓   | ✓       |
+ * | `createShare` / `acceptShare` / `fetchShareParticipants` | ✓ | ✓ | ✓    |
+ * | `fetchSharedDatabaseZones`                  | ✓            | ✓   | ✓       |
+ * | `fetchRecordWithReferences`                 | ✓            | ✓   | ✓       |
+ * | `deleteRecordWithReferences`                | ✓            | stub| stub    |
+ * | `presentSharingUI`                          | ✓            | stub| stub    |
+ * | `enqueueOfflineOperation` / `drainOfflineQueue` | ✓        | ✓   | ✓       |
+ * | `batchFetchRecords`                         | ✓            | ✓   | ✓       |
+ * | `downloadAsset`                             | ✓            | stub| stub    |
+ * | `startSyncEngine` / `stopSyncEngine`        | ✓ (iOS 17+)  | stub| stub    |
+ * | `triggerSync` / `enqueuePendingChange`      | ✓ (iOS 17+)  | stub| stub    |
+ * | `resolveSyncConflict`                       | ✓            | —   | throws  |
+ * | `addSyncHealthListener`                     | ✓            | —   | no-op   |
+ * | `registerBackgroundSync`                    | ✓            | stub| stub    |
+ * | `__debug*` helpers                          | ✓            | stub| stub    |
+ * | `authenticateAndroid`                       | —            | —   | ✓       |
+ * | `handleAuthRedirect`                        | —            | —   | ✓       |
+ *
+ * **Legend:**
+ * - ✓ — full implementation
+ * - stub — throws `CloudKitNotSupportedError` at runtime
+ * - no-op — returns immediately / returns a no-op Subscription
+ * - — — not exported on this platform
+ *
+ * **Android routing:** On Android, Metro resolves `ExpoCloudKit.android.ts`
+ * instead of `ExpoCloudKit.native.ts`. The Android module re-exports
+ * everything from `ExpoCloudKit.web.ts` and adds stubs for the two
+ * iOS-only operations (`resolveSyncConflict`, `addSyncHealthListener`).
+ * CloudKit JS communicates with Apple servers directly via HTTPS — no iOS
+ * system APIs are required for the supported operation set.
  */
 
 // ---------------------------------------------------------------------------
