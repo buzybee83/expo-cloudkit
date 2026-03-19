@@ -71,6 +71,7 @@ export type {
   SyncProviderStatus,
   SyncState,
   SyncStateChangedEvent,
+  SyncStateMap,
   RecordsFetchedEvent,
   RecordsSentEvent,
   SyncErrorEvent,

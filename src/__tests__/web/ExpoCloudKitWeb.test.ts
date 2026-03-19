@@ -181,8 +181,8 @@ describe('isSyncEngineAvailable', () => {
 // ---------------------------------------------------------------------------
 
 describe('getSyncState', () => {
-  it('returns { usesSyncEngine: false, status: "notStarted" }', () => {
-    expect(getSyncState()).toEqual({ usesSyncEngine: false, status: 'notStarted' });
+  it('returns an empty object on web (no engines running)', () => {
+    expect(getSyncState()).toEqual({});
   });
 });
 

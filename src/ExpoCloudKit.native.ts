@@ -46,7 +46,7 @@ import type {
   SubscriptionEvent,
   SyncEngineConfig,
   SyncEngineEvent,
-  SyncState,
+  SyncStateMap,
   UpdatePermissionOptions,
   WebConfigOptions,
   Zone,
@@ -392,35 +392,51 @@ export function isSyncEngineAvailable(): boolean {
  * @throws {CloudKitError} code NOT_AUTHENTICATED if the user is not signed in.
  */
 export function startSyncEngine(config: SyncEngineConfig): Promise<void> {
-  return callAsync(() => NativeModule!.startSyncEngine(config));
+  // Normalize `database`/`databases` into a single `databases` array before
+  // passing to native. `databases` takes precedence over the deprecated
+  // `database` field when both are present.
+  const databases: DatabaseScope[] = config.databases
+    ? Array.isArray(config.databases)
+      ? config.databases
+      : [config.databases]
+    : config.database
+      ? [config.database]
+      : ['private'];
+  const normalized: SyncEngineConfig & { databases: DatabaseScope[] } = {
+    ...config,
+    databases,
+  };
+  return callAsync(() => NativeModule!.startSyncEngine(normalized));
 }
 
 /**
- * Returns the current state of the sync provider.
+ * Returns the current state of all running sync engines, keyed by database scope.
  *
  * This is a synchronous call that reads in-memory state — it never touches
  * the network. Subscribe to `addSyncEngineListener` for real-time updates
  * via `stateChanged` events.
  *
- * Returns `{ usesSyncEngine: false, status: 'notStarted' }` when
- * `startSyncEngine()` has not been called.
+ * Returns an empty object `{}` when `startSyncEngine()` has not been called.
+ * When a single scope is running, one key is present. When two scopes are
+ * running, both keys are present with independent states.
  *
  * @example
  * ```typescript
- * const { status } = getSyncState();
- * if (status === 'syncing') {
+ * const states = getSyncState();
+ * const privateStatus = states.private?.status;
+ * if (privateStatus === 'syncing') {
  *   // Show a loading indicator
  * }
  * ```
  */
-export function getSyncState(): SyncState {
+export function getSyncState(): SyncStateMap {
   if (!NativeModule) {
-    return { usesSyncEngine: false, status: 'notStarted' };
+    return {};
   }
   try {
-    return NativeModule.getSyncState() as SyncState;
+    return NativeModule.getSyncState() as SyncStateMap;
   } catch {
-    return { usesSyncEngine: false, status: 'notStarted' };
+    return {};
   }
 }
 
@@ -430,10 +446,15 @@ export function getSyncState(): SyncState {
  * On iOS 17+, asks CKSyncEngine to fetch and send changes immediately.
  * On iOS 16, runs one fetch + push cycle synchronously outside the timer.
  *
+ * @param database - Optional scope to target. When omitted, triggers sync on
+ *   all running engines (fan-out). Pass `'private'` or `'shared'` to trigger
+ *   only that scope's engine.
  * @throws {CloudKitError} code SYNC_ENGINE_NOT_RUNNING if the engine is not started.
  */
-export function triggerSync(): Promise<void> {
-  return callAsync(() => NativeModule!.triggerSync());
+export function triggerSync(database?: DatabaseScope): Promise<void> {
+  return callAsync(() =>
+    NativeModule!.triggerSync(database ? { database } : {})
+  );
 }
 
 /**
@@ -491,13 +512,19 @@ export function addSyncEngineListener(
 /**
  * Stops the sync engine and releases its resources.
  *
- * After this call, `getSyncState()` returns `{ status: 'notStarted' }`.
+ * After this call, `getSyncState()` returns `{}` (empty) if all engines
+ * are stopped, or omits the stopped scope's key if a specific scope was stopped.
  * Call `startSyncEngine()` again to resume syncing.
  *
- * @throws {CloudKitError} code SYNC_ENGINE_NOT_RUNNING if the engine is not started.
+ * @param database - Optional scope to stop. When omitted, stops all running
+ *   engines. Pass `'private'` or `'shared'` to stop only that scope's engine.
+ * @throws {CloudKitError} code SYNC_ENGINE_NOT_RUNNING if the engine (or the
+ *   specified scope's engine) is not started.
  */
-export function stopSyncEngine(): Promise<void> {
-  return callAsync(() => NativeModule!.stopSyncEngine());
+export function stopSyncEngine(database?: DatabaseScope): Promise<void> {
+  return callAsync(() =>
+    NativeModule!.stopSyncEngine(database ? { database } : {})
+  );
 }
 
 /**
