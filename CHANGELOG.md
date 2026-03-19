@@ -11,6 +11,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.15.0] — 2026-03-19
+
+### Added
+
+- **`isCurrentUser` on `ShareParticipant`** — `CKShare.Participant.isCurrentUser` is now serialized and exposed on every participant object returned by `fetchShareParticipants`, `createShare`, `createZoneShare`, `fetchSharedDatabaseZones`, and sharing UI delegate callbacks. Use this to identify the owner/current user in participant lists without a separate `fetchUserRecordID` call.
+
+### Fixed
+
+- **`stopSyncEngine`** — Task bodies now wrapped in `do/catch`; errors from provider teardown are surfaced as Promise rejections instead of silently hanging. All-scopes stop now runs providers concurrently via `withThrowingTaskGroup` (previously sequential).
+
+---
+
 ## [0.14.0] — 2026-03-19
 
 ### Added
