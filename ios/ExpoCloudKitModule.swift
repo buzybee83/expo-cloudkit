@@ -895,14 +895,12 @@ public class ExpoCloudKitModule: Module {
     /// in practice — iOS 13 is below the module's minimum deployment target).
     AsyncFunction("registerBackgroundSync") { [weak self] (taskIdentifier: String, promise: Promise) in
       if #available(iOS 13.0, *) {
-        // `self?.syncProvider` may be nil here if called before `startSyncEngine()`.
-        // CloudKitBackgroundSync holds a weak reference so this is safe: when the
-        // provider is eventually started the reference will be populated via
-        // `registerBackgroundSync` → `register(syncProvider:)` — or the background
-        // task handler will simply skip the sync if no provider exists yet.
+        // Pass a resolver closure so the background task reads the module's
+        // *current* syncProvider when it fires, not a snapshot from registration time.
+        // This handles the common pattern: register at app launch, start engine after sign-in.
         CloudKitBackgroundSync.shared.register(
           taskIdentifier: taskIdentifier,
-          syncProvider: self?.syncProvider
+          providerResolver: { [weak self] in self?.syncProvider }
         )
         // Schedule the first refresh now so the system knows a refresh is wanted.
         CloudKitBackgroundSync.shared.scheduleNextRefresh()

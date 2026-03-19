@@ -12,7 +12,7 @@ import Foundation
 /// system may defer the task significantly beyond that.
 ///
 /// # Integration
-/// Call `register(taskIdentifier:syncProvider:)` once at app launch (before the app
+/// Call `register(taskIdentifier:providerResolver:)` once at app launch (before the app
 /// moves to the background). Call `scheduleNextRefresh()` after each completed task
 /// to re-arm the scheduler — the handler does this automatically before executing work.
 ///
@@ -30,9 +30,12 @@ public final class CloudKitBackgroundSync: @unchecked Sendable {
 
   private var registeredTaskIdentifier: String?
 
-  /// Weak reference to the active sync provider. Using `weak` avoids a retain cycle
-  /// since the module holds both `syncProvider` and `CloudKitBackgroundSync.shared`.
-  private weak var syncProvider: (any CloudKitSyncProvider)?
+  /// Closure that resolves the active sync provider at task-fire time.
+  ///
+  /// Using a resolver closure instead of a direct weak reference means the background
+  /// task always reads the module's *current* `syncProvider` when it fires, regardless
+  /// of the order in which `registerBackgroundSync()` and `startSyncEngine()` were called.
+  private var providerResolver: (() -> (any CloudKitSyncProvider)?)?
 
   // MARK: - Init (private — use `shared`)
 
@@ -56,11 +59,11 @@ public final class CloudKitBackgroundSync: @unchecked Sendable {
   ///   - taskIdentifier: The BGTask identifier. Must match the value declared in
   ///     `BGTaskSchedulerPermittedIdentifiers` in `Info.plist` — otherwise the
   ///     system will silently refuse to launch the task.
-  ///   - syncProvider: The active `CloudKitSyncProvider` that will receive
-  ///     `triggerSync()` calls. Pass `nil` to unregister the provider.
-  func register(taskIdentifier: String, syncProvider: (any CloudKitSyncProvider)?) {
+  ///   - providerResolver: A closure invoked at task-fire time to obtain the
+  ///     current active `CloudKitSyncProvider`. Use `[weak self]` capture.
+  func register(taskIdentifier: String, providerResolver: @escaping () -> (any CloudKitSyncProvider)?) {
     self.registeredTaskIdentifier = taskIdentifier
-    self.syncProvider = syncProvider
+    self.providerResolver = providerResolver
 
     BGTaskScheduler.shared.register(
       forTaskWithIdentifier: taskIdentifier,
@@ -106,8 +109,9 @@ public final class CloudKitBackgroundSync: @unchecked Sendable {
     // Re-arm immediately so a crash during sync doesn't break the chain.
     scheduleNextRefresh()
 
-    guard let provider = syncProvider else {
-      // No active sync provider (e.g., startSyncEngine was never called).
+    guard let provider = providerResolver?() else {
+      // No active sync provider — either startSyncEngine was never called,
+      // or it was called but the module has since been deallocated.
       // Mark as complete so the system doesn't penalise the app for hanging tasks.
       task.setTaskCompleted(success: true)
       return

@@ -1445,4 +1445,3 @@ export function registerBackgroundSync(_taskIdentifier: string): Promise<void> {
 export function scheduleBackgroundSync(): Promise<void> {
   return Promise.reject(new CloudKitNotSupportedError());
 }
-}
