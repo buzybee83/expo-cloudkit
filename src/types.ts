@@ -583,7 +583,8 @@ export type SyncEngineEventType =
   | 'recordsFetched'
   | 'recordsSent'
   | 'syncError'
-  | 'conflict';
+  | 'conflict'
+  | 'syncCompleted';
 
 /**
  * Event emitted when the sync provider's lifecycle state changes.
@@ -656,10 +657,37 @@ export interface SyncConflictEvent {
   type: 'conflict';
   /** Opaque identifier; pass this to `resolveSyncConflict()`. */
   requestId: string;
-  /** The version of the record that was staged locally for upload. */
-  clientRecord: CloudKitRecord;
-  /** The current server version of the record that conflicts with the client version. */
-  serverRecord: CloudKitRecord;
+  /**
+   * The version of the record that was staged locally for upload.
+   * Pass directly to `resolveSyncConflict()` or merge fields before passing.
+   */
+  clientRecord: RecordToSave;
+  /**
+   * The current server version of the record. Pass directly to
+   * `resolveSyncConflict()` or merge fields before passing.
+   */
+  serverRecord: RecordToSave;
+}
+
+/**
+ * Event emitted once after a full zone pull cycle completes — the "sync is done"
+ * signal apps can use to trigger UI refreshes or analytics.
+ *
+ * In the iOS 17+ CKSyncEngine path this fires after the `didFetchChanges` delegate
+ * callback. In the iOS 16 fallback path it fires after the
+ * `CKFetchRecordZoneChangesOperation` completion block returns.
+ *
+ * One `syncCompleted` event is emitted per sync cycle, regardless of how many
+ * `recordsFetched` batch events were emitted during that cycle.
+ */
+export interface SyncCompletedEvent {
+  type: 'syncCompleted';
+  /** Total number of records received across all batches in this sync cycle. */
+  recordCount: number;
+  /** Zone names that were synced. */
+  zoneNames: string[];
+  /** Whether this was the first sync (no prior change token). */
+  isInitialSync: boolean;
 }
 
 /**
@@ -676,6 +704,9 @@ export interface SyncConflictEvent {
  *     // Merge client and server, then resolve
  *     resolveSyncConflict(event.requestId, mergedRecord);
  *   }
+ *   if (event.type === 'syncCompleted') {
+ *     console.log(`Sync done: ${event.recordCount} records from ${event.zoneNames.join(', ')}`);
+ *   }
  * });
  * ```
  */
@@ -684,7 +715,8 @@ export type SyncEngineEvent =
   | RecordsFetchedEvent
   | RecordsSentEvent
   | SyncErrorEvent
-  | SyncConflictEvent;
+  | SyncConflictEvent
+  | SyncCompletedEvent;
 
 /**
  * A queued change for the sync engine to process on its next send cycle.
