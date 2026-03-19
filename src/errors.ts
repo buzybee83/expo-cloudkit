@@ -60,6 +60,13 @@ export enum CloudKitErrorCode {
    * All local change tokens have been reset. A full re-sync will follow automatically.
    */
   ACCOUNT_CHANGED = 'ACCOUNT_CHANGED',
+
+  /**
+   * The native ExpoCloudKit module is not available in this environment.
+   * This happens when the app is running in Expo Go, which does not include
+   * custom native modules. Build a development client with `npx expo run:ios`.
+   */
+  MODULE_UNAVAILABLE = 'MODULE_UNAVAILABLE',
 }
 
 /**
@@ -116,6 +123,9 @@ export class CloudKitError extends Error {
   /**
    * Creates a CloudKitError from the raw dictionary the native module throws.
    * The native module always throws with `{ code, message, retryAfterSeconds?, serverRecord? }`.
+   *
+   * If the thrown value is already a `CloudKitError` (including `CloudKitUnavailableError`),
+   * it is returned as-is.
    */
   static fromNativeError(nativeError: unknown): CloudKitError {
     if (nativeError instanceof CloudKitError) {
@@ -140,5 +150,47 @@ export class CloudKitError extends Error {
           ? (err['serverRecord'] as import('./types').CloudKitRecord)
           : undefined,
     });
+  }
+}
+
+/**
+ * Thrown when the native ExpoCloudKit module is unavailable in the current
+ * runtime environment.
+ *
+ * This typically means the app is running in Expo Go, which does not bundle
+ * custom native modules. Build a development client to use CloudKit APIs:
+ *
+ * ```
+ * npx expo run:ios
+ * ```
+ *
+ * Use `isNativeModuleAvailable()` to gate CloudKit UI without try/catch.
+ *
+ * @example
+ * ```typescript
+ * import { isNativeModuleAvailable, CloudKitUnavailableError } from 'expo-cloudkit';
+ *
+ * if (!isNativeModuleAvailable()) {
+ *   console.warn('CloudKit is not available in this environment.');
+ * }
+ *
+ * try {
+ *   await saveRecords([record]);
+ * } catch (err) {
+ *   if (err instanceof CloudKitUnavailableError) {
+ *     // Prompt user to install the development client
+ *   }
+ * }
+ * ```
+ */
+export class CloudKitUnavailableError extends CloudKitError {
+  constructor() {
+    super(
+      CloudKitErrorCode.MODULE_UNAVAILABLE,
+      'expo-cloudkit requires a custom development client. Build with `npx expo run:ios`.'
+    );
+    this.name = 'CloudKitUnavailableError';
+    // Maintain proper prototype chain in transpiled JS
+    Object.setPrototypeOf(this, new.target.prototype);
   }
 }

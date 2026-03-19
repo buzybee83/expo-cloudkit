@@ -66,7 +66,10 @@ export type {
 } from './types';
 
 // Errors
-export { CloudKitError, CloudKitErrorCode } from './errors';
+export { CloudKitError, CloudKitErrorCode, CloudKitUnavailableError } from './errors';
+
+// Module availability check
+export { isNativeModuleAvailable } from './ExpoCloudKit';
 
 // Phase A — Container & Account
 export { configure, getAccountStatus, addAccountStatusListener } from './ExpoCloudKit';

@@ -10,7 +10,7 @@
 
 import { EventEmitter, requireNativeModule } from 'expo-modules-core';
 
-import { CloudKitError, CloudKitErrorCode } from './errors';
+import { CloudKitError, CloudKitUnavailableError } from './errors';
 import type {
   AccountStatus,
   AssetProgress,
@@ -55,12 +55,31 @@ try {
   // Platform does not support CloudKit. All calls will produce a clear error.
 }
 
+/**
+ * Returns `true` if the native ExpoCloudKit module loaded successfully.
+ *
+ * Use this to gate CloudKit UI without try/catch. When this returns `false`,
+ * calling any expo-cloudkit function will throw `CloudKitUnavailableError`.
+ *
+ * This is typically `false` when running in Expo Go. Build a development
+ * client with `npx expo run:ios` to use CloudKit APIs.
+ *
+ * @example
+ * ```typescript
+ * import { isNativeModuleAvailable } from 'expo-cloudkit';
+ *
+ * if (!isNativeModuleAvailable()) {
+ *   return <Text>CloudKit is not available. Use a development client.</Text>;
+ * }
+ * ```
+ */
+export function isNativeModuleAvailable(): boolean {
+  return NativeModule !== null;
+}
+
 function assertNativeAvailable(): void {
   if (!NativeModule) {
-    throw new CloudKitError(
-      CloudKitErrorCode.UNKNOWN,
-      'expo-cloudkit is only supported on iOS. This device/platform does not have CloudKit.'
-    );
+    throw new CloudKitUnavailableError();
   }
 }
 
