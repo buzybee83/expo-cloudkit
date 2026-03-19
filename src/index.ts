@@ -118,8 +118,12 @@ export {
   CloudKitError,
   CloudKitErrorCode,
   CloudKitNotSupportedError,
+  CloudKitUnavailableError,
   CloudKitValidationError,
 } from './errors';
+
+// Module availability
+export { isNativeModuleAvailable } from './ExpoCloudKit';
 
 // Phase J.2 — Zod schema validation helpers
 export { createCloudKitSchema } from './schema';

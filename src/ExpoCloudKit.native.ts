@@ -11,7 +11,7 @@
 import { EventEmitter, requireNativeModule } from 'expo-modules-core';
 import { Platform } from 'react-native';
 
-import { CloudKitError, CloudKitErrorCode, CloudKitNotSupportedError } from './errors';
+import { CloudKitError, CloudKitNotSupportedError, CloudKitUnavailableError } from './errors';
 import type {
   AcceptedShare,
   AcceptShareOptions,
@@ -94,18 +94,15 @@ try {
 
 /**
  * Throws CloudKitNotSupportedError on non-iOS platforms.
- * Throws CloudKitError(UNKNOWN) if the native module failed to load on iOS
- * (should not happen in practice).
+ * Throws CloudKitUnavailableError if the native module failed to load on iOS
+ * (e.g. running in Expo Go without a custom dev client).
  */
 function assertNativeAvailable(): void {
   if (!isIOS) {
     throw new CloudKitNotSupportedError();
   }
   if (!NativeModule) {
-    throw new CloudKitError(
-      CloudKitErrorCode.UNKNOWN,
-      'expo-cloudkit native module failed to load. Ensure the iOS build includes the ExpoCloudKit module.'
-    );
+    throw new CloudKitUnavailableError();
   }
 }
 
@@ -115,6 +112,15 @@ function assertNativeAvailable(): void {
  */
 export function isCloudKitAvailable(): boolean {
   return isIOS && NativeModule !== null;
+}
+
+/**
+ * Returns `true` when the native ExpoCloudKit module loaded successfully.
+ * Returns `false` in Expo Go, on Android, on web, and whenever the native
+ * module is unavailable. Use this to gate CloudKit UI without try/catch.
+ */
+export function isNativeModuleAvailable(): boolean {
+  return NativeModule !== null;
 }
 
 /** No-op Subscription returned by event listener helpers on non-iOS platforms. */

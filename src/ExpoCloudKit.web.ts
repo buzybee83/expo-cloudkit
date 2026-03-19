@@ -1417,3 +1417,11 @@ export function addRateLimitedListener(
   // Rate limiting is a native-only concern; CloudKit JS handles retries internally.
   return noopSubscription;
 }
+
+/**
+ * Returns `false` on web — the native ExpoCloudKit module is never available
+ * in a browser environment.
+ */
+export function isNativeModuleAvailable(): boolean {
+  return false;
+}
