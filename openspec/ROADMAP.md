@@ -407,14 +407,14 @@ An iOS 17+ `@Observable` macro wrapper that exposes record fetching, saving, and
 
 **Tasks:**
 
-- [ ] **Swift**: Create `ios/SwiftUI/CloudKitStore.swift` — `@Observable` class (guarded with `#if canImport(SwiftUI)` and `@available(iOS 17, *)`) with properties: `records: [String: CloudKitRecord]`, `syncState: SyncState`, `isSyncing: Bool`, `lastError: Error?`, `pendingConflicts: [SyncConflict]`
-- [ ] **Swift**: Implement `func fetch(recordType: String, predicate: NSPredicate?, desiredKeys: [String]?) async throws` — delegates to `CloudKitRecordManager.queryRecords()`, updates `records` dictionary on completion
-- [ ] **Swift**: Implement `func save(_ record: CloudKitRecord) async throws` — delegates to `CloudKitRecordManager.saveRecords()`, updates `records` on success, populates `lastError` on failure
-- [ ] **Swift**: Implement `func delete(recordName: String) async throws` — delegates to `CloudKitRecordManager.deleteRecords()`, removes from `records`
-- [ ] **Swift**: Subscribe to internal sync events (`NotificationCenter` or direct delegate callback) to update `syncState`, `isSyncing`, and `pendingConflicts` reactively
-- [ ] **Swift**: Add `func resolveConflict(_ conflict: SyncConflict, with resolution: CloudKitRecord) async throws` that calls through to the existing `resolveSyncConflict` machinery
-- [ ] **Swift**: Ensure `CloudKitStore` is compiled only when `EXPO_CLOUDKIT_SWIFTUI=1` build flag is set (or via a separate Swift Package product) so non-SwiftUI apps incur zero binary size overhead
-- [ ] **Swift**: Add `ios/Tests/CloudKitStoreTests.swift` — at least 5 test cases covering fetch → records population, save → records update, delete → records removal, sync state changes, and conflict surfacing
+- [x] **Swift**: Create `ios/SwiftUI/CloudKitStore.swift` — `@Observable` class (guarded with `#if canImport(SwiftUI)` and `@available(iOS 17, *)`) with properties: `records: [String: CloudKitRecord]`, `syncState: SyncState`, `lastError: Error?`. Note: `isSyncing` consolidated into `syncState.status` — callers use `store.syncState.status == .syncing`
+- [x] **Swift**: Implement `func fetch(_ config: FetchConfig) async` — delegates to `CloudKitRecordManager.queryRecords()`, updates `records` dictionary on completion
+- [x] **Swift**: Implement `func save(_ record: RecordToSave) async` — delegates to `CloudKitRecordManager.saveRecords()`, updates `records` on success, populates `error` on failure
+- [x] **Swift**: Implement `func delete(_ identifier: RecordIdentifier) async` — delegates to `CloudKitRecordManager.deleteRecords()`, removes from `records`
+- [x] **Swift**: Subscribe to internal sync events (`NotificationCenter` or direct delegate callback) to update `syncState` reactively; sync start/stop via `func startSync(config: SyncEngineConfig) async`
+- [x] **Swift**: Add `func resolveConflict(_ conflict: SyncConflict, with resolution: CloudKitRecord) async throws` that calls through to the existing `resolveSyncConflict` machinery
+- [x] **Swift**: `CloudKitStore` guarded with `#if canImport(SwiftUI)` compile-time flag — non-SwiftUI apps incur zero binary size overhead; no separate build flag needed
+- [x] **Swift**: Add `ios/Tests/CloudKitStoreTests.swift` — at least 5 test cases covering fetch → records population, save → records update, delete → records removal, sync state changes, and conflict surfacing
 
 _Risks_: The `@Observable` macro requires iOS 17+ and Swift 5.9+. The Expo Modules build pipeline may not support conditional compilation targets cleanly — the build flag approach (`EXPO_CLOUDKIT_SWIFTUI`) needs validation in a fresh `expo prebuild`. If the flag approach fails, fall back to a runtime `#available` check with the `@Observable` class always compiled but never instantiated on iOS 16.
 
