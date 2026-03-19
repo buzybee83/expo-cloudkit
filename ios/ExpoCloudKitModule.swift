@@ -1,8 +1,11 @@
-import ExpoModulesCore
 import CloudKit
+import Foundation
 #if canImport(UIKit)
   import UIKit
 #endif
+
+#if canImport(ExpoModulesCore)
+import ExpoModulesCore
 
 /// Main Expo module entry point for expo-cloudkit.
 ///
@@ -1934,6 +1937,8 @@ enum CloudKitModuleError {
   static func invalidArgument(_ msg: String) -> Exception    { CloudKitInvalidArgumentException(msg) }
   static func participantNotFound(_ name: String) -> Exception { ParticipantNotFoundException(name) }
 }
+
+#endif // canImport(ExpoModulesCore)
 
 // MARK: - Notification Names (Phase J.1)
 

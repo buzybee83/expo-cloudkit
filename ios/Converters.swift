@@ -1,6 +1,8 @@
 import CloudKit
 import Foundation
+#if canImport(ExpoModulesCore)
 import ExpoModulesCore
+#endif
 
 /// Static helpers for converting between CloudKit native types and
 /// JS-bridge-compatible dictionaries.
