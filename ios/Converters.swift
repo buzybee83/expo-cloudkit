@@ -493,7 +493,8 @@ enum Converters {
     var dict: [String: Any] = [
       "role": participantRoleToString(participant.role),
       "permission": participantPermissionToString(participant.permission),
-      "acceptanceStatus": participantAcceptanceToString(participant.acceptanceStatus)
+      "acceptanceStatus": participantAcceptanceToString(participant.acceptanceStatus),
+      "isCurrentUser": participant.isCurrentUser
     ]
 
     if let userRecordID = participant.userIdentity.userRecordID {
