@@ -884,6 +884,13 @@ export interface UseCloudKitSyncReturn {
  * });
  * ```
  */
+/** Extracts the `SyncState` for a single scope from the new `SyncStateMap`. */
+const notStartedState: SyncState = { usesSyncEngine: false, status: 'notStarted' };
+function getScopeState(scope: DatabaseScope): SyncState {
+  const map = getSyncState();
+  return map[scope] ?? notStartedState;
+}
+
 export function useCloudKitSync(options: UseCloudKitSyncOptions): UseCloudKitSyncReturn {
   const {
     zones,
@@ -895,8 +902,10 @@ export function useCloudKitSync(options: UseCloudKitSyncOptions): UseCloudKitSyn
     onSyncError,
   } = options;
 
-  // Initialize synchronously — getSyncState() reads in-memory state without I/O
-  const [syncState, setSyncState] = useState<SyncState>(() => getSyncState());
+  const scope: DatabaseScope = database ?? 'private';
+
+  // Initialize synchronously — getScopeState() reads in-memory state without I/O
+  const [syncState, setSyncState] = useState<SyncState>(() => getScopeState(scope));
   const [error, setError] = useState<CloudKitError | undefined>(undefined);
 
   const zonesJson = JSON.stringify(zones);
@@ -914,10 +923,10 @@ export function useCloudKitSync(options: UseCloudKitSyncOptions): UseCloudKitSyn
   useEffect(() => {
     if (!enabled) {
       // Stop if already running
-      void stopSyncEngine().catch(() => {
+      void stopSyncEngine(scope).catch(() => {
         // Ignore SYNC_ENGINE_NOT_RUNNING — it was already stopped
       });
-      setSyncState(getSyncState());
+      setSyncState(getScopeState(scope));
       return;
     }
 
@@ -930,7 +939,7 @@ export function useCloudKitSync(options: UseCloudKitSyncOptions): UseCloudKitSyn
     });
 
     // Refresh state snapshot after starting
-    setSyncState(getSyncState());
+    setSyncState(getScopeState(scope));
 
     const subscription = addSyncEngineListener((event) => {
       switch (event.type) {
@@ -954,7 +963,7 @@ export function useCloudKitSync(options: UseCloudKitSyncOptions): UseCloudKitSyn
 
     return () => {
       subscription.remove();
-      void stopSyncEngine().catch(() => {
+      void stopSyncEngine(scope).catch(() => {
         // Ignore SYNC_ENGINE_NOT_RUNNING — already stopped
       });
     };

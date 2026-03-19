@@ -34,11 +34,11 @@ public class ExpoCloudKitModule: Module {
   /// Set to `nil` automatically when the module is deallocated.
   static weak var sharedRecordManager: CloudKitRecordManager?
 
-  /// Weak reference to the active `CloudKitSyncProvider`, accessible to
-  /// `CloudKitStore.startSync` without importing ExpoModulesCore.
-  /// Nil until `startSyncEngine()` is called, and nil again after `stopSyncEngine()`.
+  /// Weak references to the active sync providers keyed by database scope, accessible
+  /// to `CloudKitStore.startSync` without importing ExpoModulesCore.
+  /// Empty until `startSyncEngine()` is called; cleared after `stopSyncEngine()`.
   /// The protocol already inherits from `AnyObject` so weak storage is legal.
-  static weak var sharedSyncProvider: CloudKitSyncProvider?
+  static var sharedSyncProviders: [CKDatabase.Scope: WeakSyncProviderBox] = [:]
 
   // MARK: - Subscription manager (Phase B)
 
@@ -80,11 +80,16 @@ public class ExpoCloudKitModule: Module {
   /// Writes use `.barrier` to prevent races; reads use a plain `.sync`.
   private let clientsQueue = DispatchQueue(label: "expo.cloudkit.clients", attributes: .concurrent)
 
-  // MARK: - Sync provider (Phase B)
+  // MARK: - Sync providers (Phase B, multi-scope)
 
-  /// Active sync provider — either CKSyncEngine adapter (iOS 17+) or the
-  /// manual fallback (iOS 16). Nil when sync has not been started or was stopped.
-  private var syncProvider: CloudKitSyncProvider?
+  /// Active sync providers keyed by database scope.
+  /// Each value is either a CKSyncEngine adapter (iOS 17+) or the manual fallback (iOS 16).
+  /// Empty when sync has not been started or after all engines are stopped.
+  private var syncProviders: [CKDatabase.Scope: CloudKitSyncProvider] = [:]
+
+  /// Maps conflict requestId → database scope for efficient routing in resolveSyncConflict.
+  /// Populated when a conflictPending event is handled; entry removed after routing.
+  private var conflictScopeMap: [String: CKDatabase.Scope] = [:]
 
   /// Manages UserDefaults persistence for change tokens and engine state.
   /// Lazily created on first `startSyncEngine()` call.
@@ -725,7 +730,15 @@ public class ExpoCloudKitModule: Module {
       return false
     }
 
-    /// Starts sync for the specified zones.
+    /// Starts sync for the specified zones across one or more database scopes.
+    ///
+    /// Accepts a `databases` array (or a single string) to start one sync engine
+    /// per scope. Falls back to the `database` field if `databases` is absent.
+    /// If neither field is present, defaults to `["private"]`.
+    ///
+    /// Rejects if `"public"` is included — public database sync is not supported
+    /// by CKSyncEngine. Use subscriptions instead.
+    ///
     /// On iOS 17+ uses CKSyncEngine; on iOS 16 uses timer-based polling fallback.
     AsyncFunction("startSyncEngine") { [weak self] (config: [String: Any], promise: Promise) in
       guard let self = self, let container = self.container else {
@@ -734,13 +747,35 @@ public class ExpoCloudKitModule: Module {
       }
 
       let zoneNames = config["zones"] as? [String] ?? []
-      let dbString = config["database"] as? String ?? "private"
       let autoSync = config["automaticallySync"] as? Bool ?? true
-      let scope = Converters.toDatabaseScope(dbString)
+      let resolveConflicts = config["resolveConflicts"] as? Bool == true
 
       let zoneIDs = zoneNames.map {
         CKRecordZone.ID(zoneName: $0, ownerName: CKCurrentUserDefaultName)
       }
+
+      // Resolve the `databases` field (array or single string), falling back to
+      // the legacy `database` field, then to the default of ["private"].
+      let requestedScopeStrings: [String]
+      if let arr = config["databases"] as? [String] {
+        requestedScopeStrings = arr
+      } else if let single = config["databases"] as? String {
+        requestedScopeStrings = [single]
+      } else if let legacy = config["database"] as? String {
+        requestedScopeStrings = [legacy]
+      } else {
+        requestedScopeStrings = ["private"]
+      }
+
+      // Reject public database sync with a clear error message.
+      if requestedScopeStrings.contains("public") {
+        promise.reject(CloudKitModuleError.invalidArgument(
+          "Public database sync is not supported. Use subscriptions instead."
+        ))
+        return
+      }
+
+      let requestedScopes = requestedScopeStrings.map { Converters.toDatabaseScope($0) }
 
       // Lazily create the token store keyed by container identifier.
       if self.tokenStore == nil {
@@ -753,48 +788,67 @@ public class ExpoCloudKitModule: Module {
         return
       }
 
-      let provider: CloudKitSyncProvider
-      if #available(iOS 17.0, macOS 14.0, *) {
-        provider = CloudKitSyncEngineAdapter(
-          ckContainer: container.ckContainer,
-          tokenStore: store
-        )
-      } else {
-        provider = CloudKitSyncFallbackAdapter(
-          ckContainer: container.ckContainer,
-          tokenStore: store
-        )
-      }
+      // For each requested scope, create and start a provider.
+      // If a provider for that scope is already running, stop it first.
+      // Capture existing providers to stop before launching new Tasks.
+      var providersToStop: [CloudKitSyncProvider] = []
+      var newProviders: [(scope: CKDatabase.Scope, provider: CloudKitSyncProvider, scopeStr: String)] = []
 
-      // Stop any existing provider before starting a new one.
-      // Both stop() and start() are actor-isolated (async) — wrap in a Task so
-      // the Promise is resolved only after start() completes its actor turn.
-      let resolveConflicts = config["resolveConflicts"] as? Bool == true
-      let existingProvider = self.syncProvider
-      self.syncProvider = provider
-      // Expose the active provider to CloudKitStore (Phase J.1).
-      ExpoCloudKitModule.sharedSyncProvider = provider
+      for scope in requestedScopes {
+        let scopeStr = Converters.fromDatabaseScope(scope)
 
-      // G.6 — enable custom JS conflict resolution if the caller opted in.
-      // conflictResolutionEnabled is nonisolated(unsafe) on both actor implementations,
-      // written here once before start() is called and never mutated again during a sync
-      // cycle, making the unsynchronised write safe in practice.
-      if resolveConflicts {
-        provider.conflictResolutionEnabled = true
+        // Capture the existing provider for this scope (if any) so we can stop it.
+        if let existing = self.syncProviders[scope] {
+          providersToStop.append(existing)
+        }
+
+        let provider: CloudKitSyncProvider
+        if #available(iOS 17.0, macOS 14.0, *) {
+          provider = CloudKitSyncEngineAdapter(
+            ckContainer: container.ckContainer,
+            tokenStore: store
+          )
+        } else {
+          provider = CloudKitSyncFallbackAdapter(
+            ckContainer: container.ckContainer,
+            tokenStore: store
+          )
+        }
+
+        // G.6 — enable custom JS conflict resolution if the caller opted in.
+        // conflictResolutionEnabled is nonisolated(unsafe) on both actor implementations,
+        // written here once before start() is called and never mutated again during a sync
+        // cycle, making the unsynchronised write safe in practice.
+        if resolveConflicts {
+          provider.conflictResolutionEnabled = true
+        }
+
+        self.syncProviders[scope] = provider
+        // Expose to CloudKitStore (Phase J.1).
+        ExpoCloudKitModule.sharedSyncProviders[scope] = WeakSyncProviderBox(provider)
+
+        newProviders.append((scope: scope, provider: provider, scopeStr: scopeStr))
       }
 
       Task { [weak self] in
-        // Stop the old provider (if any) before starting the new one.
-        await existingProvider?.stop()
+        // Stop replaced providers before starting new ones.
+        for old in providersToStop {
+          await old.stop()
+        }
 
-        await provider.start(
-          zones: zoneIDs,
-          database: scope,
-          automaticallySync: autoSync,
-          eventHandler: { [weak self] event in
-            self?.handleSyncEvent(event)
-          }
-        )
+        // Start each new provider with a scope-capturing event handler so that
+        // handleSyncEvent can inject the databaseScope into every event payload.
+        for entry in newProviders {
+          let scopeStr = entry.scopeStr
+          await entry.provider.start(
+            zones: zoneIDs,
+            database: entry.scope,
+            automaticallySync: autoSync,
+            eventHandler: { [weak self] event in
+              self?.handleSyncEvent(event, databaseScope: scopeStr)
+            }
+          )
+        }
 
         promise.resolve(nil)
       }
@@ -807,47 +861,105 @@ public class ExpoCloudKitModule: Module {
     ///   - resolvedRecord: The merged record dictionary to save, or nil to accept the
     ///     server version unchanged.
     ///
-    /// If `requestId` is not found (e.g. already resolved, timed out, or stale), this
-    /// call is a no-op — it does not reject, so callers do not need to guard against
-    /// double-resolution.
+    /// Uses `conflictScopeMap` to route directly to the provider that owns this
+    /// conflict requestId. If `requestId` is not found (e.g. already resolved,
+    /// timed out, or stale), this call is a no-op — it does not reject, so callers
+    /// do not need to guard against double-resolution.
     AsyncFunction("resolveSyncConflict") { [weak self] (requestId: String, resolvedRecord: [String: Any]?) in
-      guard let provider = self?.syncProvider else { return }
+      guard let self = self else { return }
+      // Route directly to the scope that produced this conflict.
+      let scope = self.conflictScopeMap[requestId]
+      self.conflictScopeMap.removeValue(forKey: requestId)
+
+      let provider: CloudKitSyncProvider?
+      if let scope = scope {
+        provider = self.syncProviders[scope]
+      } else {
+        // Fallback: iterate all providers if the scope map entry is missing.
+        provider = self.syncProviders.values.first
+      }
+
+      guard let resolvedProvider = provider else { return }
       // actor-isolated method — must use Task to dispatch asynchronously.
       Task {
-        await provider.resumeConflictResolution(requestId: requestId, resolvedRecord: resolvedRecord)
+        await resolvedProvider.resumeConflictResolution(requestId: requestId, resolvedRecord: resolvedRecord)
       }
     }
 
-    /// Returns the current sync state synchronously from in-memory provider state.
+    /// Returns the current sync state for all running engines, keyed by scope string.
+    ///
+    /// Returns an empty dictionary when no engine is running.
+    /// Each value is `{ usesSyncEngine: Bool, status: String }`.
+    ///
+    /// Example (single scope): `{ "private": { usesSyncEngine: true, status: "idle" } }`
+    /// Example (multi scope):  `{ "private": { ... }, "shared": { ... } }`
     Function("getSyncState") { [weak self] () -> [String: Any] in
-      guard let provider = self?.syncProvider else {
-        return [
-          "usesSyncEngine": false,
-          "status": SyncProviderState.notStarted.rawValue
+      guard let self = self, !self.syncProviders.isEmpty else {
+        return [:]
+      }
+      var result: [String: Any] = [:]
+      for (scope, provider) in self.syncProviders {
+        let scopeStr = Converters.fromDatabaseScope(scope)
+        result[scopeStr] = [
+          "usesSyncEngine": provider.usesSyncEngine,
+          "status": provider.state.rawValue
         ]
       }
-      return [
-        "usesSyncEngine": provider.usesSyncEngine,
-        "status": provider.state.rawValue
-      ]
+      return result
     }
 
-    /// Manually triggers a sync cycle. Rejects if sync engine is not running.
-    AsyncFunction("triggerSync") { [weak self] (promise: Promise) in
-      guard let provider = self?.syncProvider else {
+    /// Manually triggers a sync cycle.
+    ///
+    /// Options keys (all optional):
+    ///   - `database` (String): if provided, triggers sync only on that scope's engine.
+    ///     If absent, triggers sync on all running engines concurrently.
+    ///
+    /// Rejects if no engine is running (or the specified scope has no running engine).
+    AsyncFunction("triggerSync") { [weak self] (options: [String: Any]?, promise: Promise) in
+      guard let self = self, !self.syncProviders.isEmpty else {
         promise.reject(CloudKitModuleError.syncEngineNotRunning)
         return
       }
-      Task {
-        await provider.triggerSync()
-        promise.resolve(nil)
+
+      let scopeStr = options?["database"] as? String
+
+      if let scopeStr = scopeStr {
+        // Targeted trigger: only the specified scope.
+        let scope = Converters.toDatabaseScope(scopeStr)
+        guard let provider = self.syncProviders[scope] else {
+          promise.reject(CloudKitModuleError.syncEngineNotRunning)
+          return
+        }
+        Task {
+          await provider.triggerSync()
+          promise.resolve(nil)
+        }
+      } else {
+        // Fan-out: trigger all running providers concurrently.
+        let providers = Array(self.syncProviders.values)
+        Task {
+          await withTaskGroup(of: Void.self) { group in
+            for provider in providers {
+              group.addTask { await provider.triggerSync() }
+            }
+          }
+          promise.resolve(nil)
+        }
       }
     }
 
     /// Enqueues a pending record save or delete for the next sync cycle.
+    ///
+    /// The change dict may include a `database` field ("private"|"shared") to route
+    /// the change to a specific scope's engine. Defaults to "private" when absent.
     /// Silently drops malformed entries — callers should validate before enqueuing.
     Function("enqueuePendingChange") { [weak self] (changeDict: [String: Any]) in
-      guard let provider = self?.syncProvider else { return }
+      guard let self = self else { return }
+
+      // Route to the appropriate provider by database scope.
+      let dbStr = changeDict["database"] as? String ?? "private"
+      let scope = Converters.toDatabaseScope(dbStr)
+      guard let provider = self.syncProviders[scope] else { return }
 
       let changeType = changeDict["type"] as? String ?? ""
 
@@ -868,19 +980,44 @@ public class ExpoCloudKitModule: Module {
       }
     }
 
-    /// Stops the sync provider and releases its resources.
-    /// Rejects if sync engine is not running.
-    AsyncFunction("stopSyncEngine") { [weak self] (promise: Promise) in
-      guard let self = self, let provider = self.syncProvider else {
+    /// Stops sync engine(s) and releases their resources.
+    ///
+    /// Options keys (all optional):
+    ///   - `database` (String): if provided, stops only that scope's engine.
+    ///     If absent, stops all running engines.
+    ///
+    /// Rejects if no engine is running (or the specified scope has no running engine).
+    AsyncFunction("stopSyncEngine") { [weak self] (options: [String: Any]?, promise: Promise) in
+      guard let self = self, !self.syncProviders.isEmpty else {
         promise.reject(CloudKitModuleError.syncEngineNotRunning)
         return
       }
-      self.syncProvider = nil
-      // Clear the Phase J.1 shared reference so CloudKitStore sees nil immediately.
-      ExpoCloudKitModule.sharedSyncProvider = nil
-      Task {
-        await provider.stop()
-        promise.resolve(nil)
+
+      let scopeStr = options?["database"] as? String
+
+      if let scopeStr = scopeStr {
+        // Stop one specific scope.
+        let scope = Converters.toDatabaseScope(scopeStr)
+        guard let provider = self.syncProviders.removeValue(forKey: scope) else {
+          promise.reject(CloudKitModuleError.syncEngineNotRunning)
+          return
+        }
+        ExpoCloudKitModule.sharedSyncProviders.removeValue(forKey: scope)
+        Task {
+          await provider.stop()
+          promise.resolve(nil)
+        }
+      } else {
+        // Stop all providers.
+        let providers = self.syncProviders
+        self.syncProviders.removeAll()
+        ExpoCloudKitModule.sharedSyncProviders.removeAll()
+        Task {
+          for (_, provider) in providers {
+            await provider.stop()
+          }
+          promise.resolve(nil)
+        }
       }
     }
 
@@ -906,11 +1043,14 @@ public class ExpoCloudKitModule: Module {
     AsyncFunction("registerBackgroundSync") { [weak self] (taskIdentifier: String, promise: Promise) in
       if #available(iOS 13.0, *) {
         // Pass a resolver closure so the background task reads the module's
-        // *current* syncProvider when it fires, not a snapshot from registration time.
+        // *current* syncProviders when it fires, not a snapshot from registration time.
         // This handles the common pattern: register at app launch, start engine after sign-in.
         CloudKitBackgroundSync.shared.register(
           taskIdentifier: taskIdentifier,
-          providerResolver: { [weak self] in self?.syncProvider }
+          providerResolver: { [weak self] in
+            guard let self = self else { return [] }
+            return Array(self.syncProviders.values)
+          }
         )
         // Schedule the first refresh now so the system knows a refresh is wanted.
         CloudKitBackgroundSync.shared.scheduleNextRefresh()
@@ -1950,8 +2090,11 @@ extension ExpoCloudKitModule {
   ///
   /// All sync events flow through the single `"onSyncEngineEvent"` channel,
   /// differentiated by the `type` field. JS callers filter by `event.type`.
-  func handleSyncEvent(_ event: SyncProviderEvent) {
-    let payload: [String: Any]
+  ///
+  /// The `databaseScope` parameter is injected into every event payload so that
+  /// multi-scope callers can distinguish which engine produced each event.
+  func handleSyncEvent(_ event: SyncProviderEvent, databaseScope: String) {
+    var payload: [String: Any]
 
     switch event {
     case .stateChanged(let newState):
@@ -1962,13 +2105,15 @@ extension ExpoCloudKitModule {
         NotificationCenter.default.post(
           name: .expoCloudKitSyncStateChanged,
           object: nil,
-          userInfo: ["state": newState.rawValue]
+          userInfo: ["state": newState.rawValue, "databaseScope": databaseScope]
         )
       }
+      let scope = Converters.toDatabaseScope(databaseScope)
+      let provider = syncProviders[scope]
       payload = [
         "type": "stateChanged",
         "state": [
-          "usesSyncEngine": syncProvider?.usesSyncEngine ?? false,
+          "usesSyncEngine": provider?.usesSyncEngine ?? false,
           "status": newState.rawValue
         ]
       ]
@@ -2015,13 +2160,19 @@ extension ExpoCloudKitModule {
         "error": Converters.toErrorDict(error)
       ]
 
-    case .conflictPending(_, let eventPayload):
+    case .conflictPending(let requestId, let eventPayload):
+      // Store the scope mapping so resolveSyncConflict can route directly to this provider.
+      let scope = Converters.toDatabaseScope(databaseScope)
+      conflictScopeMap[requestId] = scope
       // Route to the dedicated `onSyncConflict` channel so JS listeners can subscribe
       // independently of the general `onSyncEngineEvent` stream.
+      // Inject databaseScope into the conflict payload so JS knows which engine it came from.
+      var conflictPayload = eventPayload
+      conflictPayload["databaseScope"] = databaseScope
       // Expo requires sendEvent on the main thread; this event is already dispatched
       // to main by the sync adapters, but we guard again for safety.
       DispatchQueue.main.async { [weak self] in
-        self?.sendEvent("onSyncConflict", eventPayload)
+        self?.sendEvent("onSyncConflict", conflictPayload)
       }
       return
 
@@ -2032,7 +2183,8 @@ extension ExpoCloudKitModule {
         "receivedCount": receivedCount,
         "failedCount": failedCount,
         "durationMs": durationMs,
-        "syncEngine": syncEngine
+        "syncEngine": syncEngine,
+        "databaseScope": databaseScope
       ]
       DispatchQueue.main.async { [weak self] in
         self?.sendEvent("onSyncHealth", healthPayload)
@@ -2047,6 +2199,9 @@ extension ExpoCloudKitModule {
         "isInitialSync": isInitialSync
       ]
     }
+
+    // Inject databaseScope into every payload that reaches sendEvent.
+    payload["databaseScope"] = databaseScope
 
     // Expo requires sendEvent on the main thread.
     DispatchQueue.main.async { [weak self] in
@@ -2171,6 +2326,19 @@ enum CloudKitModuleError {
 }
 
 #endif // canImport(ExpoModulesCore)
+
+// MARK: - WeakSyncProviderBox (Phase J.1 + multi-scope)
+//
+// Holds a weak reference to a CloudKitSyncProvider so that
+// `ExpoCloudKitModule.sharedSyncProviders` does not extend the provider's lifetime.
+// The protocol inherits from AnyObject, making weak storage legal.
+
+final class WeakSyncProviderBox {
+  weak var value: (any CloudKitSyncProvider)?
+  init(_ provider: any CloudKitSyncProvider) {
+    self.value = provider
+  }
+}
 
 // MARK: - Notification Names (Phase J.1)
 

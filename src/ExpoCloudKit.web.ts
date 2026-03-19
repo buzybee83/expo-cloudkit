@@ -62,7 +62,7 @@ import type {
   SubscriptionEvent,
   SyncEngineConfig,
   SyncEngineEvent,
-  SyncState,
+  SyncStateMap,
   UpdatePermissionOptions,
   WebConfigOptions,
   Zone,
@@ -752,11 +752,11 @@ export async function fetchRecordZoneChanges(
 // ---------------------------------------------------------------------------
 
 /**
- * Returns `{ usesSyncEngine: false, status: 'notStarted' }` on web.
- * CKSyncEngine is an iOS-only system scheduler.
+ * Returns an empty object on web — CKSyncEngine is an iOS-only system scheduler.
+ * No sync engines are running in web environments.
  */
-export function getSyncState(): SyncState {
-  return { usesSyncEngine: false, status: 'notStarted' };
+export function getSyncState(): SyncStateMap {
+  return {};
 }
 
 /**
@@ -769,14 +769,14 @@ export function startSyncEngine(_config: SyncEngineConfig): Promise<void> {
 /**
  * Throws `CloudKitNotSupportedError` — CKSyncEngine is not available on web.
  */
-export function stopSyncEngine(): Promise<void> {
+export function stopSyncEngine(_database?: DatabaseScope): Promise<void> {
   return Promise.reject(new CloudKitNotSupportedError());
 }
 
 /**
  * Throws `CloudKitNotSupportedError` — CKSyncEngine is not available on web.
  */
-export function triggerSync(): Promise<void> {
+export function triggerSync(_database?: DatabaseScope): Promise<void> {
   return Promise.reject(new CloudKitNotSupportedError());
 }
 

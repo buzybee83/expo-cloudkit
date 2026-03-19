@@ -30,12 +30,13 @@ public final class CloudKitBackgroundSync: @unchecked Sendable {
 
   private var registeredTaskIdentifier: String?
 
-  /// Closure that resolves the active sync provider at task-fire time.
+  /// Closure that resolves the active sync providers at task-fire time.
   ///
   /// Using a resolver closure instead of a direct weak reference means the background
-  /// task always reads the module's *current* `syncProvider` when it fires, regardless
+  /// task always reads the module's *current* `syncProviders` when it fires, regardless
   /// of the order in which `registerBackgroundSync()` and `startSyncEngine()` were called.
-  private var providerResolver: (() -> (any CloudKitSyncProvider)?)?
+  /// Returns an array so all running scopes (private, shared) are triggered together.
+  private var providerResolver: (() -> [any CloudKitSyncProvider])?
 
   // MARK: - Init (private — use `shared`)
 
@@ -59,9 +60,10 @@ public final class CloudKitBackgroundSync: @unchecked Sendable {
   ///   - taskIdentifier: The BGTask identifier. Must match the value declared in
   ///     `BGTaskSchedulerPermittedIdentifiers` in `Info.plist` — otherwise the
   ///     system will silently refuse to launch the task.
-  ///   - providerResolver: A closure invoked at task-fire time to obtain the
-  ///     current active `CloudKitSyncProvider`. Use `[weak self]` capture.
-  func register(taskIdentifier: String, providerResolver: @escaping () -> (any CloudKitSyncProvider)?) {
+  ///   - providerResolver: A closure invoked at task-fire time to obtain all
+  ///     currently active `CloudKitSyncProvider` instances. Returns an array so
+  ///     all running scopes are triggered together. Use `[weak self]` capture.
+  func register(taskIdentifier: String, providerResolver: @escaping () -> [any CloudKitSyncProvider]) {
     self.registeredTaskIdentifier = taskIdentifier
     self.providerResolver = providerResolver
 
@@ -109,8 +111,9 @@ public final class CloudKitBackgroundSync: @unchecked Sendable {
     // Re-arm immediately so a crash during sync doesn't break the chain.
     scheduleNextRefresh()
 
-    guard let provider = providerResolver?() else {
-      // No active sync provider — either startSyncEngine was never called,
+    let providers = providerResolver?() ?? []
+    guard !providers.isEmpty else {
+      // No active sync providers — either startSyncEngine was never called,
       // or it was called but the module has since been deallocated.
       // Mark as complete so the system doesn't penalise the app for hanging tasks.
       task.setTaskCompleted(success: true)
@@ -119,8 +122,14 @@ public final class CloudKitBackgroundSync: @unchecked Sendable {
 
     // Dispatch sync work on a Swift concurrency Task so we can honour the
     // expiration handler by cancelling it.
+    // Fan out to all running providers concurrently so all scopes are refreshed
+    // within the single background time allocation.
     let syncTask = Task {
-      await provider.triggerSync()
+      await withTaskGroup(of: Void.self) { group in
+        for provider in providers {
+          group.addTask { await provider.triggerSync() }
+        }
+      }
     }
 
     // The system calls this handler when the allocated background time is about

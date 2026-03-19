@@ -108,7 +108,7 @@ protocol CloudKitSyncProvider: AnyObject, Sendable {
 /// CKServerChangeTokens (iOS 16) in UserDefaults.
 ///
 /// Key schema:
-///   expo.cloudkit.<containerID>.syncEngineState         — CKSyncEngine.State.Serialization
+///   expo.cloudkit.<containerID>.syncEngineState.<scope> — CKSyncEngine.State.Serialization
 ///   expo.cloudkit.<containerID>.token.<scope>.<zone>    — CKServerChangeToken
 ///
 /// If UserDefaults are cleared (e.g. app reinstall), the adapters perform a full
@@ -136,11 +136,17 @@ final class ChangeTokenStore {
   /// CKSyncEngine.State.Serialization conforms to Codable (iOS 17+) and
   /// NSSecureCoding (iOS 17–17.x). In iOS 18+, NSSecureCoding was removed;
   /// we use PropertyListEncoder which works across all supported versions.
+  ///
+  /// The `scope` parameter qualifies the key so multiple engines (private,
+  /// shared) can each persist their own state without overwriting each other.
+  /// The default value of `.private` keeps backwards compatibility for any
+  /// call sites that do not pass a scope explicitly.
   @available(iOS 17, macOS 14, *)
-  func saveSyncEngineState(_ serialization: CKSyncEngine.State.Serialization) {
+  func saveSyncEngineState(_ serialization: CKSyncEngine.State.Serialization, scope: CKDatabase.Scope = .private) {
+    let scopeStr = scopeString(scope)
     do {
       let data = try PropertyListEncoder().encode(serialization)
-      defaults.set(data, forKey: key("syncEngineState"))
+      defaults.set(data, forKey: key("syncEngineState.\(scopeStr)"))
     } catch {
       // Non-fatal: next launch will trigger a full re-sync
     }
@@ -148,9 +154,13 @@ final class ChangeTokenStore {
 
   /// Loads the previously persisted CKSyncEngine state serialization, or nil
   /// if none exists (triggers a full re-sync on first launch or after token loss).
+  ///
+  /// Pass `scope` to load state for a specific database scope. Defaults to `.private`
+  /// for backwards compatibility.
   @available(iOS 17, macOS 14, *)
-  func loadSyncEngineState() -> CKSyncEngine.State.Serialization? {
-    guard let data = defaults.data(forKey: key("syncEngineState")) else { return nil }
+  func loadSyncEngineState(scope: CKDatabase.Scope = .private) -> CKSyncEngine.State.Serialization? {
+    let scopeStr = scopeString(scope)
+    guard let data = defaults.data(forKey: key("syncEngineState.\(scopeStr)")) else { return nil }
     return try? PropertyListDecoder().decode(CKSyncEngine.State.Serialization.self, from: data)
   }
 
@@ -208,13 +218,15 @@ final class ChangeTokenStore {
   }
 
   private func zoneTokenKey(zoneID: CKRecordZone.ID, scope: CKDatabase.Scope) -> String {
-    let scopeStr: String
+    return "\(prefix).token.\(scopeString(scope)).\(zoneID.zoneName)"
+  }
+
+  private func scopeString(_ scope: CKDatabase.Scope) -> String {
     switch scope {
-    case .private: scopeStr = "private"
-    case .shared:  scopeStr = "shared"
-    case .public:  scopeStr = "public"
-    @unknown default: scopeStr = "private"
+    case .private: return "private"
+    case .shared:  return "shared"
+    case .public:  return "public"
+    @unknown default: return "private"
     }
-    return "\(prefix).token.\(scopeStr).\(zoneID.zoneName)"
   }
 }

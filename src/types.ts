@@ -521,8 +521,25 @@ export interface AcceptShareOptions {
 export interface SyncEngineConfig {
   /** Zone names to track with the sync engine. */
   zones: string[];
-  /** Which database to sync. Default: 'private'. */
+  /**
+   * Which database scope to sync. Default: 'private'.
+   * @deprecated Use `databases` instead. If both `database` and `databases`
+   * are set, `databases` takes precedence and `database` is ignored.
+   */
   database?: DatabaseScope;
+  /**
+   * Which database scope(s) to sync. Replaces the singular `database` field.
+   *
+   * Pass `'private'`, `'shared'`, or `['private', 'shared']`. When multiple
+   * scopes are given, the module creates one sync engine per scope internally
+   * (one `CKSyncEngine` instance per `CKDatabase`).
+   *
+   * Note: `'public'` is not supported — `CKSyncEngine` does not support the
+   * public database. Use push subscriptions (`saveQuerySubscription`) instead.
+   *
+   * Default: `'private'`.
+   */
+  databases?: DatabaseScope | DatabaseScope[];
   /**
    * Whether the engine should schedule syncs automatically.
    * On iOS 17+, uses CKSyncEngine's built-in scheduling.
@@ -575,6 +592,24 @@ export interface SyncState {
 }
 
 /**
+ * Scope-keyed dictionary returned by `getSyncState()` when multiple sync
+ * engines are running.
+ *
+ * - When a single scope is running, the result has one key.
+ * - When no engine is running, returns an empty object `{}`.
+ * - When two scopes are running, both keys are present with independent states.
+ *
+ * @example
+ * ```typescript
+ * const states = getSyncState();
+ * // { private: { usesSyncEngine: true, status: 'idle' },
+ * //   shared:  { usesSyncEngine: true, status: 'syncing' } }
+ * const privateStatus = states.private?.status;
+ * ```
+ */
+export type SyncStateMap = Partial<Record<DatabaseScope, SyncState>>;
+
+/**
  * Discriminated-union type for all events emitted by `addSyncEngineListener`.
  * Filter by `event.type` to handle each case.
  */
@@ -592,6 +627,8 @@ export type SyncEngineEventType =
  */
 export interface SyncStateChangedEvent {
   type: 'stateChanged';
+  /** Which database scope this state change applies to. */
+  databaseScope: DatabaseScope;
   /** The updated sync state. */
   state: SyncState;
 }
@@ -602,6 +639,8 @@ export interface SyncStateChangedEvent {
  */
 export interface RecordsFetchedEvent {
   type: 'recordsFetched';
+  /** Which database scope these records were fetched from. */
+  databaseScope: DatabaseScope;
   /** The name of the CloudKit record zone this event's records belong to. */
   zoneName: string;
   /** Records that were inserted or modified on the server. */
@@ -616,6 +655,8 @@ export interface RecordsFetchedEvent {
  */
 export interface RecordsSentEvent {
   type: 'recordsSent';
+  /** Which database scope these records were sent to. */
+  databaseScope: DatabaseScope;
   /** Records successfully saved to the server. */
   savedRecords: SavedRecord[];
   /**
@@ -637,6 +678,8 @@ export interface RecordsSentEvent {
  */
 export interface SyncErrorEvent {
   type: 'syncError';
+  /** Which database scope's engine encountered this error. */
+  databaseScope: DatabaseScope;
   error: { code: string; message: string };
 }
 
@@ -655,6 +698,8 @@ export interface SyncErrorEvent {
  */
 export interface SyncConflictEvent {
   type: 'conflict';
+  /** Which database scope's engine detected this conflict. */
+  databaseScope: DatabaseScope;
   /** Opaque identifier; pass this to `resolveSyncConflict()`. */
   requestId: string;
   /**
@@ -682,6 +727,8 @@ export interface SyncConflictEvent {
  */
 export interface SyncCompletedEvent {
   type: 'syncCompleted';
+  /** Which database scope's sync cycle completed. */
+  databaseScope: DatabaseScope;
   /** Total number of records received across all batches in this sync cycle. */
   recordCount: number;
   /** Zone names that were synced. */
@@ -726,8 +773,8 @@ export type SyncEngineEvent =
  * - `type: 'delete'` requires `recordIdentifier` — omitting it is a TypeScript error.
  */
 export type PendingRecordChange =
-  | { type: 'save'; record: RecordToSave }
-  | { type: 'delete'; recordIdentifier: RecordIdentifier };
+  | { type: 'save'; record: RecordToSave; database?: DatabaseScope }
+  | { type: 'delete'; recordIdentifier: RecordIdentifier; database?: DatabaseScope };
 
 // ---------------------------------------------------------------------------
 // Push Subscriptions (Phase B)
@@ -1329,6 +1376,8 @@ export interface OperationMetrics {
  * polling path). Use the `syncEngine` field to distinguish the two.
  */
 export interface SyncHealthEvent {
+  /** Which database scope this health event applies to. */
+  databaseScope: DatabaseScope;
   /**
    * Number of local records successfully sent to the server in this cycle.
    */

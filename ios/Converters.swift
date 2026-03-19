@@ -260,6 +260,15 @@ enum Converters {
     }
   }
 
+  static func fromDatabaseScope(_ scope: CKDatabase.Scope) -> String {
+    switch scope {
+    case .private:  return "private"
+    case .shared:   return "shared"
+    case .public:   return "public"
+    @unknown default: return "private"
+    }
+  }
+
   // MARK: - NSPredicate from JS
 
   /// Builds an NSPredicate from a JS predicate dict:

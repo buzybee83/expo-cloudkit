@@ -36,6 +36,10 @@ const notStartedState: SyncState = { usesSyncEngine: false, status: 'notStarted'
 const idleState: SyncState = { usesSyncEngine: true, status: 'idle' };
 const syncingState: SyncState = { usesSyncEngine: true, status: 'syncing' };
 
+// getSyncState() now returns a SyncStateMap — wrap states in the map format
+const notStartedMap = { private: notStartedState };
+const idleMap = { private: idleState };
+
 function makeNoopSubscription() {
   return { remove: jest.fn() };
 }
@@ -55,8 +59,8 @@ describe('useCloudKitSync', () => {
     capturedSyncListener = undefined;
     mockSubscription = makeNoopSubscription();
 
-    // getSyncState is called synchronously in useState initializer — must return SyncState
-    mocks.mockGetSyncState.mockReturnValue(notStartedState);
+    // getSyncState now returns SyncStateMap — must return a scope-keyed object
+    mocks.mockGetSyncState.mockReturnValue(notStartedMap);
 
     // Default successful resolutions
     mocks.mockStartSyncEngine.mockResolvedValue(undefined);
@@ -104,7 +108,7 @@ describe('useCloudKitSync', () => {
   });
 
   it('reflects getSyncState() return value as initial state', () => {
-    mocks.mockGetSyncState.mockReturnValue(idleState);
+    mocks.mockGetSyncState.mockReturnValue(idleMap);
 
     const { result } = renderHook(() => useCloudKitSync({ zones: ['MyZone'] }));
 
@@ -112,7 +116,7 @@ describe('useCloudKitSync', () => {
   });
 
   it('isRunning is false when status is notStarted', () => {
-    mocks.mockGetSyncState.mockReturnValue(notStartedState);
+    mocks.mockGetSyncState.mockReturnValue(notStartedMap);
 
     const { result } = renderHook(() => useCloudKitSync({ zones: ['MyZone'] }));
 
@@ -120,7 +124,7 @@ describe('useCloudKitSync', () => {
   });
 
   it('isRunning is true when status is idle', () => {
-    mocks.mockGetSyncState.mockReturnValue(idleState);
+    mocks.mockGetSyncState.mockReturnValue(idleMap);
 
     const { result } = renderHook(() => useCloudKitSync({ zones: ['MyZone'] }));
 
@@ -133,7 +137,7 @@ describe('useCloudKitSync', () => {
     await waitFor(() => expect(capturedSyncListener).toBeDefined());
 
     act(() => {
-      capturedSyncListener?.({ type: 'stateChanged', state: syncingState });
+      capturedSyncListener?.({ type: 'stateChanged', databaseScope: 'private', state: syncingState });
     });
 
     expect(result.current.state).toEqual(syncingState);
@@ -146,7 +150,7 @@ describe('useCloudKitSync', () => {
     await waitFor(() => expect(capturedSyncListener).toBeDefined());
 
     act(() => {
-      capturedSyncListener?.({ type: 'stateChanged', state: idleState });
+      capturedSyncListener?.({ type: 'stateChanged', databaseScope: 'private', state: idleState });
     });
 
     expect(result.current.state).toEqual(idleState);
@@ -164,6 +168,7 @@ describe('useCloudKitSync', () => {
 
     const event: RecordsFetchedEvent = {
       type: 'recordsFetched',
+      databaseScope: 'private',
       zoneName: 'MyZone',
       changedRecords: [],
       deletedRecordIDs: [],
@@ -188,6 +193,7 @@ describe('useCloudKitSync', () => {
 
     const event: RecordsSentEvent = {
       type: 'recordsSent',
+      databaseScope: 'private',
       savedRecords: [],
       failedRecords: [],
     };
@@ -211,6 +217,7 @@ describe('useCloudKitSync', () => {
 
     const errorEvent: SyncErrorEvent = {
       type: 'syncError',
+      databaseScope: 'private',
       error: { code: CloudKitErrorCode.NETWORK_UNAVAILABLE, message: 'Network error' },
     };
 
