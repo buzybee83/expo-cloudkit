@@ -10,7 +10,8 @@
     "plugin",
     "app.plugin.js",
     "expo-module.config.json",
-    "ExpoCloudKit.podspec"
+    "ExpoCloudKit.podspec",
+    "Package.swift"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && tsc -p plugin/tsconfig.json",

@@ -88,6 +88,20 @@ npx expo install expo-cloudkit
 
 The module is auto-linked — no manual `pod install` step beyond `expo prebuild`.
 
+### Swift Package Manager (Experimental)
+
+> SPM support is available for pure Swift (non-Expo) projects. Expo projects should continue using CocoaPods.
+
+Add expo-cloudkit as a package dependency in Xcode or your `Package.swift`:
+
+```swift
+.package(url: "https://github.com/buzybee83/expo-cloudkit.git", from: "0.10.0")
+```
+
+Then add `"ExpoCloudKit"` to your target's dependencies. The `CloudKitRecordManager`, `CloudKitZoneManager`, `CloudKitShareManager`, `CloudKitSyncEngine`, and other managers are available directly.
+
+**Note:** Full SPM support (including the Expo module entry point) is pending ExpoModulesCore adding SPM distribution. Track progress at [expo/expo](https://github.com/expo/expo).
+
 ---
 
 ## Configuration

@@ -1,5 +1,7 @@
 import CloudKit
+#if canImport(ExpoModulesCore)
 import ExpoModulesCore
+#endif
 
 /// A scoped CloudKit client bound to a specific CKContainer.
 ///
