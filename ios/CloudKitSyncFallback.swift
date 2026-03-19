@@ -137,6 +137,11 @@ actor CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
     pollingTimer = timer
   }
 
+  // Non-throwing: teardown is best-effort; timer invalidation and state reset
+  // cannot fail. If this method ever needs to surface errors, add `throws` here and
+  // update CloudKitSyncProtocol.swift (func stop() async throws) and
+  // CloudKitSyncEngine.swift accordingly — the do/catch wrappers in
+  // stopSyncEngine() will then propagate those errors to JS automatically.
   func stop() {
     // Invalidate the timer on the main run loop.
     let timer = pollingTimer

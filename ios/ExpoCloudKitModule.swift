@@ -1004,8 +1004,12 @@ public class ExpoCloudKitModule: Module {
         }
         ExpoCloudKitModule.sharedSyncProviders.removeValue(forKey: scope)
         Task {
-          await provider.stop()
-          promise.resolve(nil)
+          do {
+            await provider.stop()
+            promise.resolve(nil)
+          } catch {
+            promise.reject(Converters.toExpoError(error))
+          }
         }
       } else {
         // Stop all providers.
@@ -1013,10 +1017,17 @@ public class ExpoCloudKitModule: Module {
         self.syncProviders.removeAll()
         ExpoCloudKitModule.sharedSyncProviders.removeAll()
         Task {
-          for (_, provider) in providers {
-            await provider.stop()
+          do {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+              for (_, provider) in providers {
+                group.addTask { await provider.stop() }
+              }
+              try await group.waitForAll()
+            }
+            promise.resolve(nil)
+          } catch {
+            promise.reject(Converters.toExpoError(error))
           }
-          promise.resolve(nil)
         }
       }
     }
