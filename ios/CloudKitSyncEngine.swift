@@ -122,6 +122,11 @@ actor CloudKitSyncEngineAdapter: CloudKitSyncProvider {
     emit(.stateChanged(.idle))
   }
 
+  // Non-throwing: teardown is best-effort; CKSyncEngine cancels in-flight operations
+  // without error. If this method ever needs to surface errors, add `throws` here and
+  // update CloudKitSyncProtocol.swift (func stop() async throws) and
+  // CloudKitSyncFallback.swift accordingly — the do/catch wrappers in
+  // stopSyncEngine() will then propagate those errors to JS automatically.
   func stop() {
     // CKSyncEngine has no explicit stop API — releasing the reference stops
     // automatic syncing. Pending changes already queued in the engine are still
