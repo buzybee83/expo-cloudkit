@@ -11,6 +11,21 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.13.0] — 2026-03-19
+
+### Added
+
+- **`createZoneShare(zoneName, database?)`** — convenience method that creates a zone-level `CKShare` without requiring a pre-existing anchor record. Internally creates a `_zoneShare` sentinel record, saves it with a new `CKShare`, and presents `UICloudSharingController`. Idempotent: returns the existing share URL if the zone is already shared. Returns `null` on user cancel.
+- **`getShareURL(recordName, zoneName, database?)`** — fetches an existing share's URL without re-presenting `UICloudSharingController`. Useful for "Copy invite link" flows. Throws `SHARE_NOT_FOUND` if no share is attached to the record.
+- **`syncCompleted` event** — new `SyncEngineEvent` type emitted once after each full zone pull cycle. Payload: `recordCount`, `zoneNames`, `isInitialSync`. Fired by both the iOS 17+ `CKSyncEngine` path and the iOS 16 fallback adapter.
+- **`CloudKitErrorCode.SHARE_NOT_FOUND`** — new error code for `getShareURL` when no share is attached to a record.
+
+### Fixed
+
+- **`SyncConflictEvent.serverRecord`** — now typed as `RecordToSave` (was `CloudKitRecord`), eliminating the `as unknown as RecordToSave` double-cast previously required when calling `resolveSyncConflict()`. `clientRecord` updated to match.
+
+---
+
 ## [0.12.0] — 2026-03-19
 
 ### Added
