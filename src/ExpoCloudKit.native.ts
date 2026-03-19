@@ -1531,3 +1531,51 @@ export function addRateLimitedListener(
   const subscription = emitter!.addListener('onRateLimited', callback);
   return { remove: () => subscription.remove() };
 }
+
+// ---------------------------------------------------------------------------
+// Background Sync — BGTaskScheduler (iOS 13+)
+// ---------------------------------------------------------------------------
+
+/**
+ * Registers the BGAppRefreshTask handler and schedules the first background
+ * refresh. Must be called early in the app lifecycle (e.g. root component
+ * `useEffect`) so the registration is in place before the app first backgrounds.
+ *
+ * The `taskIdentifier` must match the value set in the `backgroundSyncTaskIdentifier`
+ * config plugin option, which adds it to `BGTaskSchedulerPermittedIdentifiers`
+ * in Info.plist. If they do not match the system silently ignores background launches.
+ *
+ * @param taskIdentifier - BGTask identifier, e.g. `"com.example.myapp.cloudkit-sync"`.
+ * @returns Promise that resolves once the handler is registered.
+ * @throws {CloudKitNotSupportedError} On Android/web (background tasks are iOS-only).
+ *
+ * @example
+ * ```typescript
+ * useEffect(() => {
+ *   registerBackgroundSync('com.example.myapp.cloudkit-sync');
+ * }, []);
+ * ```
+ */
+export function registerBackgroundSync(taskIdentifier: string): Promise<void> {
+  return callAsync(() => NativeModule!.registerBackgroundSync(taskIdentifier));
+}
+
+/**
+ * Asks the system to schedule a background refresh as soon as conditions allow.
+ *
+ * The system already reschedules automatically after each completed background
+ * task. Call this if you want to proactively request a refresh — for example,
+ * after the user makes a change that you know the widget or Watch app needs.
+ *
+ * @returns Promise that resolves once the request has been submitted.
+ * @throws {CloudKitNotSupportedError} On Android/web.
+ *
+ * @example
+ * ```typescript
+ * await saveRecords([note]);
+ * await scheduleBackgroundSync(); // hint to the system to sync soon
+ * ```
+ */
+export function scheduleBackgroundSync(): Promise<void> {
+  return callAsync(() => NativeModule!.scheduleBackgroundSync());
+}

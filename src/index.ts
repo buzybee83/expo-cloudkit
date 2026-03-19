@@ -255,3 +255,6 @@ export { addSyncHealthListener } from './ExpoCloudKit';
 export { batchFetchRecords, addRateLimitedListener } from './ExpoCloudKit';
 export { useSyncHealth } from './hooks/useSyncHealth';
 export type { SyncHealthState } from './hooks/useSyncHealth';
+
+// Background Sync — BGTaskScheduler (iOS 13+)
+export { registerBackgroundSync, scheduleBackgroundSync } from './ExpoCloudKit';

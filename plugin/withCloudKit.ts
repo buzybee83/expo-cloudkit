@@ -49,6 +49,26 @@ export interface WithCloudKitOptions {
    * Default: 'Production' (Xcode requires a string, not an array).
    */
   iCloudContainerEnvironment?: 'Development' | 'Production';
+
+  /**
+   * Optional BGTask identifier for background CloudKit sync.
+   *
+   * When set, the plugin:
+   *   1. Adds the identifier to `BGTaskSchedulerPermittedIdentifiers` in Info.plist.
+   *   2. Adds `fetch` and `processing` to `UIBackgroundModes` in Info.plist.
+   *
+   * Pass the same string to `registerBackgroundSync(taskIdentifier)` at runtime.
+   *
+   * A common convention is `$(PRODUCT_BUNDLE_IDENTIFIER).cloudkit-sync`, but any
+   * reverse-DNS string works as long as it is unique within the app and matches
+   * the value passed to `registerBackgroundSync()`.
+   *
+   * @example
+   * ```json
+   * { "backgroundSyncTaskIdentifier": "com.example.myapp.cloudkit-sync" }
+   * ```
+   */
+  backgroundSyncTaskIdentifier?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -56,7 +76,8 @@ export interface WithCloudKitOptions {
 // ---------------------------------------------------------------------------
 
 const withCloudKitPlugin: ConfigPlugin<WithCloudKitOptions> = (config, options) => {
-  const { containerIds, iCloudContainerEnvironment = 'Production' } = options;
+  const { containerIds, iCloudContainerEnvironment = 'Production', backgroundSyncTaskIdentifier } =
+    options;
 
   if (!containerIds || containerIds.length === 0) {
     throw new Error(
@@ -99,17 +120,37 @@ const withCloudKitPlugin: ConfigPlugin<WithCloudKitOptions> = (config, options) 
     return config;
   });
 
-  // Step 2: Add background modes for remote notifications
-  // Required for CKSyncEngine to wake the app on remote change notifications.
+  // Step 2: Add background modes and optional BGTaskScheduler identifier.
+  // remote-notification: Required for CKSyncEngine to wake the app on push.
+  // fetch + processing:  Required for BGAppRefreshTask (background sync).
   config = withInfoPlist(config, (config) => {
+    // UIBackgroundModes -------------------------------------------------------
     const existingModes: string[] =
       (config.modResults['UIBackgroundModes'] as string[]) ?? [];
 
-    if (!existingModes.includes('remote-notification')) {
-      config.modResults['UIBackgroundModes'] = [
-        ...existingModes,
-        'remote-notification',
-      ];
+    const requiredModes = ['remote-notification'];
+    if (backgroundSyncTaskIdentifier) {
+      // BGAppRefreshTask requires both 'fetch' and 'processing'.
+      requiredModes.push('fetch', 'processing');
+    }
+
+    const mergedModes = Array.from(new Set([...existingModes, ...requiredModes]));
+    config.modResults['UIBackgroundModes'] = mergedModes;
+
+    // BGTaskSchedulerPermittedIdentifiers -------------------------------------
+    // The system uses this allowlist to validate BGTask identifiers at launch.
+    // If the identifier is not listed here the task handler registration is
+    // silently ignored and background launches will never occur.
+    if (backgroundSyncTaskIdentifier) {
+      const existingIdentifiers: string[] =
+        (config.modResults['BGTaskSchedulerPermittedIdentifiers'] as string[]) ?? [];
+
+      if (!existingIdentifiers.includes(backgroundSyncTaskIdentifier)) {
+        config.modResults['BGTaskSchedulerPermittedIdentifiers'] = [
+          ...existingIdentifiers,
+          backgroundSyncTaskIdentifier,
+        ];
+      }
     }
 
     return config;
