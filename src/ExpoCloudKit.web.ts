@@ -1340,6 +1340,16 @@ export function drainOfflineQueue(): Promise<OfflineQueueDrainResult> {
 /**
  * Throws `CloudKitNotSupportedError` — offline queue is not available on web.
  */
+export function drainOfflineQueueForZone(
+  _zoneName: string,
+  _database?: DatabaseScope
+): Promise<OfflineQueueDrainResult> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+/**
+ * Throws `CloudKitNotSupportedError` — offline queue is not available on web.
+ */
 export function getOfflineQueueStatus(_options?: {
   includeEntries?: boolean;
 }): Promise<OfflineQueueStatus> {
@@ -1498,4 +1508,38 @@ export function fetchAllZoneChanges(
   _database: DatabaseScope = 'private'
 ): Promise<ZoneChanges> {
   return Promise.reject(new CloudKitNotSupportedError());
+}
+
+// ---------------------------------------------------------------------------
+// Token Management — web stubs (no UserDefaults on web)
+// ---------------------------------------------------------------------------
+
+/**
+ * Not supported on web — CKServerChangeToken is a native CloudKit concept.
+ * Returns null on all non-iOS platforms.
+ *
+ * @param _zoneName - Ignored on web.
+ * @param _database - Ignored on web.
+ * @returns null
+ */
+export function getZoneChangeToken(
+  _zoneName: string,
+  _database: DatabaseScope = 'private'
+): string | null {
+  return null;
+}
+
+/**
+ * No-op on web — CKServerChangeToken persistence is handled natively via UserDefaults.
+ *
+ * @param _zoneName    - Ignored on web.
+ * @param _database    - Ignored on web.
+ * @param _tokenBase64 - Ignored on web.
+ */
+export function setZoneChangeToken(
+  _zoneName: string,
+  _database: DatabaseScope = 'private',
+  _tokenBase64: string | null
+): void {
+  // no-op on web
 }

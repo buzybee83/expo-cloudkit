@@ -231,6 +231,7 @@ export { fetchRecordWithReferences, deleteRecordWithReferences } from './ExpoClo
 export {
   enqueueOfflineOperation,
   drainOfflineQueue,
+  drainOfflineQueueForZone,
   getOfflineQueueStatus,
   clearOfflineQueue,
   retryFailedOperations,
@@ -266,3 +267,6 @@ export type { SyncHealthState } from './hooks/useSyncHealth';
 
 // Background Sync — BGTaskScheduler (iOS 13+)
 export { registerBackgroundSync, scheduleBackgroundSync } from './ExpoCloudKit';
+
+// Token management — persist CKServerChangeToken across reinstalls
+export { getZoneChangeToken, setZoneChangeToken } from './ExpoCloudKit';

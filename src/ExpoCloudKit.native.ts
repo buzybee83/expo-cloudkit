@@ -1275,6 +1275,73 @@ export function drainOfflineQueue(): Promise<OfflineQueueDrainResult> {
 }
 
 /**
+ * Drains pending offline queue entries for a specific zone only.
+ *
+ * Unlike `drainOfflineQueue()` which processes all pending entries,
+ * this variant filters to entries whose record's `zoneName` matches
+ * the given zone. Entries for other zones are left in the queue.
+ *
+ * Useful when a zone's subscription comes back online and you want
+ * to flush only that zone's backlog without unnecessary network
+ * activity on other zones.
+ *
+ * Implementation note: the native offline queue has no zone-scoped drain
+ * API, so this function is implemented entirely in TypeScript. It reads all
+ * queue entries via `getOfflineQueueStatus({ includeEntries: true })`,
+ * filters to entries belonging to the requested zone, and invokes
+ * `saveRecords` / `deleteRecords` directly for each matching entry.
+ * Processed entries remain in the queue and will be skipped on the next
+ * full `drainOfflineQueue()` call once CloudKit has accepted them (CloudKit
+ * saves and deletes are idempotent).
+ *
+ * @param zoneName - Only process entries whose records belong to this zone.
+ * @param database - Which database scope. Default: 'private'.
+ * @returns Summary of processed entries for the specified zone.
+ * @throws {CloudKitNotSupportedError} on non-iOS platforms.
+ *
+ * @example
+ * ```typescript
+ * // When 'MyZone' comes back online, flush only its backlog:
+ * const result = await drainOfflineQueueForZone('MyZone');
+ * console.log(`${result.succeeded} saved, ${result.failed} failed`);
+ * ```
+ */
+export async function drainOfflineQueueForZone(
+  zoneName: string,
+  database: DatabaseScope = 'private'
+): Promise<OfflineQueueDrainResult> {
+  const status = await getOfflineQueueStatus({ includeEntries: true });
+  const entries = status.entries ?? [];
+
+  const nonFailed = entries.filter((entry) => entry.status !== 'failed');
+  const matching = nonFailed.filter((entry) => {
+    if (entry.database !== database) return false;
+    const recordZone = (entry.recordData as RecordToSave | RecordIdentifier).zoneName;
+    return recordZone === zoneName;
+  });
+
+  let succeeded = 0;
+  let failed = 0;
+  // Entries that are non-failed but belong to a different zone or database are skipped.
+  const skipped = nonFailed.length - matching.length;
+
+  for (const entry of matching) {
+    try {
+      if (entry.operation === 'save') {
+        await saveRecords([entry.recordData as RecordToSave], database);
+      } else {
+        await deleteRecords([entry.recordData as RecordIdentifier], database);
+      }
+      succeeded++;
+    } catch {
+      failed++;
+    }
+  }
+
+  return { succeeded, failed, skipped };
+}
+
+/**
  * Returns the current aggregate status of the offline operation queue.
  *
  * Pass `{ includeEntries: true }` to also receive the full list of queue

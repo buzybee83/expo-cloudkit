@@ -2089,6 +2089,59 @@ public class ExpoCloudKitModule: Module {
         }
       }
     }
+
+    // -------------------------------------------------------------------------
+    // Token Management — change token read/write for cross-reinstall persistence
+    // -------------------------------------------------------------------------
+
+    /// Returns the persisted CKServerChangeToken for the given zone as a base64 string,
+    /// or nil if no token has been stored (zone has never been synced).
+    ///
+    /// Reading from UserDefaults is synchronous, so this is a synchronous Function.
+    /// JS callers can persist the result in AsyncStorage and seed it back on reinstall
+    /// via `setZoneChangeToken` to avoid a full zone re-fetch.
+    Function("getZoneChangeToken") { [weak self] (zoneName: String, database: String) -> String? in
+      guard let self = self, let store = self.tokenStore else { return nil }
+      let scope = Converters.toDatabaseScope(database)
+      let zoneID = CKRecordZone.ID(zoneName: zoneName, ownerName: CKCurrentUserDefaultName)
+      guard let token = store.loadZoneToken(zoneID: zoneID, scope: scope) else {
+        return nil
+      }
+      guard let data = try? NSKeyedArchiver.archivedData(
+        withRootObject: token,
+        requiringSecureCoding: true
+      ) else {
+        return nil
+      }
+      return data.base64EncodedString()
+    }
+
+    /// Seeds a previously-persisted CKServerChangeToken for the given zone.
+    /// Pass nil as tokenBase64 to clear the token and force a full re-sync for that zone.
+    ///
+    /// Writing to UserDefaults is synchronous, so this is a synchronous Function.
+    /// Silently ignores tokens that cannot be decoded — the next sync will perform
+    /// a full re-fetch, which is safe.
+    Function("setZoneChangeToken") { [weak self] (zoneName: String, database: String, tokenBase64: String?) in
+      guard let self = self, let store = self.tokenStore else { return }
+      let scope = Converters.toDatabaseScope(database)
+      let zoneID = CKRecordZone.ID(zoneName: zoneName, ownerName: CKCurrentUserDefaultName)
+      guard let tokenBase64 = tokenBase64 else {
+        // nil clears the token — forces full re-sync for this zone
+        store.clearZoneToken(zoneID: zoneID, scope: scope)
+        return
+      }
+      guard let data = Data(base64Encoded: tokenBase64),
+            let token = try? NSKeyedUnarchiver.unarchivedObject(
+              ofClass: CKServerChangeToken.self,
+              from: data
+            )
+      else {
+        // Silently ignore invalid tokens — next fetch will be a full re-sync
+        return
+      }
+      store.saveZoneToken(token, zoneID: zoneID, scope: scope)
+    }
   }
 }
 
