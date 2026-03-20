@@ -231,6 +231,7 @@ export { fetchRecordWithReferences, deleteRecordWithReferences } from './ExpoClo
 export {
   enqueueOfflineOperation,
   drainOfflineQueue,
+  drainOfflineQueueForZone,
   getOfflineQueueStatus,
   clearOfflineQueue,
   retryFailedOperations,
