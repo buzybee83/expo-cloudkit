@@ -21,8 +21,7 @@ function makeRecord(fields: CloudKitRecord['fields']): CloudKitRecord {
     recordName: 'test-record-001',
     zoneName: '_defaultZone',
     ownerName: '_owner',
-    modificationDate: null,
-    creationDate: null,
+    // creationDate and modificationDate are optional — omit to test the unsaved-record case
     changeTag: null,
     fields,
   };

@@ -35,16 +35,32 @@ enum Converters {
       }
     }
 
-    return [
+    var dict: [String: Any] = [
       "recordType": record.recordType,
       "recordName": record.recordID.recordName,
       "zoneName": record.recordID.zoneID.zoneName,
       "ownerName": record.recordID.zoneID.ownerName,
-      "modificationDate": isoString(from: record.modificationDate),
-      "creationDate": isoString(from: record.creationDate),
       "changeTag": record.recordChangeTag as Any,
       "fields": fields
     ]
+
+    // System metadata — absent on locally-created records that have not yet
+    // been saved to CloudKit. Serialised as Unix ms timestamps so JS callers
+    // receive a plain number rather than an ISO 8601 string.
+    if let creationDate = record.creationDate {
+      dict["creationDate"] = creationDate.timeIntervalSince1970 * 1000
+    }
+    if let modificationDate = record.modificationDate {
+      dict["modificationDate"] = modificationDate.timeIntervalSince1970 * 1000
+    }
+    if let creatorID = record.creatorUserRecordID {
+      dict["createdByUserRecordID"] = creatorID.recordName
+    }
+    if let modifierID = record.lastModifiedUserRecordID {
+      dict["modifiedByUserRecordID"] = modifierID.recordName
+    }
+
+    return dict
   }
 
   // MARK: - Field → Dictionary
