@@ -11,6 +11,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.16.0] — 2026-03-19
+
+### Added
+
+- **System fields on `CloudKitRecord`** — `creationDate`, `modificationDate` (Unix ms timestamps), `createdByUserRecordID`, `modifiedByUserRecordID` are now included on every record returned by `saveRecords`, `fetchRecord`, `queryRecords`, and `fetchRecordZoneChanges`. Fields are absent (not null) on unsaved records. Date type changed from ISO string to `number` (Unix ms) for consistency with CloudKit JS.
+- **`fetchAllZoneChanges(zoneNames, database?)`** — auto-paginates `fetchRecordZoneChanges` until `moreComing` is false, returning a single merged `ZoneChanges` result. Eliminates the manual pagination loop every caller was writing.
+- **`useInfiniteQuery(options)`** — React hook for cursor-based infinite scroll over `queryRecords`. Separate `isLoading` / `isFetchingNextPage` states, `hasNextPage` flag, `fetchNextPage()` action.
+- **`fetchPrivateDatabaseZones()`** — named alias for `fetchZones('private')`. Symmetric counterpart to `fetchSharedDatabaseZones()` for zone discovery on reinstall or new-device install.
+- **`drainOfflineQueueForZone(zoneName, database?)`** — zone-scoped offline queue drain. Flushes only entries belonging to the specified zone, leaving other zones' entries queued. Useful when a single zone's subscription resumes after being offline.
+- **`getZoneChangeToken(zoneName, database?)`** — returns the persisted `CKServerChangeToken` for a zone as a base64 string. Use to persist tokens across reinstalls in your own storage.
+- **`setZoneChangeToken(zoneName, database?, tokenBase64)`** — seeds a previously-persisted token back on reinstall to avoid a full zone re-fetch. Pass `null` to clear the token and force a full re-sync.
+
+---
+
 ## [0.15.0] — 2026-03-19
 
 ### Added
