@@ -237,6 +237,19 @@ export function fetchZones(database: DatabaseScope = 'private'): Promise<Zone[]>
   return callAsync(() => NativeModule!.fetchZones(database));
 }
 
+/**
+ * Returns all custom zones in the private database.
+ *
+ * Symmetric counterpart to `fetchSharedDatabaseZones()`. Use this on reinstall
+ * or new-device install to rediscover existing private zones (e.g. per-account
+ * zones created by a previous install) before starting the sync engine.
+ *
+ * Equivalent to `fetchZones('private')`.
+ */
+export function fetchPrivateDatabaseZones(): Promise<Zone[]> {
+  return fetchZones('private');
+}
+
 // ---------------------------------------------------------------------------
 // Record CRUD (Phase A)
 // ---------------------------------------------------------------------------
@@ -1712,4 +1725,45 @@ export async function fetchAllZoneChanges(
     syncToken: result.syncToken,
     moreComing: false,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Token Management — change token read/write for cross-reinstall persistence
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the persisted CKServerChangeToken for the given zone as a base64 string,
+ * or null if no token has been stored (zone has never been synced).
+ *
+ * Use this to persist the token in your own storage (e.g. AsyncStorage) across
+ * reinstalls. On a fresh install, call `setZoneChangeToken()` to seed the token
+ * before starting the sync engine — this avoids a full zone re-fetch.
+ *
+ * @param zoneName - The zone to get the token for.
+ * @param database - Which database scope. Default: 'private'.
+ * @returns Base64-encoded CKServerChangeToken, or null if not synced yet.
+ */
+export function getZoneChangeToken(
+  zoneName: string,
+  database: DatabaseScope = 'private'
+): string | null {
+  if (!NativeModule) return null;
+  return NativeModule.getZoneChangeToken(zoneName, database) ?? null;
+}
+
+/**
+ * Seeds a previously-persisted CKServerChangeToken for the given zone.
+ * Pass null to clear the token and force a full re-sync for that zone.
+ *
+ * @param zoneName    - The zone to set the token for.
+ * @param database    - Which database scope. Default: 'private'.
+ * @param tokenBase64 - Base64 token from `getZoneChangeToken()`, or null to clear.
+ */
+export function setZoneChangeToken(
+  zoneName: string,
+  database: DatabaseScope = 'private',
+  tokenBase64: string | null
+): void {
+  if (!NativeModule) return;
+  NativeModule.setZoneChangeToken(zoneName, database, tokenBase64);
 }

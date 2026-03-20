@@ -473,6 +473,19 @@ export async function fetchZones(database: DatabaseScope = 'private'): Promise<Z
   }
 }
 
+/**
+ * Returns all custom zones in the private database.
+ *
+ * Symmetric counterpart to `fetchSharedDatabaseZones()`. Use this on reinstall
+ * or new-device install to rediscover existing private zones (e.g. per-account
+ * zones created by a previous install) before starting the sync engine.
+ *
+ * Equivalent to `fetchZones('private')`.
+ */
+export function fetchPrivateDatabaseZones(): Promise<Zone[]> {
+  return fetchZones('private');
+}
+
 // ---------------------------------------------------------------------------
 // Record CRUD
 // ---------------------------------------------------------------------------
