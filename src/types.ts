@@ -177,14 +177,24 @@ export interface CloudKitRecord {
   zoneName: string;
   /** Record owner name. */
   ownerName: string;
-  /** CKRecord modification date as ISO 8601 string. */
-  modificationDate: string | null;
-  /** CKRecord creation date as ISO 8601 string. */
-  creationDate: string | null;
+  /**
+   * Unix ms timestamp of when the record was created on the server.
+   * Absent on unsaved (locally-created) records.
+   */
+  creationDate?: number;
+  /**
+   * Unix ms timestamp of when the record was last modified on the server.
+   * Absent on unsaved (locally-created) records.
+   */
+  modificationDate?: number;
   /** CKRecord.recordChangeTag — used for conflict detection. */
   changeTag: string | null;
   /** All fields on the record, keyed by field name. */
   fields: Record<string, RecordField>;
+  /** recordName of the iCloud user who created this record. Absent until the record is saved. */
+  createdByUserRecordID?: string;
+  /** recordName of the iCloud user who last modified this record. Absent until the record is saved. */
+  modifiedByUserRecordID?: string;
 }
 
 /** A record to save. Provide `recordName` to update an existing record. */
@@ -213,10 +223,16 @@ export interface SavedRecord {
   recordName: string;
   zoneName: string;
   ownerName: string;
-  modificationDate: string;
-  creationDate: string;
+  /** Unix ms timestamp of when the record was created. Always present on a saved record. */
+  creationDate: number;
+  /** Unix ms timestamp of when the record was last modified. Always present on a saved record. */
+  modificationDate: number;
   changeTag: string;
   fields: Record<string, RecordField>;
+  /** recordName of the iCloud user who created this record. */
+  createdByUserRecordID?: string;
+  /** recordName of the iCloud user who last modified this record. */
+  modifiedByUserRecordID?: string;
 }
 
 /** Identifies a specific record for delete or fetch operations. */
@@ -814,14 +830,14 @@ export interface ContainerInfo {
  * @internal
  */
 export interface RawRecord extends CloudKitRecord {
-  /** ISO 8601 creation date. Alias for `CloudKitRecord.creationDate` — always non-null here. */
-  creationDate: string;
-  /** ISO 8601 modification date. Alias for `CloudKitRecord.modificationDate` — always non-null here. */
-  modificationDate: string;
-  /** CKRecord.ID.recordName of the user who created the record, if available. */
-  creatorUserRecordID?: string;
-  /** CKRecord.ID.recordName of the user who last modified the record, if available. */
-  lastModifiedUserRecordID?: string;
+  /** Unix ms timestamp of record creation. Always non-null on a fetched raw record. */
+  creationDate: number;
+  /** Unix ms timestamp of last modification. Always non-null on a fetched raw record. */
+  modificationDate: number;
+  /** recordName of the iCloud user who created the record, if available. */
+  createdByUserRecordID?: string;
+  /** recordName of the iCloud user who last modified the record, if available. */
+  modifiedByUserRecordID?: string;
   /** CKRecord.recordChangeTag — opaque server version tag used for conflict detection. */
   recordChangeTag?: string;
 }

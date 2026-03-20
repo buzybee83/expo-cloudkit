@@ -173,8 +173,6 @@ describe('mapCKJSError', () => {
         recordType: 'Note',
         zoneName: '_defaultZone',
         ownerName: '__defaultOwner__',
-        creationDate: null,
-        modificationDate: null,
         changeTag: null,
         fields: {},
       };

@@ -697,8 +697,8 @@ export function useCloudKitQuery(
       recordName: tempName,
       zoneName: record.zoneName ?? '',
       ownerName: '',
-      modificationDate: null,
-      creationDate: null,
+      // creationDate and modificationDate are absent on a locally-created
+      // optimistic record — they are populated after the server save.
       changeTag: null,
       fields: record.fields,
     };

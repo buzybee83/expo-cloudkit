@@ -66,28 +66,28 @@ describe('ckjsRecordToCloudKitRecord', () => {
       expect(result.ownerName).toBe('recOwner');
     });
 
-    it('converts created.timestamp to ISO 8601 string', () => {
+    it('converts created.timestamp to Unix ms number', () => {
       const raw = makeRawRecord({ created: { timestamp: 1700000000000 } });
       const result = ckjsRecordToCloudKitRecord(raw);
-      expect(result.creationDate).toBe(new Date(1700000000000).toISOString());
+      expect(result.creationDate).toBe(1700000000000);
     });
 
-    it('converts modified.timestamp to ISO 8601 string', () => {
+    it('converts modified.timestamp to Unix ms number', () => {
       const raw = makeRawRecord({ modified: { timestamp: 1700001000000 } });
       const result = ckjsRecordToCloudKitRecord(raw);
-      expect(result.modificationDate).toBe(new Date(1700001000000).toISOString());
+      expect(result.modificationDate).toBe(1700001000000);
     });
 
-    it('sets creationDate to null when created timestamp is absent', () => {
+    it('omits creationDate when created timestamp is absent', () => {
       const raw = makeRawRecord({ created: undefined });
       const result = ckjsRecordToCloudKitRecord(raw);
-      expect(result.creationDate).toBeNull();
+      expect(result.creationDate).toBeUndefined();
     });
 
-    it('sets modificationDate to null when modified timestamp is absent', () => {
+    it('omits modificationDate when modified timestamp is absent', () => {
       const raw = makeRawRecord({ modified: undefined });
       const result = ckjsRecordToCloudKitRecord(raw);
-      expect(result.modificationDate).toBeNull();
+      expect(result.modificationDate).toBeUndefined();
     });
 
     it('sets changeTag to null when recordChangeTag is absent', () => {
@@ -526,26 +526,26 @@ describe('ckjsSavedRecordToSavedRecord', () => {
     expect(result.recordName).toBe('test-record-name');
     expect(result.recordType).toBe('Note');
     expect(result.changeTag).toBe('change-tag-1');
-    expect(result.creationDate).toBe(new Date(1700000000000).toISOString());
-    expect(result.modificationDate).toBe(new Date(1700001000000).toISOString());
+    expect(result.creationDate).toBe(1700000000000);
+    expect(result.modificationDate).toBe(1700001000000);
     expect(result.fields['title']).toEqual({ type: 'string', value: 'Saved Note' });
   });
 
-  it('uses non-null fallback for modificationDate when absent', () => {
+  it('uses numeric fallback for modificationDate when absent', () => {
     const raw = makeRawRecord({ modified: undefined });
     const result = ckjsSavedRecordToSavedRecord(raw);
-    // Should NOT be null — SavedRecord requires non-null dates
+    // SavedRecord requires a non-null Unix ms number
     expect(result.modificationDate).not.toBeNull();
-    expect(typeof result.modificationDate).toBe('string');
-    // Should be a valid ISO date
-    expect(() => new Date(result.modificationDate)).not.toThrow();
+    expect(typeof result.modificationDate).toBe('number');
+    expect(result.modificationDate).toBeGreaterThan(0);
   });
 
-  it('uses non-null fallback for creationDate when absent', () => {
+  it('uses numeric fallback for creationDate when absent', () => {
     const raw = makeRawRecord({ created: undefined });
     const result = ckjsSavedRecordToSavedRecord(raw);
     expect(result.creationDate).not.toBeNull();
-    expect(typeof result.creationDate).toBe('string');
+    expect(typeof result.creationDate).toBe('number');
+    expect(result.creationDate).toBeGreaterThan(0);
   });
 
   it('uses recordChangeTag from the raw record for changeTag', () => {

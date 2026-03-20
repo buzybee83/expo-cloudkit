@@ -13,9 +13,11 @@
  * Our CloudKitRecord uses:
  *   {
  *     recordName, recordType, zoneName, ownerName,
- *     creationDate: string | null,       // ISO 8601
- *     modificationDate: string | null,   // ISO 8601
+ *     creationDate?: number,       // Unix ms timestamp (absent on unsaved records)
+ *     modificationDate?: number,   // Unix ms timestamp (absent on unsaved records)
  *     changeTag: string | null,
+ *     createdByUserRecordID?: string,
+ *     modifiedByUserRecordID?: string,
  *     fields: Record<string, RecordField>
  *   }
  *
@@ -280,26 +282,36 @@ export function ckjsRecordToCloudKitRecord(
   const zoneFromRecord = r.zoneID?.zoneName ?? zoneName;
   const ownerFromRecord = r.zoneID?.ownerRecordName ?? ownerName;
 
-  const creationDate =
-    typeof r.created?.timestamp === 'number'
-      ? new Date(r.created.timestamp).toISOString()
-      : null;
+  // System metadata — use Unix ms timestamps to match the native iOS bridge.
+  // Keys are omitted (undefined) when the CloudKit JS response does not include
+  // the timestamp (e.g. for locally-created records that have not been saved yet).
+  const creationDate: number | undefined =
+    typeof r.created?.timestamp === 'number' ? r.created.timestamp : undefined;
 
-  const modificationDate =
-    typeof r.modified?.timestamp === 'number'
-      ? new Date(r.modified.timestamp).toISOString()
-      : null;
+  const modificationDate: number | undefined =
+    typeof r.modified?.timestamp === 'number' ? r.modified.timestamp : undefined;
 
-  return {
+  const createdByUserRecordID: string | undefined =
+    typeof r.created?.userRecordName === 'string' ? r.created.userRecordName : undefined;
+
+  const modifiedByUserRecordID: string | undefined =
+    typeof r.modified?.userRecordName === 'string' ? r.modified.userRecordName : undefined;
+
+  const result: CloudKitRecord = {
     recordName: r.recordName ?? '',
     recordType: r.recordType ?? '',
     zoneName: zoneFromRecord,
     ownerName: ownerFromRecord,
-    creationDate,
-    modificationDate,
     changeTag: r.recordChangeTag ?? null,
     fields,
   };
+
+  if (creationDate !== undefined) result.creationDate = creationDate;
+  if (modificationDate !== undefined) result.modificationDate = modificationDate;
+  if (createdByUserRecordID !== undefined) result.createdByUserRecordID = createdByUserRecordID;
+  if (modifiedByUserRecordID !== undefined) result.modifiedByUserRecordID = modifiedByUserRecordID;
+
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -358,11 +370,13 @@ export function ckjsSavedRecordToSavedRecord(
 
   return {
     ...base,
-    // SavedRecord requires these to be non-null strings
-    modificationDate: base.modificationDate ?? new Date().toISOString(),
-    creationDate: base.creationDate ?? new Date().toISOString(),
+    // SavedRecord requires these to be non-null numbers (Unix ms timestamps).
+    // Fall back to Date.now() if CloudKit JS omits them (should not happen
+    // for a successfully saved record, but guards against unexpected shapes).
+    modificationDate: base.modificationDate ?? Date.now(),
+    creationDate: base.creationDate ?? Date.now(),
     changeTag: r.recordChangeTag ?? base.changeTag ?? '',
-  };
+  } as SavedRecord;
 }
 
 // ---------------------------------------------------------------------------
