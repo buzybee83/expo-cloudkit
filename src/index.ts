@@ -142,7 +142,7 @@ export { configure, getAccountStatus, fetchUserRecordID, addAccountStatusListene
 export { configureWeb, authenticateWeb, signOutWeb, isWebAuthenticated } from './ExpoCloudKit';
 
 // Phase A — Zone Management
-export { createZone, deleteZone, fetchZones } from './ExpoCloudKit';
+export { createZone, deleteZone, fetchZones, fetchPrivateDatabaseZones } from './ExpoCloudKit';
 
 // Phase A — Record CRUD
 export {
