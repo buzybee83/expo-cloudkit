@@ -1469,3 +1469,20 @@ export function registerBackgroundSync(_taskIdentifier: string): Promise<void> {
 export function scheduleBackgroundSync(): Promise<void> {
   return Promise.reject(new CloudKitNotSupportedError());
 }
+
+// ---------------------------------------------------------------------------
+// Pagination helpers (web stub)
+// ---------------------------------------------------------------------------
+
+/**
+ * Not supported on web — throws `CloudKitNotSupportedError`.
+ *
+ * On iOS, use `fetchAllZoneChanges` to automatically paginate through all
+ * record changes across the specified zones.
+ */
+export function fetchAllZoneChanges(
+  _zoneNames: string[],
+  _database: DatabaseScope = 'private'
+): Promise<ZoneChanges> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}

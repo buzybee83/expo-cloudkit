@@ -151,6 +151,7 @@ export {
   queryRecords,
   deleteRecords,
   fetchRecordZoneChanges,
+  fetchAllZoneChanges,
 } from './ExpoCloudKit';
 
 // Phase B — CKSyncEngine (iOS 17+)
@@ -200,6 +201,7 @@ export {
   useCloudKitRecord,
   useCloudKitQuery,
   useCloudKitSync,
+  useInfiniteQuery,
 } from './hooks';
 
 export type {
@@ -210,6 +212,8 @@ export type {
   UseCloudKitSyncOptions,
   UseCloudKitSyncReturn,
   CloudKitHookState,
+  UseInfiniteQueryOptions,
+  UseInfiniteQueryResult,
 } from './hooks';
 
 // Phase C — Debug Helpers (dev-only, prefixed __debug)

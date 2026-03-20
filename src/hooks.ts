@@ -884,6 +884,187 @@ export interface UseCloudKitSyncReturn {
  * });
  * ```
  */
+// ---------------------------------------------------------------------------
+// Hook 4: useInfiniteQuery
+// ---------------------------------------------------------------------------
+
+/**
+ * Options for `useInfiniteQuery`.
+ */
+export interface UseInfiniteQueryOptions {
+  /** Optional filter predicate — maps to NSPredicate format. */
+  predicate?: QueryPredicate;
+  /** Sort descriptors applied server-side. */
+  sortDescriptors?: SortDescriptor[];
+  /** Zone to query. Omit for the default zone. */
+  zoneName?: string;
+  /** Database to query. Default: `'private'`. */
+  database?: DatabaseScope;
+  /** Maximum records to return per page. Default: `50`. */
+  pageSize?: number;
+  /**
+   * When `true`, the hook automatically fetches the first page on mount and
+   * whenever `recordType`, `zoneName`, or `database` change.
+   * Default: `true`.
+   */
+  autoFetch?: boolean;
+}
+
+/**
+ * Return value of `useInfiniteQuery`.
+ */
+export interface UseInfiniteQueryResult {
+  /** All records accumulated across fetched pages. */
+  records: CloudKitRecord[];
+  /** `true` during the initial page fetch (before any records have been loaded). */
+  isLoading: boolean;
+  /** `true` only while a subsequent page is being fetched (not during initial load). */
+  isFetchingNextPage: boolean;
+  /** `true` when the server returned a cursor indicating more pages are available. */
+  hasNextPage: boolean;
+  /** The error from the most recent failed fetch. `null` when healthy. */
+  error: CloudKitError | null;
+  /**
+   * Fetches the first page and resets all accumulated state.
+   * Sets `isLoading: true` during the fetch.
+   */
+  fetch: () => Promise<void>;
+  /**
+   * Fetches the next page and appends records to `records`.
+   * No-op when `hasNextPage` is `false` or a fetch is already in progress.
+   * Sets `isFetchingNextPage: true` during the fetch.
+   */
+  fetchNextPage: () => Promise<void>;
+}
+
+/**
+ * Queries CloudKit records with automatic cursor-based infinite pagination.
+ *
+ * Unlike `useCloudKitQuery`, this hook exposes distinct `isLoading` and
+ * `isFetchingNextPage` states so UI can render an initial skeleton separately
+ * from a "load more" spinner at the bottom of a list.
+ *
+ * When `autoFetch` is `true` (the default), the first page is fetched on mount
+ * and whenever `recordType`, `zoneName`, or `database` change.
+ *
+ * @param recordType - The CKRecord.recordType to query. Pass `undefined` to suspend.
+ * @param options    - Predicate, sort, zone, database, page size, and auto-fetch toggle.
+ *
+ * @example
+ * ```typescript
+ * const { records, isLoading, hasNextPage, fetchNextPage } = useInfiniteQuery('Note', {
+ *   sortDescriptors: [{ field: 'createdAt', ascending: false }],
+ *   zoneName: 'MyZone',
+ *   pageSize: 25,
+ * });
+ * ```
+ */
+export function useInfiniteQuery(
+  recordType: string | undefined,
+  options?: UseInfiniteQueryOptions
+): UseInfiniteQueryResult {
+  const {
+    predicate,
+    sortDescriptors,
+    zoneName,
+    pageSize = 50,
+    autoFetch = true,
+  } = options ?? {};
+
+  const context = useCloudKitContext();
+  const database: DatabaseScope = options?.database ?? context?.defaultDatabase ?? 'private';
+
+  const [records, setRecords] = useState<CloudKitRecord[]>([]);
+  const [cursor, setCursor] = useState<string | undefined>(undefined);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isFetchingNextPage, setIsFetchingNextPage] = useState(false);
+  const [error, setError] = useState<CloudKitError | null>(null);
+
+  // Stable JSON representations so dependency arrays don't fire on every render
+  const predicateJson = JSON.stringify(predicate);
+  const sortDescriptorsJson = JSON.stringify(sortDescriptors);
+
+  const fetch = useCallback(async (): Promise<void> => {
+    if (!recordType) return;
+
+    setIsLoading(true);
+    setError(null);
+    setCursor(undefined);
+    setRecords([]);
+
+    try {
+      const result = await queryRecords(
+        recordType,
+        predicate,
+        sortDescriptors,
+        zoneName,
+        database,
+        pageSize,
+        undefined
+      );
+      setRecords(result.records);
+      setCursor(result.cursor);
+    } catch (err) {
+      const cloudKitError =
+        err instanceof CloudKitError ? err : CloudKitError.fromNativeError(err);
+      setError(cloudKitError);
+    } finally {
+      setIsLoading(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recordType, predicateJson, sortDescriptorsJson, zoneName, database, pageSize]);
+
+  const fetchNextPage = useCallback(async (): Promise<void> => {
+    if (!recordType || isFetchingNextPage || isLoading) return;
+
+    // cursor is captured from state via the ref-like closure — but since
+    // fetchNextPage is recreated when cursor changes (via the dependency below),
+    // it always sees the latest cursor value.
+    if (cursor === undefined) return;
+
+    setIsFetchingNextPage(true);
+    setError(null);
+
+    try {
+      const result = await queryRecords(
+        recordType,
+        predicate,
+        sortDescriptors,
+        zoneName,
+        database,
+        pageSize,
+        cursor
+      );
+      setRecords((prev) => [...prev, ...result.records]);
+      setCursor(result.cursor);
+    } catch (err) {
+      const cloudKitError =
+        err instanceof CloudKitError ? err : CloudKitError.fromNativeError(err);
+      setError(cloudKitError);
+    } finally {
+      setIsFetchingNextPage(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recordType, predicateJson, sortDescriptorsJson, zoneName, database, pageSize, cursor, isFetchingNextPage, isLoading]);
+
+  // Auto-fetch on mount and when key options change
+  useEffect(() => {
+    if (!autoFetch || !recordType) return;
+    void fetch();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoFetch, recordType, zoneName, database]);
+
+  return {
+    records,
+    isLoading,
+    isFetchingNextPage,
+    hasNextPage: cursor !== undefined,
+    error,
+    fetch,
+    fetchNextPage,
+  };
+}
+
 /** Extracts the `SyncState` for a single scope from the new `SyncStateMap`. */
 const notStartedState: SyncState = { usesSyncEngine: false, status: 'notStarted' };
 function getScopeState(scope: DatabaseScope): SyncState {
