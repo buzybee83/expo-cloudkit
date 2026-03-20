@@ -28,6 +28,7 @@ expo-cloudkit is a TypeScript-first Expo native module wrapping Apple's CloudKit
   - [Sync Engine (iOS 17+)](#sync-engine-ios-17)
   - [Push Subscriptions](#push-subscriptions)
   - [Offline Queue](#offline-queue)
+  - [Token Management](#token-management)
   - [React Hooks](#react-hooks)
   - [React Context](#react-context)
   - [Web Platform](#web-platform)
@@ -425,6 +426,25 @@ const { changed, deleted } = await fetchRecordZoneChanges(['Notes', 'Tasks']);
 applyChanges(changed, deleted);
 ```
 
+#### `fetchAllZoneChanges(zoneNames, database?)`
+
+Auto-paginating delta fetch — calls `fetchRecordZoneChanges` repeatedly until `moreComing` is `false`, then returns the combined result. Use this instead of manual cursor loops.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `zoneNames` | `string[]` | **required** | Zones to fetch changes from |
+| `database` | `DatabaseScope` | `'private'` | Target database |
+
+**Returns:** `Promise<ZoneChanges>` — `{ changed: CloudKitRecord[], deleted: RecordIdentifier[], newTokens: Record<string, string> }`
+
+**Calls** `CKFetchRecordZoneChangesOperation` in a loop until all pages are consumed.
+
+```typescript
+// Full zone catch-up on app foreground — no manual cursor management
+const { changed, deleted } = await fetchAllZoneChanges(['Notes', 'Tasks']);
+applyChanges(changed, deleted);
+```
+
 #### `fetchRecordWithReferences(recordName, options)`
 
 Fetch a record and recursively resolve its reference fields. Depth 1–3.
@@ -476,6 +496,23 @@ console.log(`Deleted ${deleted.length} records`);
 | `'stringList'` | `string[]` | `string[]` |
 | `'numberList'` | `number[]` | `number[]` |
 
+**System fields on `CloudKitRecord`:**
+
+All records returned from read paths (`fetchRecord`, `batchFetchRecords`, `queryRecords`, `fetchRecordZoneChanges`, `fetchAllZoneChanges`) include these read-only system fields. They are absent on unsaved records.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `creationDate` | `number` | Unix timestamp (ms) when the record was first saved |
+| `modificationDate` | `number` | Unix timestamp (ms) of the last modification |
+| `createdByUserRecordID` | `string` | Record name of the user who created the record |
+| `modifiedByUserRecordID` | `string` | Record name of the user who last modified the record |
+
+```typescript
+const note = await fetchRecord('Note', recordName, 'Notes');
+console.log(new Date(note.creationDate!));       // when it was created
+console.log(note.createdByUserRecordID);         // "_ab12cd34ef56"
+```
+
 ---
 
 ### Zones
@@ -512,6 +549,21 @@ List all custom zones. Does not include `_defaultZone`.
 
 ```typescript
 const zones = await fetchZones('private');
+```
+
+#### `fetchPrivateDatabaseZones()`
+
+Alias for `fetchZones('private')`. Useful on reinstall to discover which zones the user already has data in before recreating them.
+
+**Returns:** `Promise<Zone[]>`
+
+```typescript
+// On first launch after reinstall — check what already exists
+const existingZones = await fetchPrivateDatabaseZones();
+const zoneNames = existingZones.map((z) => z.zoneName);
+if (!zoneNames.includes('Notes')) {
+  await createZone('Notes');
+}
 ```
 
 ---
@@ -602,6 +654,54 @@ const share = await createShare({
 // Send share.shareURL to participants
 ```
 
+#### `createZoneShare(zoneName, database?)`
+
+Share an entire zone without an anchor record. Presents `UICloudSharingController` and returns the resulting `Share`, or `null` if the user cancelled the UI. **iOS only** — throws `CloudKitNotSupportedError` on web.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `zoneName` | `string` | **required** | Zone to share |
+| `database` | `DatabaseScope` | `'private'` | Target database |
+
+**Returns:** `Promise<Share | null>`
+
+**Throws:** `CloudKitError` with code `ALREADY_SHARED` if the zone already has an active `CKShare`.
+
+```typescript
+const share = await createZoneShare('Notes');
+if (share) {
+  // Share.shareURL is ready to send
+  await Share.share({ url: share.shareURL });
+}
+```
+
+#### `getShareURL(recordName, zoneName, database?)`
+
+Retrieve the URL of an existing `CKShare` without presenting any UI. Useful for copying or re-sharing an already-shared record.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `recordName` | `string` | **required** | Root record of the share |
+| `zoneName` | `string` | **required** | Zone containing the record |
+| `database` | `DatabaseScope` | `'private'` | Target database |
+
+**Returns:** `Promise<string>` — the share URL.
+
+**Throws:** `CloudKitError` with code `SHARE_NOT_FOUND` if no `CKShare` exists for this record.
+
+```typescript
+try {
+  const url = await getShareURL('note-abc-123', 'Notes');
+  Clipboard.setString(url);
+} catch (err) {
+  if (err instanceof CloudKitError && err.code === CloudKitErrorCode.SHARE_NOT_FOUND) {
+    // No share exists — create one first
+    const share = await createShare({ recordName: 'note-abc-123', zoneName: 'Notes', publicPermission: 'readOnly' });
+    Clipboard.setString(share.shareURL);
+  }
+}
+```
+
 #### `presentSharingUI(options)`
 
 Present the native `UICloudSharingController`. **iOS only** — throws `CloudKitNotSupportedError` on macOS native and web.
@@ -626,6 +726,21 @@ navigateToZone(accepted.zoneName);
 List participants on a share.
 
 **Returns:** `Promise<ShareParticipant[]>`
+
+`ShareParticipant` fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `userRecordID` | `string` | Participant's CloudKit user record name |
+| `permission` | `SharePermission` | `'none' \| 'readOnly' \| 'readWrite'` |
+| `role` | `'owner' \| 'privateUser' \| 'publicUser'` | Role on the share |
+| `acceptanceStatus` | `'unknown' \| 'pending' \| 'accepted' \| 'removed'` | Whether the invitation was accepted |
+| `isCurrentUser` | `boolean` | `true` when this participant is the currently signed-in user |
+
+```typescript
+const participants = await fetchShareParticipants({ shareURL: share.shareURL, zoneName: 'Notes' });
+const me = participants.find((p) => p.isCurrentUser);
+```
 
 #### `updateSharePermission(options)`
 
@@ -674,42 +789,69 @@ See the [full sync engine snippet](example/snippets/sync-engine.ts) for a comple
 
 #### `startSyncEngine(config)`
 
-Start sync for the specified zones.
+Start sync for the specified zones. From v0.14.0, multiple database scopes can run simultaneously by passing `databases` instead of `database`.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `zones` | `string[]` | **required** | Zone names to sync |
-| `database` | `DatabaseScope` | `'private'` | Target database |
+| `databases` | `DatabaseScope \| DatabaseScope[]` | `'private'` | One or more database scopes; runs one engine per scope simultaneously |
+| `database` | `DatabaseScope` | `'private'` | **Deprecated** — use `databases` instead |
 | `automaticallySync` | `boolean` | `true` | Let the OS schedule syncs |
 | `resolveConflicts` | `boolean` | `false` | Opt in to manual conflict resolution |
 
 **Returns:** `Promise<void>`
 
 ```typescript
+// Single database (v0.13 and earlier style — still works)
 await startSyncEngine({ zones: ['Notes'], database: 'private' });
+
+// Multiple databases simultaneously (v0.14+)
+await startSyncEngine({ zones: ['Notes'], databases: ['private', 'shared'] });
 ```
 
-#### `stopSyncEngine()`
+#### `stopSyncEngine(database?)`
 
-Stop the sync engine and release its resources.
+Stop the sync engine. Pass a `database` scope to stop only that engine; omit the argument to stop all running engines.
 
-**Returns:** `Promise<void>`
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `database` | `DatabaseScope` | — | Scope to stop; omit to stop all |
+
+**Returns:** `Promise<void>` — rejects if the specified engine is not running.
+
+```typescript
+await stopSyncEngine();            // stop all
+await stopSyncEngine('shared');    // stop only the shared-database engine
+```
 
 #### `getSyncState()`
 
-Synchronous snapshot of current sync state.
+Snapshot of current sync state per database scope.
 
-**Returns:** `SyncState` — `{ status: SyncProviderStatus, usesSyncEngine: boolean }`
+**Returns:** `SyncStateMap` — `Partial<Record<DatabaseScope, SyncState>>`
+
+**Breaking change in v0.14.0:** previously returned a flat `SyncState` object. Now returns a map keyed by `DatabaseScope`.
 
 ```typescript
-const { status, usesSyncEngine } = getSyncState();
+const stateMap = getSyncState();
+const privateState = stateMap['private']; // { status, usesSyncEngine }
+const sharedState  = stateMap['shared'];  // undefined if not started
 ```
 
-#### `triggerSync()`
+#### `triggerSync(database?)`
 
-Manually trigger a fetch + send cycle.
+Manually trigger a fetch + send cycle. Pass a `database` scope to target one engine; omit to fan out to all running engines.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `database` | `DatabaseScope` | — | Scope to trigger; omit for all |
 
 **Returns:** `Promise<void>`
+
+```typescript
+await triggerSync();           // all engines
+await triggerSync('private'); // private only
+```
 
 #### `enqueuePendingChange(change)`
 
@@ -717,11 +859,14 @@ Queue a save or delete for the next sync cycle.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `change` | `PendingRecordChange` | `{ type: 'save', record }` or `{ type: 'delete', recordIdentifier }` |
+| `change` | `PendingRecordChange` | `{ type: 'save', record, database? }` or `{ type: 'delete', recordIdentifier, database? }` |
+
+The optional `database` field routes the change to the correct engine when multiple scopes are running.
 
 ```typescript
 enqueuePendingChange({
   type: 'save',
+  database: 'private',
   record: { recordType: 'Note', zoneName: 'Notes', fields: { title: { type: 'string', value: 'Queued' } } },
 });
 ```
@@ -750,13 +895,18 @@ Returns `true` when CKSyncEngine (iOS 17+) is active.
 
 Subscribe to all sync events.
 
+All events include a `databaseScope: DatabaseScope` field so you can distinguish which engine fired the event when multiple scopes are running simultaneously.
+
 | Event type | Payload highlights |
 |------------|-------------------|
-| `'stateChanged'` | `{ state: SyncState }` |
-| `'recordsFetched'` | `{ zoneName, changedRecords, deletedRecordIDs }` |
-| `'recordsSent'` | `{ savedRecords, failedRecords }` |
-| `'conflict'` | `{ requestId, clientRecord, serverRecord }` (requires `resolveConflicts: true`) |
-| `'syncError'` | `{ error: CloudKitError }` |
+| `'stateChanged'` | `{ state: SyncState, databaseScope }` |
+| `'recordsFetched'` | `{ zoneName, changedRecords, deletedRecordIDs, databaseScope }` |
+| `'recordsSent'` | `{ savedRecords, failedRecords, databaseScope }` |
+| `'conflict'` | `{ requestId, clientRecord, serverRecord: RecordToSave, databaseScope }` (requires `resolveConflicts: true`) |
+| `'syncCompleted'` | `{ recordCount, zoneNames, isInitialSync, databaseScope }` — fired after each full zone pull |
+| `'syncError'` | `{ error: CloudKitError, databaseScope }` |
+
+**`'conflict'` note:** `serverRecord` is typed as `RecordToSave` (not `CloudKitRecord`) — pass it directly to `resolveSyncConflict` without casting.
 
 **Returns:** `Subscription`
 
@@ -856,6 +1006,23 @@ Flush all pending entries immediately.
 
 **Returns:** `Promise<OfflineQueueDrainResult>` — `{ succeeded, failed, skipped }`
 
+#### `drainOfflineQueueForZone(zoneName, database?)`
+
+Flush only entries belonging to a specific zone. Useful when a zone becomes available after reinstall and you want to replay its queue without disturbing other zones.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `zoneName` | `string` | **required** | Zone whose entries should be flushed |
+| `database` | `DatabaseScope` | `'private'` | Target database |
+
+**Returns:** `Promise<OfflineQueueDrainResult>` — `{ succeeded, failed, skipped }`
+
+```typescript
+// Zone was just created — drain any queued writes for it
+await createZone('Notes');
+await drainOfflineQueueForZone('Notes');
+```
+
 #### `getOfflineQueueStatus(options?)`
 
 Get queue entry counts.
@@ -877,6 +1044,54 @@ Reset permanently-failed entries back to `pending`.
 #### `addOfflineQueueListener(callback)`
 
 Subscribe to queue events: `operationCompleted`, `operationFailed`, `operationMovedToFailed`, `queueDrained`, `queueStatusChanged`.
+
+---
+
+### Token Management
+
+Change tokens let CloudKit return only what changed since your last fetch. expo-cloudkit persists them automatically, but these APIs let you inspect and seed them — essential for reinstall recovery.
+
+#### `getZoneChangeToken(zoneName, database?)`
+
+Returns the persisted `CKServerChangeToken` for a zone, base64-encoded.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `zoneName` | `string` | **required** | Zone name |
+| `database` | `DatabaseScope` | `'private'` | Target database |
+
+**Returns:** `Promise<string | null>` — `null` when no token has been stored yet (full sync required).
+
+```typescript
+const token = await getZoneChangeToken('Notes');
+if (token) {
+  // Back up token to your server for cross-device reinstall recovery
+  await myServer.saveToken(userId, 'Notes', token);
+}
+```
+
+#### `setZoneChangeToken(zoneName, database?, tokenBase64)`
+
+Seed or clear the stored change token for a zone. Pass `null` to clear the token, which forces a full re-sync on the next `fetchRecordZoneChanges` or `fetchAllZoneChanges` call.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `zoneName` | `string` | **required** | Zone name |
+| `database` | `DatabaseScope` | `'private'` | Target database |
+| `tokenBase64` | `string \| null` | **required** | Base64 token to store, or `null` to clear |
+
+**Returns:** `Promise<void>`
+
+```typescript
+// On reinstall: restore a previously backed-up token to avoid full re-sync
+const savedToken = await myServer.loadToken(userId, 'Notes');
+if (savedToken) {
+  await setZoneChangeToken('Notes', 'private', savedToken);
+}
+
+// Force a full re-sync for one zone
+await setZoneChangeToken('Notes', 'private', null);
+```
 
 ---
 
@@ -928,6 +1143,33 @@ const { data, loading, hasMore, fetchMore, optimisticAdd } = useCloudKitQuery('N
   zoneName: 'Notes',
   resultsLimit: 25,
 });
+```
+
+#### `useInfiniteQuery(options)`
+
+Cursor-based infinite scroll hook. Loads the first page on mount and exposes `fetchNextPage()` to load subsequent pages.
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `recordType` | `string` | **required** — record type to query |
+| `predicate` | `QueryPredicate` | Filter condition |
+| `sortDescriptors` | `SortDescriptor[]` | Sort order |
+| `zoneName` | `string` | Zone to query |
+| `database` | `DatabaseScope` | Target database |
+| `pageSize` | `number` | Records per page (default: 25) |
+
+**Returns:** `{ data, isLoading, isFetchingNextPage, hasNextPage, fetchNextPage, error, refetch }`
+
+```typescript
+const { data, isLoading, hasNextPage, fetchNextPage, isFetchingNextPage } = useInfiniteQuery({
+  recordType: 'Note',
+  sortDescriptors: [{ field: 'modificationDate', ascending: false }],
+  zoneName: 'Notes',
+  pageSize: 30,
+});
+
+// In your FlatList:
+// onEndReached={() => { if (hasNextPage && !isFetchingNextPage) fetchNextPage(); }}
 ```
 
 #### `useCloudKitSync(options)`
@@ -1198,13 +1440,17 @@ Dev-only utilities for inspecting CloudKit container state. **Do not ship these 
 | `queryRecords` | ✅ | ✅ | ✅ | ❌ |
 | `deleteRecords` | ✅ | ✅ | ✅ | ❌ |
 | `fetchRecordZoneChanges` | ✅ | ✅ | ✅ | ❌ |
+| `fetchAllZoneChanges` | ✅ | ✅ | ✅ | ❌ |
 | `fetchRecordWithReferences` | ✅ | ✅ | ✅ | ❌ |
 | `deleteRecordWithReferences` | ✅ | ✅ | ❌ | ❌ |
 | `createZone` | ✅ | ✅ | ✅ | ❌ |
 | `deleteZone` | ✅ | ✅ | ✅ | ❌ |
 | `fetchZones` | ✅ | ✅ | ✅ | ❌ |
+| `fetchPrivateDatabaseZones` | ✅ | ✅ | ✅ | ❌ |
 | `downloadAsset` | ✅ | ✅ | ❌ ¹ | ❌ |
 | `addAssetProgressListener` | ✅ | ✅ | ❌ | ❌ |
+| `createZoneShare` | ✅ | ✅ | ❌ | ❌ |
+| `getShareURL` | ✅ | ✅ | ⚠️ ² | ❌ |
 | `createShare` | ✅ | ✅ | ⚠️ ² | ❌ |
 | `presentSharingUI` | ✅ | ✅ | ❌ | ❌ |
 | `acceptShare` | ✅ | ✅ | ⚠️ ² | ❌ |
@@ -1229,6 +1475,7 @@ Dev-only utilities for inspecting CloudKit container state. **Do not ship these 
 | `addSubscriptionListener` | ✅ | ✅ | ❌ ⁵ | ❌ |
 | `enqueueOfflineOperation` | ✅ | ✅ | ❌ | ❌ |
 | `drainOfflineQueue` | ✅ | ✅ | ❌ | ❌ |
+| `drainOfflineQueueForZone` | ✅ | ✅ | ❌ | ❌ |
 | `getOfflineQueueStatus` | ✅ | ✅ | ❌ | ❌ |
 | `clearOfflineQueue` | ✅ | ✅ | ❌ | ❌ |
 | `retryFailedOperations` | ✅ | ✅ | ❌ | ❌ |
@@ -1245,6 +1492,9 @@ Dev-only utilities for inspecting CloudKit container state. **Do not ship these 
 | `addRateLimitedListener` | ✅ | ✅ | ❌ | ❌ |
 | `addSyncHealthListener` | ✅ | ✅ | ❌ | ❌ |
 | `addBatchProgressListener` | ✅ | ✅ | ❌ | ❌ |
+| `getZoneChangeToken` | ✅ | ✅ | ❌ | ❌ |
+| `setZoneChangeToken` | ✅ | ✅ | ❌ | ❌ |
+| `useInfiniteQuery` | ✅ | ✅ | ✅ | ✅ |
 
 **Legend:** ✅ fully supported / ⚠️ partial / ❌ not available
 
@@ -1365,6 +1615,10 @@ All releases to date are backwards compatible unless noted. Additions per versio
 
 | Version | Notable additions |
 |---------|------------------|
+| **0.16.0** | System fields on `CloudKitRecord` (`creationDate`, `modificationDate`, `createdByUserRecordID`, `modifiedByUserRecordID`); `fetchAllZoneChanges`; `useInfiniteQuery` hook; `fetchPrivateDatabaseZones`; `drainOfflineQueueForZone`; `getZoneChangeToken`; `setZoneChangeToken` |
+| **0.15.0** | `isCurrentUser: boolean` on `ShareParticipant`; `stopSyncEngine` errors now surface as Promise rejections instead of hanging silently |
+| **0.14.0** | **Breaking:** `getSyncState()` now returns `SyncStateMap` (`Partial<Record<DatabaseScope, SyncState>>`), not a flat `SyncState`. `SyncEngineConfig.database` deprecated — use `databases: DatabaseScope \| DatabaseScope[]` to run one engine per scope simultaneously. `databaseScope` field on all `SyncEngineEvent` payloads. `stopSyncEngine(database?)` and `triggerSync(database?)` now accept an optional scope. `database?` on `PendingRecordChange`. `SyncStateMap` type exported. |
+| **0.13.0** | `createZoneShare(zoneName, database?)`; `getShareURL(recordName, zoneName, database?)`; `syncCompleted` sync event (`recordCount`, `zoneNames`, `isInitialSync`, `databaseScope`); `SHARE_NOT_FOUND` error code; `SyncConflictEvent.serverRecord` typed as `RecordToSave` |
 | **0.11.0** | `CloudKitUnavailableError`, `MODULE_UNAVAILABLE` error code, `isNativeModuleAvailable()`, background sync (`registerBackgroundSync`, `scheduleBackgroundSync`), `backgroundSyncTaskIdentifier` config plugin option, Swift Package Manager (experimental) |
 | **0.10.0** | Internal: `CloudKitSyncEngineAdapter` and `CloudKitSyncFallbackAdapter` converted to Swift actors. No public API changes. |
 | **0.9.0** | `CloudKitStore` SwiftUI `@Observable` store (Swift only), `createCloudKitSchema` + `CloudKitParser` (Zod-compatible validation), `CloudKitValidationError`, `VALIDATION_FAILED` error code, `authenticateAndroid`, `handleAuthRedirect` |
