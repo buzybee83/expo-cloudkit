@@ -1662,3 +1662,54 @@ export function registerBackgroundSync(taskIdentifier: string): Promise<void> {
 export function scheduleBackgroundSync(): Promise<void> {
   return callAsync(() => NativeModule!.scheduleBackgroundSync());
 }
+
+// ---------------------------------------------------------------------------
+// Pagination helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetches ALL record changes across the specified zones, automatically paginating
+ * until `moreComing` is false.
+ *
+ * Internally calls `fetchRecordZoneChanges` repeatedly, accumulating changed and
+ * deleted record names across all pages. The final `syncToken` is from the last page.
+ *
+ * The native module stores the sync token internally between calls, so each
+ * subsequent invocation of `fetchRecordZoneChanges` automatically continues from
+ * where the last call left off.
+ *
+ * @param zoneNames - Zones to fetch changes for.
+ * @param database  - Which database to query. Default: `'private'`.
+ * @returns Merged `ZoneChanges` with all records across all pages, `moreComing: false`.
+ *
+ * @throws {CloudKitError} code `NOT_AUTHENTICATED` if the user is not signed in.
+ * @throws {CloudKitError} code `NETWORK_UNAVAILABLE` if the device is offline.
+ *
+ * @example
+ * ```typescript
+ * const changes = await fetchAllZoneChanges(['MyZone']);
+ * applyChanges(changes.changedRecords);
+ * markDeleted(changes.deletedRecordNames);
+ * ```
+ */
+export async function fetchAllZoneChanges(
+  zoneNames: string[],
+  database: DatabaseScope = 'private'
+): Promise<ZoneChanges> {
+  const allChanged: CloudKitRecord[] = [];
+  const allDeleted: string[] = [];
+  let result = await fetchRecordZoneChanges(zoneNames, database);
+  allChanged.push(...result.changedRecords);
+  allDeleted.push(...result.deletedRecordNames);
+  while (result.moreComing) {
+    result = await fetchRecordZoneChanges(zoneNames, database);
+    allChanged.push(...result.changedRecords);
+    allDeleted.push(...result.deletedRecordNames);
+  }
+  return {
+    changedRecords: allChanged,
+    deletedRecordNames: allDeleted,
+    syncToken: result.syncToken,
+    moreComing: false,
+  };
+}
