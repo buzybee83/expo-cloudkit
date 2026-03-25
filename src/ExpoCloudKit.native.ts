@@ -33,6 +33,7 @@ import type {
   RawRecord,
   RecordIdentifier,
   RecordToSave,
+  AddParticipantOptions,
   RemoveParticipantOptions,
   SavedRecord,
   SaveQuerySubscriptionOptions,
@@ -1032,6 +1033,42 @@ export function setDefaultParticipantPermission(
  */
 export function removeShareParticipant(options: RemoveParticipantOptions): Promise<Share> {
   return callAsync(() => NativeModule!.removeShareParticipant(options));
+}
+
+/**
+ * Programmatically invites a participant to a share by email address.
+ *
+ * Internally looks up the iCloud user associated with the email via
+ * `CKContainer.fetchShareParticipant(withEmailAddress:)`, sets their permission,
+ * and saves the updated share — all without presenting UICloudSharingController.
+ *
+ * Use this for custom invitation flows where you want full control over the UX.
+ * The participant lookup is not exposed as a separate API to prevent email enumeration.
+ *
+ * @param options.shareRecordName - recordName of the CKShare to add the participant to.
+ * @param options.email           - Email address of the person to invite.
+ * @param options.permission      - Permission to grant: 'readOnly' | 'readWrite'. Default: 'readOnly'.
+ * @param options.zoneName        - Zone the share lives in.
+ * @param options.database        - Which database scope. Default: 'private'.
+ * @returns Updated participant list after adding the new participant.
+ * @throws {CloudKitError} code PARTICIPANT_LOOKUP_FAILED if the email could not be resolved.
+ * @throws {CloudKitError} code PARTICIPANT_NEEDS_VERIFICATION if the account needs email verification.
+ * @throws {CloudKitError} code SHARE_NOT_FOUND if the share record does not exist.
+ * @throws {CloudKitError} code PERMISSION_DENIED if the caller is not the share owner.
+ *
+ * @example
+ * ```typescript
+ * const participants = await addParticipant({
+ *   shareRecordName: 'share-uuid',
+ *   email: 'invitee@example.com',
+ *   permission: 'readWrite',
+ *   zoneName: 'MyZone',
+ * });
+ * participants.forEach(p => console.log(p.participantRecordName, p.acceptanceStatus));
+ * ```
+ */
+export function addParticipant(options: AddParticipantOptions): Promise<ShareParticipant[]> {
+  return callAsync(() => NativeModule!.addParticipant(options));
 }
 
 /**

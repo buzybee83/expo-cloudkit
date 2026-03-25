@@ -48,6 +48,7 @@ import type {
   RawRecord,
   RecordIdentifier,
   RecordToSave,
+  AddParticipantOptions,
   RemoveParticipantOptions,
   SetDefaultParticipantPermissionOptions,
   ResolvedRecord,
@@ -1124,6 +1125,15 @@ export function updateSharePermission(_options: UpdatePermissionOptions): Promis
  * exposed in CloudKit JS.
  */
 export function removeShareParticipant(_options: RemoveParticipantOptions): Promise<Share> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+/**
+ * Throws `CloudKitNotSupportedError` — programmatic participant invitation is
+ * not available on web (no `CKContainer.fetchShareParticipant(withEmailAddress:)` equivalent
+ * in CloudKit JS).
+ */
+export function addParticipant(_options: AddParticipantOptions): Promise<ShareParticipant[]> {
   return Promise.reject(new CloudKitNotSupportedError());
 }
 

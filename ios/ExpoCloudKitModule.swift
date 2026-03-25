@@ -1602,6 +1602,72 @@ public class ExpoCloudKitModule: Module {
       }
     }
 
+    /// Programmatically adds a participant to an existing CKShare by email address.
+    ///
+    /// Internally looks up the iCloud user via
+    /// `CKContainer.fetchShareParticipant(withEmailAddress:)`, sets the requested
+    /// permission, adds them to the share, and saves via CKModifyRecordsOperation.
+    ///
+    /// Does NOT present UICloudSharingController — use this for custom invitation flows.
+    ///
+    /// Options keys:
+    ///   - shareRecordName (String, required) — CKRecord.ID.recordName of the CKShare
+    ///   - email           (String, required) — email address of the person to invite
+    ///   - permission      (String, default "readOnly") — "none"|"readOnly"|"readWrite"
+    ///   - zoneName        (String, optional) — defaults to the default zone
+    ///   - database        (String, default "private")
+    ///
+    /// Resolves with: [[String: Any]] — updated participant list after adding
+    ///
+    /// Rejects with:
+    ///   - PARTICIPANT_LOOKUP_FAILED    — email not found or lookup error (generic — no enumeration)
+    ///   - PARTICIPANT_NEEDS_VERIFICATION — CloudKit found the account but it needs verification
+    ///   - SHARE_NOT_FOUND    — the share record does not exist
+    ///   - PERMISSION_DENIED  — caller is not the share owner
+    AsyncFunction("addParticipant") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self, let shareManager = self.shareManager, let container = self.container else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+
+      guard let shareRecordName = options["shareRecordName"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("shareRecordName is required"))
+        return
+      }
+      guard let email = options["email"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("email is required"))
+        return
+      }
+
+      let zoneName = options["zoneName"] as? String
+      let dbString = options["database"] as? String ?? "private"
+      let scope = Converters.toDatabaseScope(dbString)
+      let database = container.ckContainer.database(with: scope)
+      let permString = options["permission"] as? String ?? "readOnly"
+      let permission = Converters.toSharePermission(permString)
+
+      shareManager.addParticipant(
+        shareRecordName: shareRecordName,
+        email: email,
+        permission: permission,
+        zoneName: zoneName,
+        database: database
+      ) { result in
+        switch result {
+        case .success(let participants):
+          promise.resolve(participants)
+        case .failure(let error):
+          switch error {
+          case ShareManagerError.participantLookupFailed,
+               ShareManagerError.participantNotFound:
+            promise.reject(CloudKitModuleError.participantLookupFailed)
+          default:
+            promise.reject(Converters.toExpoError(error))
+          }
+        }
+      }
+    }
+
     /// Accepts a CloudKit share invitation URL.
     ///
     /// The URL is the iCloud share link received via a deep link or universal link.
@@ -2444,6 +2510,15 @@ class ParticipantNotFoundException: Exception {
   }
 }
 
+/// Raised when `addParticipant` cannot resolve the provided email address.
+/// The message is deliberately generic — it must not reveal whether the email
+/// corresponds to a valid iCloud account.
+class ParticipantLookupFailedException: Exception {
+  override var reason: String {
+    "Could not add participant. Verify the email address is associated with an iCloud account."
+  }
+}
+
 class SharingUIUnavailableException: Exception {
   override var reason: String {
     "Cannot present sharing UI: no active view controller is available."
@@ -2485,6 +2560,7 @@ enum CloudKitModuleError {
   static func subscriptionNotFound(_ id: String) -> Exception { CloudKitSubscriptionNotFoundException(id) }
   static func invalidArgument(_ msg: String) -> Exception    { CloudKitInvalidArgumentException(msg) }
   static func participantNotFound(_ name: String) -> Exception { ParticipantNotFoundException(name) }
+  static var participantLookupFailed: Exception              { ParticipantLookupFailedException() }
   static func shareNotFound(_ detail: String = "") -> Exception { ShareURLNotFoundException(detail) }
 }
 

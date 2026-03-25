@@ -533,6 +533,28 @@ export interface RemoveParticipantOptions {
 }
 
 /**
+ * Options for `addParticipant()`.
+ * Programmatically invites a participant by email without presenting
+ * UICloudSharingController. The iCloud user lookup is internal and not
+ * exposed separately to prevent email enumeration.
+ */
+export interface AddParticipantOptions {
+  /** recordName of the CKShare record to add the participant to. */
+  shareRecordName: string;
+  /**
+   * Email address of the person to invite.
+   * Internally looked up via `CKContainer.fetchShareParticipant(withEmailAddress:)`.
+   */
+  email: string;
+  /** Permission to grant the new participant. Default: 'readOnly'. */
+  permission?: SharePermission;
+  /** Zone the share lives in. Omit for the default zone. */
+  zoneName: string;
+  /** Database the share lives in. Default: 'private'. */
+  database?: DatabaseScope;
+}
+
+/**
  * Options for `acceptShare()`.
  * Accepts a share invitation via its URL, making the shared zone accessible
  * in the current user's shared database.
