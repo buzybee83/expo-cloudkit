@@ -11,6 +11,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.17.0] — 2026-03-24
+
+### Added
+
+- **`fetchZoneRecords(zoneName, predicate?, database?)`** — fetches ALL live records from a zone in one call without tracking change tokens. Uses `CKFetchRecordZoneChangesOperation` with `fetchAllChanges = true` and a nil start token; handles pagination automatically. Ideal for reinstall/import flows and first shared-zone sync after accepting an invitation. Optional client-side field equality filter. Does not affect sync engine state.
+- **`setDefaultParticipantPermission(shareRecordName, permission, zoneName, database?)`** — sets `CKShare.publicPermission` (the default role granted to all future participants joining via share URL) without presenting `UICloudSharingController`. Saves via `CKModifyRecordsOperation` and returns the updated `Share`.
+
+### Fixed
+
+- **`Share.creationDate`** — type changed from `string` (ISO 8601) to `number` (Unix ms) to match all other date fields in the module.
+- **`RawRecord` JSDoc** — stale comment claiming "ISO 8601 strings" corrected to "Unix ms timestamps".
+
+---
+
 ## [0.16.0] — 2026-03-19
 
 ### Added
