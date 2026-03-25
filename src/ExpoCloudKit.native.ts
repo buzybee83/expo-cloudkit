@@ -397,6 +397,11 @@ export function fetchRecordZoneChanges(
  *
  * @param zoneName  - Zone to fetch all records from.
  * @param predicate - Optional client-side field equality filter `{ field, value }`.
+
+
+
+
+
  * @param database  - Which database scope. Default: `'private'`.
  * @returns `{ records: CloudKitRecord[], count: number }` with all current records in the zone.
  *
