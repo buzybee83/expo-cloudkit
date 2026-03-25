@@ -30,8 +30,8 @@ const makeRecord = (n: number): CloudKitRecord => ({
   recordName: `rec-${n}`,
   zoneName: '_defaultZone',
   ownerName: '__defaultOwner__',
-  modificationDate: '2026-01-01T00:00:00.000Z',
-  creationDate: '2026-01-01T00:00:00.000Z',
+  modificationDate: new Date('2026-01-01T00:00:00.000Z').getTime(),
+  creationDate: new Date('2026-01-01T00:00:00.000Z').getTime(),
   changeTag: `tag-${n}`,
   fields: {},
 });
