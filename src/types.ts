@@ -379,6 +379,36 @@ export interface AcceptedShare {
 }
 
 /**
+ * Metadata for a CloudKit share URL, returned by `fetchShareMetadata()`.
+ *
+ * Describes the share without accepting it — useful for showing a preview
+ * screen (owner name, title, permission level) before the user commits to
+ * joining.  Call `acceptShare()` to accept the share afterwards.
+ */
+export interface ShareMetadata {
+  /** Canonical share URL, or null if not yet propagated. */
+  shareURL: string | null;
+  /** iCloud given name of the share owner, if available. */
+  ownerFirstName: string | null;
+  /** iCloud family name of the share owner, if available. */
+  ownerLastName: string | null;
+  /** Permission the invitee would receive upon accepting. */
+  participantPermission: ParticipantPermission;
+  /** Role the invitee would have upon accepting. */
+  participantRole: ParticipantRole;
+  /**
+   * recordName portion of the root record's CKRecord.ID.
+   * Note: this is the record *name*, not the record *type* — use it as
+   * an opaque identifier rather than a display string.
+   */
+  rootRecordType: string;
+  /** Title set on the share via CKShare.SystemFieldKey.title, or null. */
+  title: string | null;
+  /** Total number of participants currently on the share (including owner). */
+  participantCount: number;
+}
+
+/**
  * Event emitted by `addShareAcceptedListener` when the system routes a
  * CloudKit share URL to the app (e.g. via universal link or Sharing sheet).
  *

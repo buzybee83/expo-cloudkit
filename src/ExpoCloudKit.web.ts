@@ -71,6 +71,7 @@ import type {
   OperationConfig,
   BatchFetchResult,
   RateLimitedEvent,
+  ShareMetadata,
 } from './types';
 import {
   configureAuthPersistence,
@@ -1167,6 +1168,14 @@ export async function acceptShare(options: AcceptShareOptions): Promise<Accepted
   } catch (err) {
     throw mapCKJSError(err, 'share');
   }
+}
+
+/**
+ * Throws `CloudKitNotSupportedError` — `CKFetchShareMetadataOperation` is not
+ * exposed by CloudKit JS. Use the native iOS build to call this function.
+ */
+export function fetchShareMetadata(_shareURL: string): Promise<ShareMetadata> {
+  return Promise.reject(new CloudKitNotSupportedError());
 }
 
 /**

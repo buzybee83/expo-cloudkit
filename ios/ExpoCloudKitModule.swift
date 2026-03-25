@@ -1602,6 +1602,72 @@ public class ExpoCloudKitModule: Module {
       }
     }
 
+    /// Programmatically adds a participant to an existing CKShare by email address.
+    ///
+    /// Internally looks up the iCloud user via
+    /// `CKContainer.fetchShareParticipant(withEmailAddress:)`, sets the requested
+    /// permission, adds them to the share, and saves via CKModifyRecordsOperation.
+    ///
+    /// Does NOT present UICloudSharingController — use this for custom invitation flows.
+    ///
+    /// Options keys:
+    ///   - shareRecordName (String, required) — CKRecord.ID.recordName of the CKShare
+    ///   - email           (String, required) — email address of the person to invite
+    ///   - permission      (String, default "readOnly") — "none"|"readOnly"|"readWrite"
+    ///   - zoneName        (String, optional) — defaults to the default zone
+    ///   - database        (String, default "private")
+    ///
+    /// Resolves with: [[String: Any]] — updated participant list after adding
+    ///
+    /// Rejects with:
+    ///   - PARTICIPANT_LOOKUP_FAILED    — email not found or lookup error (generic — no enumeration)
+    ///   - PARTICIPANT_NEEDS_VERIFICATION — CloudKit found the account but it needs verification
+    ///   - SHARE_NOT_FOUND    — the share record does not exist
+    ///   - PERMISSION_DENIED  — caller is not the share owner
+    AsyncFunction("addParticipant") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self, let shareManager = self.shareManager, let container = self.container else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+
+      guard let shareRecordName = options["shareRecordName"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("shareRecordName is required"))
+        return
+      }
+      guard let email = options["email"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("email is required"))
+        return
+      }
+
+      let zoneName = options["zoneName"] as? String
+      let dbString = options["database"] as? String ?? "private"
+      let scope = Converters.toDatabaseScope(dbString)
+      let database = container.ckContainer.database(with: scope)
+      let permString = options["permission"] as? String ?? "readOnly"
+      let permission = Converters.toSharePermission(permString)
+
+      shareManager.addParticipant(
+        shareRecordName: shareRecordName,
+        email: email,
+        permission: permission,
+        zoneName: zoneName,
+        database: database
+      ) { result in
+        switch result {
+        case .success(let participants):
+          promise.resolve(participants)
+        case .failure(let error):
+          switch error {
+          case ShareManagerError.participantLookupFailed,
+               ShareManagerError.participantNotFound:
+            promise.reject(CloudKitModuleError.participantLookupFailed)
+          default:
+            promise.reject(Converters.toExpoError(error))
+          }
+        }
+      }
+    }
+
     /// Accepts a CloudKit share invitation URL.
     ///
     /// The URL is the iCloud share link received via a deep link or universal link.
@@ -1792,6 +1858,279 @@ public class ExpoCloudKitModule: Module {
     // at the AppDelegate level. See README for the required AppDelegate setup.
     // TODO: Restore automatic share URL detection once a replacement
     // lifecycle hook is available in ExpoModulesCore.
+
+    // -------------------------------------------------------------------------
+    // CKShareAccepted notification — automatic acceptance on universal link tap
+    //
+    // When the app delegate calls `application(_:userDidAcceptCloudKitShareWith:)`
+    // it should post NSNotification.Name("CKShareAccepted") with the
+    // CKShareMetadata in userInfo["metadata"].
+    //
+    // This observer accepts the share via CKAcceptSharesOperation, then emits
+    // "onShareAccepted" to JS with rich owner + zone info.
+    // -------------------------------------------------------------------------
+
+    OnCreate {
+      NotificationCenter.default.addObserver(
+        forName: NSNotification.Name("CKShareAccepted"),
+        object: nil,
+        queue: nil
+      ) { [weak self] notification in
+        guard let self = self,
+              let container = self.container,
+              let metadata = notification.userInfo?["metadata"] as? CKShareMetadata else {
+          return
+        }
+
+        let acceptOp = CKAcceptSharesOperation(shareMetadatas: [metadata])
+        acceptOp.qualityOfService = .userInitiated
+
+        var acceptedShare: CKShare?
+
+        acceptOp.perShareResultBlock = { _, result in
+          if case .success(let share) = result {
+            acceptedShare = share
+          }
+        }
+
+        acceptOp.acceptSharesResultBlock = { result in
+          switch result {
+          case .failure(let error):
+            // Log and bail — no promise to reject; this is a fire-and-forget path
+            print("[expo-cloudkit] CKAcceptSharesOperation failed: \(error.localizedDescription)")
+
+          case .success:
+            var payload: [String: Any] = [
+              "zoneName": metadata.rootRecordID.zoneID.zoneName,
+              "rootRecordType": metadata.rootRecordID.recordName
+            ]
+
+            // Share URL — may be nil on newly-created shares
+            if let url = (acceptedShare ?? metadata.share).url?.absoluteString {
+              payload["shareURL"] = url
+            } else {
+              payload["shareURL"] = NSNull()
+            }
+
+            // Owner name components
+            if let nameComponents = metadata.ownerIdentity.nameComponents {
+              payload["ownerFirstName"] = nameComponents.givenName as Any
+              payload["ownerLastName"] = nameComponents.familyName as Any
+            } else {
+              payload["ownerFirstName"] = NSNull()
+              payload["ownerLastName"] = NSNull()
+            }
+
+            DispatchQueue.main.async {
+              self.sendEvent("onShareAccepted", payload)
+            }
+          }
+        }
+
+        container.ckContainer.add(acceptOp)
+      }
+    }
+
+    /// Fetches metadata for a share URL without accepting it.
+    ///
+    /// Uses `CKFetchShareMetadataOperation` to retrieve owner identity, participant
+    /// permission/role, root record type, and share title so the caller can preview
+    /// a share before deciding whether to accept it.
+    ///
+    /// `shouldFetchRootRecord` is `false` — the full root record payload is not
+    /// downloaded pre-acceptance, keeping the request lightweight.
+    ///
+    /// Options keys:
+    ///   - shareURL (String, required) — the full iCloud share URL
+    ///
+    /// Resolves with:
+    ///   - shareURL           (String?)  — the canonical share URL
+    ///   - ownerFirstName     (String?)  — given name of the share owner
+    ///   - ownerLastName      (String?)  — family name of the share owner
+    ///   - participantPermission (String) — permission the invitee would receive
+    ///   - participantRole    (String)   — role the invitee would have
+    ///   - rootRecordType     (String)   — CKRecord.recordType of the root record
+    ///   - title              (String?)  — CKShare.SystemFieldKey.title, if set
+    ///   - participantCount   (Int)      — total number of current participants
+    AsyncFunction("fetchShareMetadata") { [weak self] (shareURLString: String, promise: Promise) in
+      guard let self = self, let container = self.container else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+
+      guard let url = URL(string: shareURLString) else {
+        promise.reject(CloudKitModuleError.invalidArgument("shareURL must be a valid URL string"))
+        return
+      }
+
+      let op = CKFetchShareMetadataOperation(shareURLs: [url])
+      op.shouldFetchRootRecord = false
+      op.qualityOfService = .userInitiated
+
+      // Collect the first successfully-fetched metadata object.
+      // perShareMetadataResultBlock is called once per URL before
+      // fetchShareMetadataResultBlock fires.
+      var fetchedMetadata: CKShareMetadata?
+      var perShareError: Error?
+
+      op.perShareMetadataResultBlock = { _, result in
+        switch result {
+        case .success(let meta):
+          fetchedMetadata = meta
+        case .failure(let error):
+          perShareError = error
+        }
+      }
+
+      op.fetchShareMetadataResultBlock = { result in
+        switch result {
+        case .failure(let error):
+          // Only reject here if perShare also failed — avoids double-reject
+          // when the overall completion fires after a successful per-share result.
+          if fetchedMetadata == nil {
+            promise.reject(Converters.toExpoError(perShareError ?? error))
+          }
+          return
+
+        case .success:
+          // If the per-share block produced an error and no metadata was collected,
+          // surface the per-share error now.
+          if let perShareErr = perShareError, fetchedMetadata == nil {
+            promise.reject(Converters.toExpoError(perShareErr))
+            return
+          }
+
+          guard let meta = fetchedMetadata else {
+            promise.reject(CloudKitModuleError.shareNotFound("No metadata returned for the provided URL."))
+            return
+          }
+
+          var dict: [String: Any] = [
+            "participantPermission": Converters.participantPermissionToString(meta.participantPermission),
+            "participantRole": Converters.participantRoleToString(meta.participantRole),
+            "rootRecordType": meta.rootRecordID.recordName,
+            "participantCount": meta.share.participants.count
+          ]
+
+          // Share URL may be nil for newly-created shares not yet propagated.
+          if let shareURL = meta.share.url?.absoluteString {
+            dict["shareURL"] = shareURL
+          } else {
+            dict["shareURL"] = NSNull()
+          }
+
+          // Owner identity name components — available when the owner has
+          // a public iCloud profile or the share has been looked up.
+          if let nameComponents = meta.ownerIdentity.nameComponents {
+            dict["ownerFirstName"] = nameComponents.givenName as Any
+            dict["ownerLastName"] = nameComponents.familyName as Any
+          } else {
+            dict["ownerFirstName"] = NSNull()
+            dict["ownerLastName"] = NSNull()
+          }
+
+          // Optional share title set via CKShare.SystemFieldKey.title.
+          if let title = meta.share[CKShare.SystemFieldKey.title] as? String {
+            dict["title"] = title
+          } else {
+            dict["title"] = NSNull()
+          }
+
+          promise.resolve(dict)
+        }
+      }
+
+      container.ckContainer.add(op)
+    }
+
+    /// Sets `CKShare.SystemFieldKey.title` and optionally `thumbnailImageData` on an
+    /// existing share record to enable richer share previews in Messages and Mail.
+    ///
+    /// Fetches the CKShare by `shareRecordName`, applies the updates, then saves
+    /// it back via `CKModifyRecordsOperation` with `savePolicy: .changedKeys`.
+    ///
+    /// Options keys:
+    ///   - shareRecordName (String, required) — CKRecord.ID.recordName of the CKShare
+    ///   - zoneName        (String, optional) — defaults to the default zone
+    ///   - title           (String, optional) — display title shown in share preview
+    ///   - thumbnailData   (String, optional) — base64-encoded PNG/JPEG thumbnail
+    ///   - database        (String, default "private")
+    ///
+    /// Resolves with the updated Share dictionary (same shape as createShare).
+    ///
+    /// Rejects with:
+    ///   - SHARE_NOT_FOUND  — no CKShare record at the given ID
+    ///   - RECORD_NOT_FOUND — the record ID does not exist
+    ///   - NOT_AUTHENTICATED — user not signed in to iCloud
+    AsyncFunction("setShareMetadata") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self, let container = self.container else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+
+      guard let shareRecordName = options["shareRecordName"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("shareRecordName is required"))
+        return
+      }
+
+      let zoneName = options["zoneName"] as? String
+      let dbString = options["database"] as? String ?? "private"
+      let title = options["title"] as? String
+      let thumbnailBase64 = options["thumbnailData"] as? String
+
+      let scope = Converters.toDatabaseScope(dbString)
+      let database = container.ckContainer.database(with: scope)
+
+      let zoneID: CKRecordZone.ID
+      if let name = zoneName {
+        zoneID = CKRecordZone.ID(zoneName: name, ownerName: CKCurrentUserDefaultName)
+      } else {
+        zoneID = CKRecordZone.ID.default
+      }
+      let shareID = CKRecord.ID(recordName: shareRecordName, zoneID: zoneID)
+
+      // Step 1: Fetch the CKShare record.
+      database.fetch(withRecordID: shareID) { record, error in
+        if let error = error {
+          promise.reject(Converters.toExpoError(error))
+          return
+        }
+
+        guard let share = record as? CKShare else {
+          // The ID exists but is not a CKShare, or the record is absent.
+          promise.reject(CloudKitModuleError.shareNotFound(
+            "No CKShare found with recordName '\(shareRecordName)'."
+          ))
+          return
+        }
+
+        // Step 2: Apply metadata updates.
+        if let title = title {
+          share[CKShare.SystemFieldKey.title] = title as CKRecordValue
+        }
+
+        if let thumbnailBase64 = thumbnailBase64,
+           let thumbnailData = Data(base64Encoded: thumbnailBase64) {
+          share[CKShare.SystemFieldKey.thumbnailImageData] = thumbnailData as CKRecordValue
+        }
+
+        // Step 3: Save the modified share with changedKeys policy (only sends deltas).
+        let op = CKModifyRecordsOperation(recordsToSave: [share], recordIDsToDelete: nil)
+        op.savePolicy = .changedKeys
+        op.qualityOfService = .userInitiated
+
+        op.modifyRecordsResultBlock = { result in
+          switch result {
+          case .failure(let error):
+            promise.reject(Converters.toExpoError(error))
+          case .success:
+            promise.resolve(Converters.toShareDictionary(share))
+          }
+        }
+
+        database.add(op)
+      }
+    }
 
     // -------------------------------------------------------------------------
     // Debug Helpers — Phase C (dev-only, never call from production)

@@ -63,6 +63,7 @@ import type {
   SyncHealthEvent,
   BatchFetchResult,
   RateLimitedEvent,
+  ShareMetadata,
 } from './types';
 
 // ---------------------------------------------------------------------------
@@ -1053,6 +1054,31 @@ export function removeShareParticipant(options: RemoveParticipantOptions): Promi
  */
 export function acceptShare(options: AcceptShareOptions): Promise<AcceptedShare> {
   return callAsync(() => NativeModule!.acceptShare(options));
+}
+
+/**
+ * Fetches metadata for a share URL without accepting it.
+ *
+ * Lets you preview a share before the user commits to joining — owner name,
+ * share title, the permission level they would receive, and the current
+ * participant count.  Calls `CKFetchShareMetadataOperation` with
+ * `shouldFetchRootRecord: false` so no record payload is downloaded.
+ *
+ * @param shareURL - The full iCloud share URL (e.g. from a deep link or QR code).
+ * @returns A `ShareMetadata` object describing the share.
+ * @throws {CloudKitError} code SHARE_NOT_FOUND if the URL is invalid or expired.
+ * @throws {CloudKitError} code NOT_AUTHENTICATED if the user is not signed in.
+ * @throws {CloudKitError} code NETWORK_UNAVAILABLE if the device is offline.
+ *
+ * @example
+ * ```typescript
+ * const meta = await fetchShareMetadata('https://www.icloud.com/share/...');
+ * console.log(`${meta.ownerFirstName} ${meta.ownerLastName} invited you`);
+ * console.log(`Permission: ${meta.participantPermission}`);
+ * ```
+ */
+export function fetchShareMetadata(shareURL: string): Promise<ShareMetadata> {
+  return callAsync(() => NativeModule!.fetchShareMetadata(shareURL));
 }
 
 /**
