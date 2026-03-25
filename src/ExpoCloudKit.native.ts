@@ -33,13 +33,15 @@ import type {
   RawRecord,
   RecordIdentifier,
   RecordToSave,
+  AddParticipantOptions,
   RemoveParticipantOptions,
   SavedRecord,
   SaveQuerySubscriptionOptions,
   Share,
   SharedZone,
-  ShareInvitationEvent,
+  ShareAcceptedEvent,
   ShareParticipant,
+  SetShareMetadataOptions,
   SharingUIResult,
   SortDescriptor,
   Subscription,
@@ -1036,6 +1038,42 @@ export function removeShareParticipant(options: RemoveParticipantOptions): Promi
 }
 
 /**
+ * Programmatically invites a participant to a share by email address.
+ *
+ * Internally looks up the iCloud user associated with the email via
+ * `CKContainer.fetchShareParticipant(withEmailAddress:)`, sets their permission,
+ * and saves the updated share — all without presenting UICloudSharingController.
+ *
+ * Use this for custom invitation flows where you want full control over the UX.
+ * The participant lookup is not exposed as a separate API to prevent email enumeration.
+ *
+ * @param options.shareRecordName - recordName of the CKShare to add the participant to.
+ * @param options.email           - Email address of the person to invite.
+ * @param options.permission      - Permission to grant: 'readOnly' | 'readWrite'. Default: 'readOnly'.
+ * @param options.zoneName        - Zone the share lives in.
+ * @param options.database        - Which database scope. Default: 'private'.
+ * @returns Updated participant list after adding the new participant.
+ * @throws {CloudKitError} code PARTICIPANT_LOOKUP_FAILED if the email could not be resolved.
+ * @throws {CloudKitError} code PARTICIPANT_NEEDS_VERIFICATION if the account needs email verification.
+ * @throws {CloudKitError} code SHARE_NOT_FOUND if the share record does not exist.
+ * @throws {CloudKitError} code PERMISSION_DENIED if the caller is not the share owner.
+ *
+ * @example
+ * ```typescript
+ * const participants = await addParticipant({
+ *   shareRecordName: 'share-uuid',
+ *   email: 'invitee@example.com',
+ *   permission: 'readWrite',
+ *   zoneName: 'MyZone',
+ * });
+ * participants.forEach(p => console.log(p.participantRecordName, p.acceptanceStatus));
+ * ```
+ */
+export function addParticipant(options: AddParticipantOptions): Promise<ShareParticipant[]> {
+  return callAsync(() => NativeModule!.addParticipant(options));
+}
+
+/**
  * Accepts a share invitation via its URL, making the shared zone accessible
  * in the current user's shared database.
  *
@@ -1129,33 +1167,63 @@ export function getShareURL(
 /**
  * Registers a listener for `onShareAccepted` events.
  *
- * Fires when the system routes a CloudKit share URL to the app (e.g. via
- * universal links or the Sharing sheet). At this point the share has NOT yet
- * been accepted — only the URL is available. Pass `event.shareURL` to
- * `acceptShare()` to complete the acceptance flow and gain access to the
- * shared zone.
+ * Fires *after* the native module has called `CKAcceptSharesOperation` in
+ * response to `application(_:userDidAcceptCloudKitShareWith:)` being posted
+ * as a `CKShareAccepted` notification from the app delegate.
  *
- * @param callback - Called on the main thread when a share invitation URL arrives.
+ * The shared zone is accessible in the shared CloudKit database by the time
+ * this callback fires. The event payload includes the owner's name, the zone
+ * name, and the share URL.
+ *
+ * @param callback - Called on the main thread after the share is accepted.
  * @returns A Subscription handle; call `.remove()` to stop receiving events.
  *
  * @example
  * ```typescript
  * const sub = addShareAcceptedListener((event) => {
- *   acceptShare({ shareURL: event.shareURL }).then((accepted) => {
- *     console.log('Share accepted:', accepted.zoneName, accepted.ownerName);
- *   });
+ *   console.log('Share accepted from', event.ownerFirstName, 'in zone', event.zoneName);
+ *   // Refresh your UI — the shared zone is now accessible
  * });
  * // Later:
  * sub.remove();
  * ```
  */
 export function addShareAcceptedListener(
-  callback: (event: ShareInvitationEvent) => void
+  callback: (event: ShareAcceptedEvent) => void
 ): Subscription {
   if (!isIOS) return noopSubscription;
   assertNativeAvailable();
   const subscription = emitter!.addListener('onShareAccepted', callback);
   return { remove: () => subscription.remove() };
+}
+
+/**
+ * Sets `CKShare.SystemFieldKey.title` and optionally `thumbnailImageData` on an
+ * existing CKShare record to enable richer share previews in Messages and Mail.
+ *
+ * Fetches the share by `shareRecordName`, applies the metadata updates, then
+ * saves it back via `CKModifyRecordsOperation` with `savePolicy: .changedKeys`
+ * so only changed fields are transmitted to CloudKit.
+ *
+ * @param options - Share record identifier plus optional `title` and `thumbnailData`.
+ * @returns The updated Share object (same shape as `createShare` resolves with).
+ * @throws {CloudKitError} code NOT_CONFIGURED if `configure()` has not been called.
+ * @throws {CloudKitError} code SHARE_NOT_FOUND if no CKShare exists at the given record name.
+ * @throws {CloudKitError} code NOT_AUTHENTICATED if the user is not signed in to iCloud.
+ *
+ * @example
+ * ```typescript
+ * const share = await setShareMetadata({
+ *   shareRecordName: 'abc123-share',
+ *   zoneName: 'MyZone',
+ *   title: 'Project Alpha',
+ *   thumbnailData: base64PNG,
+ * });
+ * console.log('Updated share URL:', share.url);
+ * ```
+ */
+export function setShareMetadata(options: SetShareMetadataOptions): Promise<Share> {
+  return callAsync(() => NativeModule!.setShareMetadata(options));
 }
 
 // ---------------------------------------------------------------------------

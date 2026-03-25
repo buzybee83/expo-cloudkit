@@ -2783,6 +2783,15 @@ class ParticipantNotFoundException: Exception {
   }
 }
 
+/// Raised when `addParticipant` cannot resolve the provided email address.
+/// The message is deliberately generic — it must not reveal whether the email
+/// corresponds to a valid iCloud account.
+class ParticipantLookupFailedException: Exception {
+  override var reason: String {
+    "Could not add participant. Verify the email address is associated with an iCloud account."
+  }
+}
+
 class SharingUIUnavailableException: Exception {
   override var reason: String {
     "Cannot present sharing UI: no active view controller is available."
@@ -2824,6 +2833,7 @@ enum CloudKitModuleError {
   static func subscriptionNotFound(_ id: String) -> Exception { CloudKitSubscriptionNotFoundException(id) }
   static func invalidArgument(_ msg: String) -> Exception    { CloudKitInvalidArgumentException(msg) }
   static func participantNotFound(_ name: String) -> Exception { ParticipantNotFoundException(name) }
+  static var participantLookupFailed: Exception              { ParticipantLookupFailedException() }
   static func shareNotFound(_ detail: String = "") -> Exception { ShareURLNotFoundException(detail) }
 }
 

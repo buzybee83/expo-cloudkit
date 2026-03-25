@@ -48,6 +48,7 @@ import type {
   RawRecord,
   RecordIdentifier,
   RecordToSave,
+  AddParticipantOptions,
   RemoveParticipantOptions,
   SetDefaultParticipantPermissionOptions,
   ResolvedRecord,
@@ -55,7 +56,8 @@ import type {
   SaveQuerySubscriptionOptions,
   Share,
   SharedZone,
-  ShareInvitationEvent,
+  ShareAcceptedEvent,
+  SetShareMetadataOptions,
   ShareParticipant,
   SharingUIResult,
   SortDescriptor,
@@ -1129,6 +1131,15 @@ export function removeShareParticipant(_options: RemoveParticipantOptions): Prom
 }
 
 /**
+ * Throws `CloudKitNotSupportedError` — programmatic participant invitation is
+ * not available on web (no `CKContainer.fetchShareParticipant(withEmailAddress:)` equivalent
+ * in CloudKit JS).
+ */
+export function addParticipant(_options: AddParticipantOptions): Promise<ShareParticipant[]> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+/**
  * Throws `CloudKitNotSupportedError` — `CKShare.publicPermission` mutation is
  * not exposed in CloudKit JS.
  */
@@ -1213,13 +1224,21 @@ export function getShareURL(
 }
 
 /**
- * Returns a no-op Subscription — universal link / intent handling is not
- * available on web.
+ * Returns a no-op Subscription — CloudKit share acceptance requires the native
+ * iOS SDK and is not available on web.
  */
 export function addShareAcceptedListener(
-  _callback: (event: ShareInvitationEvent) => void
+  _callback: (event: ShareAcceptedEvent) => void
 ): Subscription {
   return noopSubscription;
+}
+
+/**
+ * Throws `CloudKitNotSupportedError` — setting CKShare metadata requires the
+ * native CloudKit SDK and is not available on web.
+ */
+export function setShareMetadata(_options: SetShareMetadataOptions): Promise<Share> {
+  return Promise.reject(new CloudKitNotSupportedError());
 }
 
 // ---------------------------------------------------------------------------

@@ -259,6 +259,94 @@ final class CloudKitShareManager {
     }
   }
 
+  // MARK: - Add Participant
+
+  /// Programmatically adds a participant to an existing CKShare by email address,
+  /// without presenting UICloudSharingController.
+  ///
+  /// Steps:
+  ///   1. Fetch the CKShare record by shareRecordName + zoneName.
+  ///   2. Look up the iCloud user via `CKContainer.fetchShareParticipant(withEmailAddress:)`.
+  ///   3. Set the participant's permission and add them to the share.
+  ///   4. Save the modified share via CKModifyRecordsOperation with savePolicy .changedKeys.
+  ///
+  /// The participant lookup is internal — it is not exposed as a standalone API
+  /// to prevent callers from using it for email enumeration.
+  ///
+  /// Error handling:
+  /// - If the participant lookup returns nil (or errors), a generic error is returned
+  ///   that does NOT reveal whether the email address corresponds to an iCloud account.
+  ///
+  /// - Parameters:
+  ///   - shareRecordName: The `CKRecord.ID.recordName` of the `CKShare` record.
+  ///   - email: Email address of the person to invite.
+  ///   - permission: The permission to grant the new participant.
+  ///   - zoneName: Optional zone name.
+  ///   - database: The database containing the share.
+  ///   - completion: Called with the updated participant list on success, or an error on failure.
+  func addParticipant(
+    shareRecordName: String,
+    email: String,
+    permission: CKShare.ParticipantPermission,
+    zoneName: String?,
+    database: CKDatabase,
+    completion: @escaping (Result<[[String: Any]], Error>) -> Void
+  ) {
+    // Step 1: Fetch the CKShare record.
+    fetchShare(recordName: shareRecordName, zoneName: zoneName, database: database) { [weak self] result in
+      guard let self = self else { return }
+
+      switch result {
+      case .failure(let error):
+        completion(.failure(error))
+
+      case .success(let share):
+        // Step 2: Look up the participant by email address.
+        // CKContainer.fetchShareParticipant(withEmailAddress:completionHandler:) is
+        // available on iOS 10+ and is the correct callback-based API for this task.
+        self.ckContainer.fetchShareParticipant(withEmailAddress: email) { participant, lookupError in
+          if let lookupError = lookupError {
+            // Map the lookup error — but use a generic message to avoid
+            // revealing whether the email is a valid iCloud account.
+            let ckErr = lookupError as? CKError
+            // participantMayNeedVerification means CloudKit found the account but
+            // the user must verify before they can be added. Surface that code
+            // directly so callers can prompt appropriately.
+            if ckErr?.code == .participantMayNeedVerification {
+              completion(.failure(lookupError))
+            } else {
+              // For all other lookup failures (including .unknownItem and network
+              // errors), return a generic error — do not reveal email existence.
+              completion(.failure(ShareManagerError.participantLookupFailed))
+            }
+            return
+          }
+
+          guard let participant = participant else {
+            // Nil participant without an error — treat as "not found" generically.
+            completion(.failure(ShareManagerError.participantLookupFailed))
+            return
+          }
+
+          // Step 3: Set permission and add to share.
+          participant.permission = permission
+          share.addParticipant(participant)
+
+          // Step 4: Save the modified share.
+          self.saveShare(share, database: database) { saveResult in
+            switch saveResult {
+            case .failure(let error):
+              completion(.failure(error))
+            case .success:
+              let participants = share.participants.map { Converters.toParticipantDictionary($0) }
+              completion(.success(participants))
+            }
+          }
+        }
+      }
+    }
+  }
+
   // MARK: - Accept Share
 
   /// Accepts a CloudKit share via its share URL.
@@ -827,11 +915,17 @@ private final class ZoneShareSharingDelegate: NSObject,
 /// These are wrapped into typed Exceptions at the module layer.
 enum ShareManagerError: Error {
   case participantNotFound(String)
+  /// Returned when `fetchShareParticipant(withEmailAddress:)` fails or returns nil.
+  /// The message is deliberately generic — it must NOT reveal whether the email
+  /// address corresponds to a valid iCloud account (email enumeration guard).
+  case participantLookupFailed
 
   var localizedDescription: String {
     switch self {
     case .participantNotFound(let name):
       return "Participant with user record name '\(name)' not found on this share."
+    case .participantLookupFailed:
+      return "Could not find a participant for the provided email address."
     }
   }
 }

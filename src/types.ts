@@ -421,6 +421,45 @@ export interface ShareInvitationEvent {
   shareURL: string;
 }
 
+/**
+ * Event emitted by `addShareAcceptedListener` after the app delegate has
+ * forwarded a `CKShareMetadata` via the `CKShareAccepted` notification and
+ * `CKAcceptSharesOperation` has completed successfully.
+ *
+ * Unlike `ShareInvitationEvent`, this event fires *after* acceptance — the
+ * shared zone is immediately accessible in the shared database.
+ */
+export interface ShareAcceptedEvent {
+  /** The canonical CloudKit share URL, or null if not yet propagated. */
+  shareURL: string | null;
+  /** Given name of the share owner, or null if not available. */
+  ownerFirstName: string | null;
+  /** Family name of the share owner, or null if not available. */
+  ownerLastName: string | null;
+  /** The zone name now accessible in the shared database. */
+  zoneName: string;
+  /** The CKRecord.ID.recordName of the root record. */
+  rootRecordType: string | null;
+}
+
+/**
+ * Options for `setShareMetadata`.
+ * Updates `CKShare.SystemFieldKey.title` and/or `thumbnailImageData` on an
+ * existing CKShare record for richer share previews in Messages and Mail.
+ */
+export interface SetShareMetadataOptions {
+  /** The `CKRecord.ID.recordName` of the existing CKShare record. */
+  shareRecordName: string;
+  /** Zone containing the share. Defaults to the default zone. */
+  zoneName?: string;
+  /** Display title shown in Messages/Mail share previews. */
+  title?: string;
+  /** Base64-encoded PNG or JPEG thumbnail (recommended: 150×150 px). */
+  thumbnailData?: string;
+  /** Database containing the share. Defaults to `'private'`. */
+  database?: DatabaseScope;
+}
+
 export type ParticipantRole = 'owner' | 'privateUser' | 'publicUser' | 'unknown';
 export type ParticipantPermission = 'none' | 'readOnly' | 'readWrite' | 'unknown';
 export type ParticipantAcceptanceStatus =
@@ -560,6 +599,28 @@ export interface RemoveParticipantOptions {
   participantRecordName: string;
   /** Zone the share lives in. Omit for the default zone. */
   zoneName?: string;
+}
+
+/**
+ * Options for `addParticipant()`.
+ * Programmatically invites a participant by email without presenting
+ * UICloudSharingController. The iCloud user lookup is internal and not
+ * exposed separately to prevent email enumeration.
+ */
+export interface AddParticipantOptions {
+  /** recordName of the CKShare record to add the participant to. */
+  shareRecordName: string;
+  /**
+   * Email address of the person to invite.
+   * Internally looked up via `CKContainer.fetchShareParticipant(withEmailAddress:)`.
+   */
+  email: string;
+  /** Permission to grant the new participant. Default: 'readOnly'. */
+  permission?: SharePermission;
+  /** Zone the share lives in. Omit for the default zone. */
+  zoneName: string;
+  /** Database the share lives in. Default: 'private'. */
+  database?: DatabaseScope;
 }
 
 /**
