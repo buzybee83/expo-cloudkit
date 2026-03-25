@@ -53,6 +53,7 @@ export function ExpoCloudKitMockFactory() {
     presentSharingUI: jest.fn(),
     fetchShareParticipants: jest.fn(),
     updateSharePermission: jest.fn(),
+    setDefaultParticipantPermission: jest.fn(),
     removeShareParticipant: jest.fn(),
     acceptShare: jest.fn(),
     fetchSharedDatabaseZones: jest.fn(),

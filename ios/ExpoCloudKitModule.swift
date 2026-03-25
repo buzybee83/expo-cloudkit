@@ -609,6 +609,46 @@ public class ExpoCloudKitModule: Module {
       }
     }
 
+    /// Fetches ALL records currently in a zone using a one-shot full-zone dump.
+    ///
+    /// Unlike `fetchRecordZoneChanges`, this function:
+    ///   - Does NOT require or accept a prior change token
+    ///   - Does NOT persist the resulting change token
+    ///   - Does NOT track deletions (only current live records are returned)
+    ///   - Accepts an optional client-side `predicate` dict for field filtering
+    ///
+    /// It is intended for reinstall / first-sync import flows where the caller needs
+    /// to reconstruct local state from the cloud without running the sync engine.
+    ///
+    /// Options keys:
+    ///   - zoneName  (String, required)
+    ///   - database  (String, optional — "private"|"shared"|"public", default "private")
+    ///   - predicate (Dict, optional — `{ field: String, value: Any }`)
+    ///
+    /// Resolves with `{ records: [CloudKitRecord], count: Int }`.
+    AsyncFunction("fetchZoneRecords") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self, let recordManager = self.recordManager else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+      guard let zoneName = options["zoneName"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("zoneName is required"))
+        return
+      }
+      let dbString = options["database"] as? String ?? "private"
+      let scope = Converters.toDatabaseScope(dbString)
+      let predicate = options["predicate"] as? [String: Any]
+
+      recordManager.fetchZoneRecords(zoneName: zoneName, database: scope, predicate: predicate) { result in
+        switch result {
+        case .success(let payload):
+          promise.resolve(payload)
+        case .failure(let error):
+          promise.reject(Converters.toExpoError(error))
+        }
+      }
+    }
+
     // -------------------------------------------------------------------------
     // Reference Deep Linking — Phase C
     // -------------------------------------------------------------------------
@@ -1454,6 +1494,65 @@ public class ExpoCloudKitModule: Module {
             promise.reject(Converters.toExpoError(error))
           }
         }
+      }
+    }
+
+    /// Sets `CKShare.publicPermission` — the default permission granted to all
+    /// participants who join via the share URL — without requiring UICloudSharingController.
+    ///
+    /// This is distinct from `updateSharePermission` which changes a specific
+    /// participant's permission. This sets the share-level default that applies to
+    /// every new participant who accepts the invitation link.
+    ///
+    /// Options keys:
+    ///   - shareRecordName (String, required)
+    ///   - permission ("none"|"readOnly"|"readWrite", required)
+    ///   - zoneName (String, optional, defaults to default zone)
+    ///   - database (String, default "private")
+    AsyncFunction("setDefaultParticipantPermission") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self, let container = self.container else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+
+      guard let shareRecordName = options["shareRecordName"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("shareRecordName is required"))
+        return
+      }
+      guard let permissionString = options["permission"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("permission is required"))
+        return
+      }
+
+      let zoneName = options["zoneName"] as? String ?? CKRecordZone.default().zoneID.zoneName
+      let dbString = options["database"] as? String ?? "private"
+      let permission = Converters.toSharePermission(permissionString)
+      let scope = Converters.toDatabaseScope(dbString)
+      let database = container.ckContainer.database(with: scope)
+      let zoneID = CKRecordZone.ID(zoneName: zoneName, ownerName: CKCurrentUserDefaultName)
+      let shareID = CKRecord.ID(recordName: shareRecordName, zoneID: zoneID)
+
+      database.fetch(withRecordID: shareID) { record, error in
+        if let error = error {
+          promise.reject(Converters.toExpoError(error))
+          return
+        }
+        guard let share = record as? CKShare else {
+          promise.reject(CloudKitModuleError.recordNotFound)
+          return
+        }
+        share.publicPermission = permission
+        let op = CKModifyRecordsOperation(recordsToSave: [share], recordIDsToDelete: nil)
+        op.savePolicy = .changedKeys
+        op.modifyRecordsResultBlock = { result in
+          switch result {
+          case .failure(let error):
+            promise.reject(Converters.toExpoError(error))
+          case .success:
+            promise.resolve(Converters.toShareDictionary(share))
+          }
+        }
+        database.add(op)
       }
     }
 

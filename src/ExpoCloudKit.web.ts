@@ -49,6 +49,7 @@ import type {
   RecordIdentifier,
   RecordToSave,
   RemoveParticipantOptions,
+  SetDefaultParticipantPermissionOptions,
   ResolvedRecord,
   SavedRecord,
   SaveQuerySubscriptionOptions,
@@ -1022,9 +1023,7 @@ export async function createShare(options: CreateShareOptions): Promise<Share> {
       zoneName: raw?.zoneID?.zoneName ?? options.zoneName ?? '_defaultZone',
       shareURL: raw?.fields?.shareURL?.value ?? null,
       publicPermission: options.publicPermission ?? 'none',
-      creationDate: raw?.created?.timestamp
-        ? new Date(raw.created.timestamp).toISOString()
-        : new Date().toISOString(),
+      creationDate: raw?.created?.timestamp ?? Date.now(),
     };
   } catch (err) {
     throw mapCKJSError(err, 'share');
@@ -1125,6 +1124,16 @@ export function updateSharePermission(_options: UpdatePermissionOptions): Promis
  * exposed in CloudKit JS.
  */
 export function removeShareParticipant(_options: RemoveParticipantOptions): Promise<Share> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+/**
+ * Throws `CloudKitNotSupportedError` — `CKShare.publicPermission` mutation is
+ * not exposed in CloudKit JS.
+ */
+export function setDefaultParticipantPermission(
+  _options: SetDefaultParticipantPermissionOptions
+): Promise<Share> {
   return Promise.reject(new CloudKitNotSupportedError());
 }
 
@@ -1542,4 +1551,16 @@ export function setZoneChangeToken(
   _tokenBase64: string | null
 ): void {
   // no-op on web
+}
+
+/**
+ * Throws `CloudKitNotSupportedError` — `CKFetchRecordZoneChangesOperation` is
+ * not available in CloudKit JS. Use `queryRecords` with a specific record type on web.
+ */
+export function fetchZoneRecords(
+  _zoneName: string,
+  _predicate?: QueryPredicate,
+  _database: DatabaseScope = 'private'
+): Promise<{ records: CloudKitRecord[]; count: number }> {
+  return Promise.reject(new CloudKitNotSupportedError());
 }
