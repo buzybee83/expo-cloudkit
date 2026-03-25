@@ -11,6 +11,21 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.18.0] — 2026-03-24
+
+### Added
+
+- **`fetchShareMetadata(shareURL)`** — preview a CloudKit share before accepting it. Returns `ShareMetadata` with owner name, participant permission/role, root record type, title, and participant count. Uses `CKFetchShareMetadataOperation` with `shouldFetchRootRecord = false` for lightweight requests.
+- **`addParticipant(options)`** — programmatically invite a participant by email without presenting `UICloudSharingController`. Looks up the iCloud user internally via `CKContainer.fetchShareParticipant(withEmailAddress:)`, sets permission, and saves the modified `CKShare`. Error messages are deliberately generic to prevent email enumeration.
+- **`addShareAcceptedListener(callback)`** — fires after the app delegate forwards a `CKShareMetadata` via `CKShareAccepted` notification and `CKAcceptSharesOperation` completes. Event includes `ownerFirstName`, `ownerLastName`, `zoneName`, `rootRecordType`, and `shareURL`.
+- **`setShareMetadata(options)`** — sets `CKShare.SystemFieldKey.title` and optionally `thumbnailImageData` on an existing share for richer previews in Messages and Mail. Saves via `CKModifyRecordsOperation` with `savePolicy: .changedKeys`.
+- **`ShareMetadata` type** — returned by `fetchShareMetadata()`.
+- **`ShareAcceptedEvent` type** — event payload for `addShareAcceptedListener`.
+- **`AddParticipantOptions` type** — options for `addParticipant()`.
+- **`SetShareMetadataOptions` type** — options for `setShareMetadata()`.
+
+---
+
 ## [0.17.0] — 2026-03-24
 
 ### Added
