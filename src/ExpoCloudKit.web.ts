@@ -1022,9 +1022,7 @@ export async function createShare(options: CreateShareOptions): Promise<Share> {
       zoneName: raw?.zoneID?.zoneName ?? options.zoneName ?? '_defaultZone',
       shareURL: raw?.fields?.shareURL?.value ?? null,
       publicPermission: options.publicPermission ?? 'none',
-      creationDate: raw?.created?.timestamp
-        ? new Date(raw.created.timestamp).toISOString()
-        : new Date().toISOString(),
+      creationDate: raw?.created?.timestamp ?? Date.now(),
     };
   } catch (err) {
     throw mapCKJSError(err, 'share');
