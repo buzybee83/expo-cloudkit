@@ -47,6 +47,7 @@ import type {
   SyncEngineConfig,
   SyncEngineEvent,
   SyncStateMap,
+  SetDefaultParticipantPermissionOptions,
   UpdatePermissionOptions,
   WebConfigOptions,
   Zone,
@@ -376,6 +377,49 @@ export function fetchRecordZoneChanges(
   operationConfig?: OperationConfig
 ): Promise<ZoneChanges> {
   return callAsync(() => NativeModule!.fetchRecordZoneChanges(zoneNames, database, desiredKeys ?? null, operationConfig ?? null));
+}
+
+/**
+ * Fetches ALL records currently in a zone without requiring a record type.
+ *
+ * Uses `CKFetchRecordZoneChangesOperation` with no prior change token — a one-shot
+ * full zone dump. Does NOT persist the resulting change token, making it safe
+ * to call independently of the sync engine.
+ *
+ * Ideal for:
+ * - Reinstall / new-device: reconstruct local DB from cloud state
+ * - First shared-zone sync after accepting an invitation
+ * - Full zone import before starting the sync engine
+ *
+ * Unlike `queryRecords`, this does not require a `recordType` and therefore
+ * works on mixed-type zones. Unlike `fetchRecordZoneChanges`, it does not track
+ * deletions or persist change tokens — it simply returns all live records.
+ *
+ * @param zoneName  - Zone to fetch all records from.
+ * @param predicate - Optional client-side field equality filter `{ field, value }`.
+ * @param database  - Which database scope. Default: `'private'`.
+ * @returns `{ records: CloudKitRecord[], count: number }` with all current records in the zone.
+ *
+ * @throws {CloudKitError} code `NOT_AUTHENTICATED` if the user is not signed in.
+ * @throws {CloudKitError} code `ZONE_NOT_FOUND` if the zone does not exist.
+ * @throws {CloudKitError} code `NETWORK_UNAVAILABLE` if the device is offline.
+ *
+ * @example
+ * ```typescript
+ * const { records } = await fetchZoneRecords('MyZone');
+ * applyToLocalDB(records);
+ * ```
+ */
+export function fetchZoneRecords(
+  zoneName: string,
+  predicate?: QueryPredicate,
+  database: DatabaseScope = 'private'
+): Promise<{ records: CloudKitRecord[]; count: number }> {
+  const options: Record<string, unknown> = { zoneName, database };
+  if (predicate) {
+    options['predicate'] = predicate;
+  }
+  return callAsync(() => NativeModule!.fetchZoneRecords(options));
 }
 
 // ---------------------------------------------------------------------------
@@ -928,6 +972,40 @@ export function fetchShareParticipants(
  */
 export function updateSharePermission(options: UpdatePermissionOptions): Promise<Share> {
   return callAsync(() => NativeModule!.updateSharePermission(options));
+}
+
+/**
+ * Sets the default permission for all participants who join via the share URL
+ * (`CKShare.publicPermission`). This applies to every future participant who
+ * accepts the invitation link; existing participants retain their individually-set
+ * permissions.
+ *
+ * Use this instead of `updateSharePermission` when you want to enforce a role at
+ * the share level rather than per-participant. Eliminates the extra round-trip of
+ * calling `updateSharePermission` for each participant as they accept.
+ *
+ * @param shareRecordName - recordName of the CKShare record to update.
+ * @param permission      - New default permission: 'none' | 'readOnly' | 'readWrite'.
+ * @param zoneName        - Zone the share lives in. Omit for the default zone.
+ * @param database        - Which database scope. Default: 'private'.
+ * @returns Updated Share with the new publicPermission reflected.
+ * @throws {CloudKitError} code SHARE_NOT_FOUND if the share record does not exist.
+ * @throws {CloudKitError} code PERMISSION_DENIED if the caller is not the share owner.
+ *
+ * @example
+ * ```typescript
+ * const share = await setDefaultParticipantPermission({
+ *   shareRecordName: 'share-uuid',
+ *   permission: 'readOnly',
+ *   zoneName: 'MyZone',
+ * });
+ * console.log(share.publicPermission); // 'readOnly'
+ * ```
+ */
+export function setDefaultParticipantPermission(
+  options: SetDefaultParticipantPermissionOptions
+): Promise<Share> {
+  return callAsync(() => NativeModule!.setDefaultParticipantPermission(options));
 }
 
 /**

@@ -106,6 +106,7 @@ import {
   presentSharingUI,
   updateSharePermission,
   removeShareParticipant,
+  setDefaultParticipantPermission,
   enqueueOfflineOperation,
   drainOfflineQueue,
   getOfflineQueueStatus,
@@ -354,6 +355,15 @@ describe('updateSharePermission and removeShareParticipant stubs', () => {
       removeShareParticipant({
         shareRecordName: 'share-1',
         participantRecordName: 'p1',
+      })
+    ).rejects.toBeInstanceOf(CloudKitNotSupportedError);
+  });
+
+  it('setDefaultParticipantPermission rejects with CloudKitNotSupportedError', async () => {
+    await expect(
+      setDefaultParticipantPermission({
+        shareRecordName: 'share-1',
+        permission: 'readOnly',
       })
     ).rejects.toBeInstanceOf(CloudKitNotSupportedError);
   });

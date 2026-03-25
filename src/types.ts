@@ -359,8 +359,8 @@ export interface Share {
   /** URL to share with participants. */
   shareURL: string | null;
   publicPermission: SharePermission;
-  /** ISO 8601 creation date. */
-  creationDate: string;
+  /** Unix ms timestamp of when the share was created. */
+  creationDate: number;
 }
 
 /** Outcome from presentSharingUI. */
@@ -501,6 +501,22 @@ export interface UpdatePermissionOptions {
   permission: ParticipantPermission;
   /** Zone the share lives in. Omit for the default zone. */
   zoneName?: string;
+}
+
+/**
+ * Options for `setDefaultParticipantPermission()`.
+ * Sets `CKShare.publicPermission` — the default permission granted to all
+ * participants who join via the share URL.
+ */
+export interface SetDefaultParticipantPermissionOptions {
+  /** recordName of the CKShare record to update. */
+  shareRecordName: string;
+  /** New default permission for all participants who join via the share URL. */
+  permission: SharePermission;
+  /** Zone the share lives in. Omit for the default zone. */
+  zoneName?: string;
+  /** Database the share lives in. Default: 'private'. */
+  database?: DatabaseScope;
 }
 
 /**
@@ -825,7 +841,7 @@ export interface ContainerInfo {
  * but may be omitted from normal record responses for bandwidth reasons.
  * Returned by `__debugFetchRawRecord()`.
  *
- * All date fields are ISO 8601 strings to match `CloudKitRecord`.
+ * All date fields are Unix ms timestamps (number).
  *
  * @internal
  */

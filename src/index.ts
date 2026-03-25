@@ -59,6 +59,7 @@ export type {
   PresentSharingOptions,
   FetchParticipantsOptions,
   UpdatePermissionOptions,
+  SetDefaultParticipantPermissionOptions,
   RemoveParticipantOptions,
   AcceptShareOptions,
   SortDescriptor,
@@ -152,6 +153,7 @@ export {
   deleteRecords,
   fetchRecordZoneChanges,
   fetchAllZoneChanges,
+  fetchZoneRecords,
 } from './ExpoCloudKit';
 
 // Phase B — CKSyncEngine (iOS 17+)
@@ -189,6 +191,7 @@ export {
   presentSharingUI,
   fetchShareParticipants,
   updateSharePermission,
+  setDefaultParticipantPermission,
   removeShareParticipant,
   acceptShare,
   fetchSharedDatabaseZones,
