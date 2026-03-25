@@ -633,6 +633,113 @@ final class CloudKitRecordManager {
     }
   }
 
+  // MARK: - Full Zone Import (fetchZoneRecords)
+
+  /// Fetches ALL current records from a single zone in one shot.
+  ///
+  /// Uses `CKFetchRecordZoneChangesOperation` with a `nil` previous change token,
+  /// which causes CloudKit to return every record currently in the zone.
+  /// The resulting server change token is intentionally discarded — this is an
+  /// import primitive, not a sync operation. Callers that need incremental sync
+  /// should use `fetchRecordZoneChanges` instead.
+  ///
+  /// If `predicate` is non-nil the records are filtered client-side after the
+  /// fetch completes. CloudKit's `CKQueryOperation` requires a recordType so it
+  /// cannot be used here for mixed-type zones.
+  ///
+  /// - Parameters:
+  ///   - zoneName:  Name of the zone to import.
+  ///   - scope:     Database scope (private / shared / public).
+  ///   - predicate: Optional JS predicate dict `{ field, value }` for client-side filtering.
+  ///   - completion: Called on the CloudKit callback queue with the result.
+  func fetchZoneRecords(
+    zoneName: String,
+    database scope: CKDatabase.Scope,
+    predicate: [String: Any]?,
+    completion: @escaping (Result<[String: Any], Error>) -> Void
+  ) {
+    let db = database(for: scope)
+    let zoneID = CKRecordZone.ID(zoneName: zoneName, ownerName: CKCurrentUserDefaultName)
+
+    Task {
+      do {
+        let result = try await withRetry(
+          operationName: "fetchZoneRecords",
+          onRateLimited: makeRateLimitedCallback("fetchZoneRecords")
+        ) {
+          try await self.fetchZoneRecordsAsync(zoneID: zoneID, predicate: predicate, in: db)
+        }
+        completion(.success(result))
+      } catch {
+        completion(.failure(error))
+      }
+    }
+  }
+
+  private func fetchZoneRecordsAsync(
+    zoneID: CKRecordZone.ID,
+    predicate: [String: Any]?,
+    in db: CKDatabase
+  ) async throws -> [String: Any] {
+    try await withCheckedThrowingContinuation { continuation in
+      var collectedRecords: [CKRecord] = []
+
+      // Pass nil previousServerChangeToken to request all records from the start.
+      var config = CKFetchRecordZoneChangesOperation.ZoneConfiguration()
+      config.previousServerChangeToken = nil
+
+      let operation = CKFetchRecordZoneChangesOperation(
+        recordZoneIDs: [zoneID],
+        configurationsByRecordZoneID: [zoneID: config]
+      )
+      operation.qualityOfService = .userInitiated
+      // fetchAllChanges = true causes the operation to automatically page through
+      // all server-side pages without the caller needing to handle moreComing.
+      operation.fetchAllChanges = true
+
+      operation.recordWasChangedBlock = { _, result in
+        if case .success(let record) = result {
+          collectedRecords.append(record)
+        }
+        // Per-record failures are silently skipped — partial results are acceptable
+        // for a bulk import operation.
+      }
+
+      operation.fetchRecordZoneChangesResultBlock = { result in
+        switch result {
+        case .failure(let error):
+          continuation.resume(throwing: error)
+
+        case .success:
+          // Apply optional client-side field equality filter.
+          let filtered: [[String: Any]]
+          if let predicate = predicate,
+             let field = predicate["field"] as? String {
+            let matchValue = predicate["value"].map { "\($0)" } ?? ""
+            filtered = collectedRecords.compactMap { record in
+              let dict = Converters.toDictionary(record)
+              guard
+                let fields = dict["fields"] as? [String: [String: Any]],
+                let fieldDict = fields[field],
+                let fieldValue = fieldDict["value"]
+              else { return nil }
+              return "\(fieldValue)" == matchValue ? dict : nil
+            }
+          } else {
+            filtered = collectedRecords.map { Converters.toDictionary($0) }
+          }
+
+          continuation.resume(returning: [
+            "records": filtered,
+            "count": filtered.count
+          ])
+        }
+      }
+
+      db.add(operation)
+    }
+  }
+
   // MARK: - Batch Fetch (I.1)
 
   /// Fetches multiple records in a single `CKFetchRecordsOperation`.
