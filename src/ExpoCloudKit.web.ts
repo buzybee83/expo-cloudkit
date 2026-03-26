@@ -25,6 +25,7 @@ import type {
   AccountStatus,
   AcceptShareOptions,
   AcceptedShare,
+  AddParticipantsOptions,
   AssetProgress,
   BatchProgress,
   CloudKitClient,
@@ -41,6 +42,7 @@ import type {
   OfflineQueueEntryStatus,
   OfflineQueueEvent,
   OfflineQueueStatus,
+  ParticipantChangedEvent,
   PendingRecordChange,
   PresentSharingOptions,
   QueryPredicate,
@@ -1100,15 +1102,24 @@ export async function fetchShareParticipants(
     // Participants are embedded in the share record's fields
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const participants: any[] = shareRecord?.participants ?? shareRecord?.fields?.participants?.value ?? [];
-    return participants.map((p) => ({
-      participantRecordName: p?.userIdentity?.userRecordName ?? p?.participantRecordName ?? '',
-      role: p?.role ?? 'unknown',
-      permission: p?.permission ?? 'unknown',
-      acceptanceStatus: p?.acceptanceStatus ?? 'unknown',
-      firstName: p?.userIdentity?.nameComponents?.givenName ?? null,
-      lastName: p?.userIdentity?.nameComponents?.familyName ?? null,
-      isCurrentUser: p?.isCurrentUser ?? false,
-    }));
+    return participants.map((p) => {
+      const firstName: string | null = p?.userIdentity?.nameComponents?.givenName ?? null;
+      const lastName: string | null = p?.userIdentity?.nameComponents?.familyName ?? null;
+      let displayName = 'Unknown Participant';
+      if (firstName && lastName) displayName = `${firstName} ${lastName}`;
+      else if (firstName) displayName = firstName;
+      else if (lastName) displayName = lastName;
+      return {
+        participantRecordName: p?.userIdentity?.userRecordName ?? p?.participantRecordName ?? '',
+        role: p?.role ?? 'unknown',
+        permission: p?.permission ?? 'unknown',
+        acceptanceStatus: p?.acceptanceStatus ?? 'unknown',
+        firstName,
+        lastName,
+        displayName,
+        isCurrentUser: p?.isCurrentUser ?? false,
+      };
+    });
   } catch (err) {
     throw mapCKJSError(err, 'share');
   }
@@ -1137,6 +1148,24 @@ export function removeShareParticipant(_options: RemoveParticipantOptions): Prom
  */
 export function addParticipant(_options: AddParticipantOptions): Promise<ShareParticipant[]> {
   return Promise.reject(new CloudKitNotSupportedError());
+}
+
+/**
+ * Throws `CloudKitNotSupportedError` — bulk participant invitation is not
+ * available on web (no `CKContainer.fetchShareParticipant` equivalent in CloudKit JS).
+ */
+export function addParticipants(_options: AddParticipantsOptions): Promise<ShareParticipant[]> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+/**
+ * Returns a no-op Subscription — `onParticipantChanged` events are iOS-only
+ * (requires CKSyncEngine or manual sync to detect participant changes).
+ */
+export function addParticipantChangeListener(
+  _callback: (event: ParticipantChangedEvent) => void
+): Subscription {
+  return noopSubscription;
 }
 
 /**

@@ -102,6 +102,13 @@ public class ExpoCloudKitModule: Module {
   /// Nil until `configure()` is called.
   private var offlineQueue: OfflineQueue?
 
+  // MARK: - Participant change tracking
+
+  /// Tracks the set of participant record names per share, keyed by shareRecordName.
+  /// Updated whenever `recordsFetched` sync events contain CKShare records.
+  /// Diffs are emitted as `onParticipantChanged` events to JS.
+  private var knownShareParticipants: [String: Set<String>] = [:]
+
   // MARK: - Module Definition
 
   public func definition() -> ModuleDefinition {
@@ -118,7 +125,8 @@ public class ExpoCloudKitModule: Module {
       "onBatchProgress",
       "onOfflineQueueEvent",
       "onSyncConflict",
-      "onRateLimited"
+      "onRateLimited",
+      "onParticipantChanged"
     )
 
     // -------------------------------------------------------------------------
@@ -1604,23 +1612,25 @@ public class ExpoCloudKitModule: Module {
 
     /// Programmatically adds a participant to an existing CKShare by email address.
     ///
-    /// Internally looks up the iCloud user via
-    /// `CKContainer.fetchShareParticipant(withEmailAddress:)`, sets the requested
-    /// permission, adds them to the share, and saves via CKModifyRecordsOperation.
+    /// Internally looks up the iCloud user via email or phone number, sets the
+    /// requested permission, adds them to the share, and saves via CKModifyRecordsOperation.
     ///
     /// Does NOT present UICloudSharingController — use this for custom invitation flows.
     ///
     /// Options keys:
     ///   - shareRecordName (String, required) — CKRecord.ID.recordName of the CKShare
-    ///   - email           (String, required) — email address of the person to invite
+    ///   - email           (String, optional) — email address of the person to invite; preferred over phoneNumber
+    ///   - phoneNumber     (String, optional) — phone number of the person to invite; used when email is absent
     ///   - permission      (String, default "readOnly") — "none"|"readOnly"|"readWrite"
     ///   - zoneName        (String, optional) — defaults to the default zone
     ///   - database        (String, default "private")
     ///
+    /// At least one of `email` or `phoneNumber` must be present.
+    ///
     /// Resolves with: [[String: Any]] — updated participant list after adding
     ///
     /// Rejects with:
-    ///   - PARTICIPANT_LOOKUP_FAILED    — email not found or lookup error (generic — no enumeration)
+    ///   - PARTICIPANT_LOOKUP_FAILED    — contact not found or lookup error (generic — no enumeration)
     ///   - PARTICIPANT_NEEDS_VERIFICATION — CloudKit found the account but it needs verification
     ///   - SHARE_NOT_FOUND    — the share record does not exist
     ///   - PERMISSION_DENIED  — caller is not the share owner
@@ -1634,8 +1644,12 @@ public class ExpoCloudKitModule: Module {
         promise.reject(CloudKitModuleError.invalidArgument("shareRecordName is required"))
         return
       }
-      guard let email = options["email"] as? String else {
-        promise.reject(CloudKitModuleError.invalidArgument("email is required"))
+
+      let email = options["email"] as? String
+      let phoneNumber = options["phoneNumber"] as? String
+
+      guard email != nil || phoneNumber != nil else {
+        promise.reject(CloudKitModuleError.invalidArgument("Either email or phoneNumber is required"))
         return
       }
 
@@ -1649,6 +1663,7 @@ public class ExpoCloudKitModule: Module {
       shareManager.addParticipant(
         shareRecordName: shareRecordName,
         email: email,
+        phoneNumber: phoneNumber,
         permission: permission,
         zoneName: zoneName,
         database: database
@@ -1659,11 +1674,72 @@ public class ExpoCloudKitModule: Module {
         case .failure(let error):
           switch error {
           case ShareManagerError.participantLookupFailed,
-               ShareManagerError.participantNotFound:
+               ShareManagerError.participantNotFound,
+               ShareManagerError.missingContactInfo:
             promise.reject(CloudKitModuleError.participantLookupFailed)
           default:
             promise.reject(Converters.toExpoError(error))
           }
+        }
+      }
+    }
+
+    /// Adds multiple participants to an existing CKShare in a single efficient operation.
+    ///
+    /// Fetches the share once, resolves all participant lookups concurrently, then saves
+    /// the share once. This is much more efficient than N sequential `addParticipant` calls.
+    ///
+    /// Options keys:
+    ///   - shareRecordName (String, required) — CKRecord.ID.recordName of the CKShare
+    ///   - participants    ([{ email?, phoneNumber?, permission? }], required) — people to invite
+    ///   - zoneName        (String, optional) — defaults to the default zone
+    ///   - database        (String, default "private")
+    ///
+    /// Resolves with: [[String: Any]] — full participant list after adding all resolved entries
+    ///
+    /// Participants whose lookup fails are silently skipped — the operation succeeds for
+    /// the remaining valid participants. Callers should diff the returned list against
+    /// the requested list to detect any lookup failures.
+    AsyncFunction("addParticipants") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self, let shareManager = self.shareManager, let container = self.container else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+
+      guard let shareRecordName = options["shareRecordName"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("shareRecordName is required"))
+        return
+      }
+
+      guard let participantDicts = options["participants"] as? [[String: Any]] else {
+        promise.reject(CloudKitModuleError.invalidArgument("participants must be an array"))
+        return
+      }
+
+      let zoneName = options["zoneName"] as? String
+      let dbString = options["database"] as? String ?? "private"
+      let scope = Converters.toDatabaseScope(dbString)
+      let database = container.ckContainer.database(with: scope)
+
+      let participantEntries: [(email: String?, phoneNumber: String?, permission: CKShare.ParticipantPermission)] =
+        participantDicts.map { dict in
+          let email = dict["email"] as? String
+          let phone = dict["phoneNumber"] as? String
+          let permString = dict["permission"] as? String ?? "readOnly"
+          return (email: email, phoneNumber: phone, permission: Converters.toSharePermission(permString))
+        }
+
+      shareManager.addParticipants(
+        shareRecordName: shareRecordName,
+        participants: participantEntries,
+        zoneName: zoneName,
+        database: database
+      ) { result in
+        switch result {
+        case .success(let participants):
+          promise.resolve(participants)
+        case .failure(let error):
+          promise.reject(Converters.toExpoError(error))
         }
       }
     }
@@ -2633,6 +2709,13 @@ extension ExpoCloudKitModule {
         "zoneName": zoneName
       ]
 
+      // Detect participant changes on any CKShare records included in this fetch.
+      // CKShare is a subclass of CKRecord — cast to detect share records.
+      for record in changed {
+        guard let share = record as? CKShare else { continue }
+        diffAndEmitParticipantChanges(share: share, zoneName: zoneName)
+      }
+
     case .recordsSent(let saved, let failed):
       payload = [
         "type": "recordsSent",
@@ -2708,6 +2791,73 @@ extension ExpoCloudKitModule {
     // Expo requires sendEvent on the main thread.
     DispatchQueue.main.async { [weak self] in
       self?.sendEvent("onSyncEngineEvent", payload)
+    }
+  }
+
+  // MARK: - Participant change diffing
+
+  /// Diffs the current participant set for a CKShare against the last known set and
+  /// emits `onParticipantChanged` events for any additions or removals.
+  ///
+  /// Runs on whatever queue the sync event arrived on; `sendEvent` is dispatched to main.
+  ///
+  /// - Parameters:
+  ///   - share: The fetched CKShare record (a subclass of CKRecord).
+  ///   - zoneName: The zone name from the recordsFetched event payload.
+  func diffAndEmitParticipantChanges(share: CKShare, zoneName: String) {
+    let shareRecordName = share.recordID.recordName
+
+    // Build the current participant set from the freshly fetched share.
+    let currentParticipants = share.participants
+    let currentRecordNames = Set(currentParticipants.compactMap { $0.userIdentity.userRecordID?.recordName })
+
+    // Retrieve (or initialise) the previously known set for this share.
+    let previousRecordNames = knownShareParticipants[shareRecordName] ?? Set<String>()
+
+    // Determine additions and removals.
+    let added = currentRecordNames.subtracting(previousRecordNames)
+    let removed = previousRecordNames.subtracting(currentRecordNames)
+
+    // Persist the updated known set immediately so re-entrant events are accurate.
+    knownShareParticipants[shareRecordName] = currentRecordNames
+
+    // Emit one event per added participant.
+    for addedName in added {
+      guard let participant = currentParticipants.first(where: {
+        $0.userIdentity.userRecordID?.recordName == addedName
+      }) else { continue }
+
+      let eventPayload: [String: Any] = [
+        "shareRecordName": shareRecordName,
+        "zoneName": zoneName,
+        "participant": Converters.toParticipantDictionary(participant),
+        "changeType": "added"
+      ]
+      DispatchQueue.main.async { [weak self] in
+        self?.sendEvent("onParticipantChanged", eventPayload)
+      }
+    }
+
+    // Emit one event per removed participant (name only — no participant object available).
+    for removedName in removed {
+      let eventPayload: [String: Any] = [
+        "shareRecordName": shareRecordName,
+        "zoneName": zoneName,
+        "participant": [
+          "participantRecordName": removedName,
+          "role": "unknown",
+          "permission": "unknown",
+          "acceptanceStatus": "removed",
+          "isCurrentUser": false,
+          "displayName": "Unknown Participant",
+          "firstName": NSNull(),
+          "lastName": NSNull()
+        ] as [String: Any],
+        "changeType": "removed"
+      ]
+      DispatchQueue.main.async { [weak self] in
+        self?.sendEvent("onParticipantChanged", eventPayload)
+      }
     }
   }
 }

@@ -474,12 +474,101 @@ export interface ShareParticipant {
   role: ParticipantRole;
   permission: ParticipantPermission;
   acceptanceStatus: ParticipantAcceptanceStatus;
-  /** User's iCloud first name, if available. */
+  /** User's iCloud first name, if available. Null when CloudKit has not resolved name components. */
   firstName: string | null;
-  /** User's iCloud last name, if available. */
+  /** User's iCloud last name, if available. Null when CloudKit has not resolved name components. */
   lastName: string | null;
+  /**
+   * A computed display name derived from firstName and lastName.
+   *
+   * Fallback logic (computed natively):
+   * - Both available  → "First Last"
+   * - Only firstName  → "First"
+   * - Only lastName   → "Last"
+   * - Neither         → "Unknown Participant"
+   */
+  displayName: string;
   /** True if this participant is the currently signed-in iCloud user. */
   isCurrentUser: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Bulk Participant Operations
+// ---------------------------------------------------------------------------
+
+/**
+ * A single entry in the `participants` array passed to `addParticipants`.
+ *
+ * Provide `email` (preferred) or `phoneNumber`. At least one must be present per entry.
+ * If both are provided, email takes precedence on the native side.
+ */
+export interface BulkParticipantEntry {
+  /** Email address of the person to invite. Preferred over phoneNumber. */
+  email?: string;
+  /**
+   * Phone number of the person to invite.
+   * Used only when email is absent. Typically E.164 format (e.g. "+14155551234").
+   */
+  phoneNumber?: string;
+  /** Permission to grant this participant. Default: 'readOnly'. */
+  permission?: SharePermission;
+}
+
+/**
+ * Options for `addParticipants` (bulk invite).
+ *
+ * Fetches the CKShare once, resolves all participant lookups concurrently via
+ * DispatchGroup, then saves the share once — 1 fetch + 1 save regardless of
+ * how many participants are invited.
+ */
+export interface AddParticipantsOptions {
+  /** CKRecord.ID.recordName of the CKShare record to modify. */
+  shareRecordName: string;
+  /**
+   * People to invite. Entries whose lookup fails are silently skipped.
+   * Compare the returned participant list to the input to detect failures.
+   */
+  participants: BulkParticipantEntry[];
+  /** Zone the share lives in. Defaults to the default zone. */
+  zoneName?: string;
+  /** Which database contains the share. Default: 'private'. */
+  database?: DatabaseScope;
+}
+
+// ---------------------------------------------------------------------------
+// Participant Change Event
+// ---------------------------------------------------------------------------
+
+/**
+ * Event emitted on `onParticipantChanged` whenever a participant joins or
+ * leaves a share that is tracked by the sync engine.
+ *
+ * The native module diffs each CKShare record received in `recordsFetched`
+ * sync events against a locally cached snapshot. One event is emitted per
+ * addition or removal detected.
+ *
+ * Subscribe via `addParticipantChangeListener`.
+ */
+export interface ParticipantChangedEvent {
+  /** CKRecord.ID.recordName of the share that changed. */
+  shareRecordName: string;
+  /** Zone the share lives in. */
+  zoneName: string;
+  /**
+   * The participant who joined or left.
+   *
+   * For `'removed'` events, only `participantRecordName`, `acceptanceStatus: 'removed'`,
+   * `displayName: 'Unknown Participant'`, and `isCurrentUser: false` are guaranteed —
+   * CloudKit does not retain full identity for departed participants.
+   */
+  participant: ShareParticipant;
+  /**
+   * The nature of the change:
+   * - `'added'`             — participant joined the share
+   * - `'removed'`           — participant left or was removed
+   * - `'permissionChanged'` — reserved; not yet emitted by the native module
+   */
+  changeType: 'added' | 'removed' | 'permissionChanged';
 }
 
 /** A zone accessible via the shared database. */
