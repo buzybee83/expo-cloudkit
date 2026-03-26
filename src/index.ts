@@ -127,6 +127,10 @@ export type {
   CreateShareFromTemplateOptions,
   GetShareActivityOptions,
   ShareActivityEntry,
+  // Encrypted Search (L.2)
+  IndexEncryptedRecordOptions,
+  DeindexRecordOptions,
+  SearchEncryptedOptions,
 } from './types';
 
 // Errors
@@ -294,3 +298,6 @@ export { getZoneChangeToken, setZoneChangeToken } from './ExpoCloudKit';
 
 // Share Convenience — leaveShare, createShareFromTemplate, getShareActivity
 export { leaveShare, createShareFromTemplate, getShareActivity } from './ExpoCloudKit';
+
+// Encrypted Search (L.2) — client-side index over encrypted fields
+export { indexEncryptedRecord, deindexRecord, searchEncrypted } from './ExpoCloudKit';

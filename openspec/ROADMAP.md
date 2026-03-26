@@ -521,3 +521,246 @@ _Done when_: A developer unfamiliar with CloudKit can read the README top-to-bot
 - **J.4 (README overhaul)** is independent of all code work and can run in parallel. The current README's sequential-addition structure is the biggest barrier to adoption. A well-structured README is table-stakes for an OSS module.
 
 **J.3 (Android fallback) runs in Batch 2** because it references J.2's `CloudKitValidationError` error subclass pattern for consistency, and because the `ExpoCloudKit.android.ts` file must be kept in sync with `ExpoCloudKit.web.ts` — waiting for Batch 1 ensures the web layer is stable. J.3 is also the highest-risk item in Phase J due to the Custom Tab auth flow on Android, which needs manual testing across browsers.
+
+---
+
+## Phase K — Live Collaboration (highest priority)
+
+### K.1 — Presence & Cursors
+_Effort: M (Swift + TypeScript) | Agent: ios-native-dev + ts-sdk-dev (parallel)_
+
+Real-time presence indicators and cursor/selection tracking for multi-user collaboration scenarios using CKRecord change subscriptions and lightweight heartbeat records.
+
+- [ ] **Swift**: Create `ios/CloudKitPresenceManager.swift` — manages per-user presence records (`CKRecord` of type `Presence`) with heartbeat writes on a configurable interval (default 5s)
+- [ ] **Swift**: Implement cursor position broadcasting — save cursor/selection state as a field on the presence record; subscribe to changes via `CKQuerySubscription` on the `Presence` record type
+- [ ] **Swift**: Add `startPresence(zoneID:, userInfo:)`, `stopPresence()`, `updateCursor(position:)` AsyncFunctions in `ExpoCloudKitModule.swift`
+- [ ] **TypeScript**: Export `startPresence(options: PresenceOptions): Promise<void>`, `stopPresence(): Promise<void>`, `updateCursor(position: CursorPosition): Promise<void>` in `src/index.ts`
+- [ ] **TypeScript**: Add `usePresence(zoneId: string)` hook — returns `{ participants: PresenceParticipant[], updateCursor: (pos) => void }` with reactive updates as users join/leave/move
+- [ ] **TypeScript**: Add `PresenceOptions`, `PresenceParticipant`, `CursorPosition` types to `src/types.ts`
+
+_Done when_: Two users in the same zone see each other's presence status and cursor positions update in real time (within heartbeat interval). Presence records are cleaned up when `stopPresence()` is called or the app backgrounds.
+
+---
+
+### K.2 — CRDT-Based Conflict Resolution (text, counters, sets)
+_Effort: M (Swift + TypeScript) | Agent: ios-native-dev + ts-sdk-dev (parallel)_
+
+Conflict-free replicated data types layered on top of CloudKit record fields, enabling automatic merge of concurrent edits without manual conflict resolution for supported field types.
+
+- [ ] **Swift**: Create `ios/CRDTEngine.swift` — implements three CRDT types: LWW-Register (last-writer-wins text with vector clocks), G-Counter (grow-only counter stored as per-device map), OR-Set (observed-remove set for tags/lists)
+- [ ] **Swift**: Integrate CRDT merge into `CKSyncEngineDelegate.handleEvent` — when a conflict is detected on a CRDT-enabled field, auto-merge using the appropriate CRDT strategy instead of surfacing to JS
+- [ ] **Swift**: Store CRDT metadata as a serialized JSON field (`_crdt_meta`) on each CKRecord that uses CRDT fields
+- [ ] **TypeScript**: Export `createCRDTField(type: 'text' | 'counter' | 'set', initialValue?)` helper that returns a field value with embedded CRDT metadata
+- [ ] **TypeScript**: Add `useCRDTRecord(recordName: string, schema: CRDTSchema)` hook — returns typed fields with `.increment()` (counter), `.add()/.remove()` (set), and `.setText()` (text) mutators
+- [ ] **TypeScript**: Add `CRDTSchema`, `CRDTFieldType`, `CRDTText`, `CRDTCounter`, `CRDTSet` types to `src/types.ts`
+
+_Done when_: Two devices concurrently increment a counter field on the same record; after sync, both devices show the correct merged total without conflict errors. Concurrent text edits merge via LWW-Register. Concurrent set additions both appear in the merged set.
+
+---
+
+### K.3 — Live Activities / Widgets Integration (ActivityKit + WidgetKit bridge)
+_Effort: M (Swift + TypeScript) | Agent: ios-native-dev + ts-sdk-dev (parallel)_
+
+Bridge CloudKit record changes to iOS Live Activities and WidgetKit timelines, enabling real-time widget updates when CloudKit data changes.
+
+- [ ] **Swift**: Create `ios/CloudKitWidgetBridge.swift` — listens for CKSyncEngine record-received events and forwards relevant record changes to `WidgetCenter.shared.reloadTimelines(ofKind:)`
+- [ ] **Swift**: Create `ios/CloudKitActivityBridge.swift` — manages `Activity<CloudKitActivityAttributes>` instances that update content state when specified CloudKit records change
+- [ ] **Swift**: Add `registerWidgetSync(widgetKind:, recordType:, zoneID:)` and `startLiveActivity(recordName:, attributes:)` AsyncFunctions in `ExpoCloudKitModule.swift`
+- [ ] **TypeScript**: Export `registerWidgetSync(options: WidgetSyncOptions): Promise<void>` and `startLiveActivity(options: LiveActivityOptions): Promise<string>` (returns activity ID)
+- [ ] **TypeScript**: Add `updateLiveActivity(activityId: string, content: Record<string, unknown>): Promise<void>` and `endLiveActivity(activityId: string): Promise<void>`
+- [ ] **TypeScript**: Add `WidgetSyncOptions`, `LiveActivityOptions`, `CloudKitActivityAttributes` types to `src/types.ts`
+
+_Done when_: A WidgetKit widget registered with `registerWidgetSync` reloads its timeline when the specified record type changes in CloudKit. A Live Activity started with `startLiveActivity` updates its content when the backing CloudKit record is modified by another device.
+
+---
+
+## Phase L — AI & Privacy
+
+### L.1 — On-Device ML over CloudKit Data (Core ML bridge)
+_Effort: M (Swift + TypeScript) | Agent: ios-native-dev + ts-sdk-dev (parallel)_
+
+Bridge Core ML inference to CloudKit-stored data, enabling on-device ML predictions over user records without sending data to external servers.
+
+- [ ] **Swift**: Create `ios/CloudKitMLBridge.swift` — loads a compiled `.mlmodelc` from the app bundle and runs inference on CloudKit record fields mapped to model input features
+- [ ] **Swift**: Add `loadModel(modelName: String)` and `predict(modelName: String, recordName: String, featureMapping: [String: String])` AsyncFunctions — featureMapping maps CKRecord field names to Core ML feature names
+- [ ] **Swift**: Add `classifyRecords(modelName: String, recordType: String, predicate: String?, featureMapping:)` for batch classification across a query result set
+- [ ] **TypeScript**: Export `loadMLModel(modelName: string): Promise<void>`, `predict(options: PredictOptions): Promise<PredictionResult>`, `classifyRecords(options: ClassifyOptions): Promise<ClassificationResult[]>`
+- [ ] **TypeScript**: Add `PredictOptions`, `PredictionResult`, `ClassifyOptions`, `ClassificationResult` types to `src/types.ts`
+
+_Done when_: A Core ML model loaded from the app bundle can run inference on a CloudKit record's fields and return a prediction result to JS. Batch classification over a query result set returns an array of predictions. All inference runs on-device.
+
+---
+
+### L.2 — Encrypted Search (client-side index over encryptedFields)
+_Effort: M (Swift + TypeScript) | Agent: ios-native-dev + ts-sdk-dev (parallel)_
+
+Client-side encrypted search index that enables querying over `encryptedValues` fields without decrypting on the server, using a local inverted index synced via CloudKit.
+
+- [ ] **Swift**: Create `ios/CloudKitSearchIndex.swift` — builds and maintains a local inverted index (stored in a SQLite database via GRDB or raw SQLite3) mapping search tokens to record names
+- [ ] **Swift**: Implement tokenization pipeline: lowercase, Unicode normalization, whitespace split, optional stemming (NSLinguisticTagger); index tokens are salted hashes (SHA-256 + per-user salt) to prevent plaintext token leakage
+- [ ] **Swift**: Add `indexRecord(recordName:, fields: [String])`, `searchIndex(query: String, zoneID:)`, `rebuildIndex(recordType:, zoneID:)` AsyncFunctions
+- [ ] **Swift**: Auto-index on sync — hook into CKSyncEngine record-received events to update the local index when encrypted records arrive
+- [ ] **TypeScript**: Export `indexRecord(recordName: string, fields: string[]): Promise<void>`, `searchEncrypted(query: string, options?: SearchOptions): Promise<string[]>` (returns matching record names), `rebuildSearchIndex(recordType: string): Promise<void>`
+- [ ] **TypeScript**: Add `SearchOptions`, `SearchIndexStats` types to `src/types.ts`
+
+_Done when_: A record saved with `encryptedValues` fields can be found via `searchEncrypted("meeting notes")` after indexing. The search index persists across app restarts. Index tokens are hashed and never stored in plaintext.
+
+---
+
+### L.3 — Private Cloud Compute Bridge (future — when Apple opens PCC APIs)
+_Effort: S (placeholder) | Agent: architect_
+
+Placeholder phase for Apple's Private Cloud Compute integration. PCC enables server-side computation over user data with cryptographic privacy guarantees. This phase will be scoped when Apple publishes public PCC APIs.
+
+- [ ] **Architecture**: Monitor Apple developer documentation and WWDC announcements for PCC API availability
+- [ ] **Architecture**: Draft API design document mapping PCC capabilities to expo-cloudkit's record model
+- [ ] **Architecture**: Define privacy contract — document what data leaves the device, what cryptographic guarantees PCC provides, and how this differs from standard CloudKit server-side operations
+
+_Done when_: A design document exists in `openspec/` describing the PCC integration architecture, API surface, and privacy guarantees. Implementation tasks are broken into concrete phases once Apple ships public APIs.
+
+---
+
+## Phase M — Cross-Platform
+
+### M.1 — Android/Web Sync Relay (Cloudflare Worker / Lambda mirror to Firestore/Supabase)
+_Effort: M (TypeScript + infrastructure) | Agent: ts-sdk-dev + devops (parallel)_
+
+An optional server-side relay that mirrors CloudKit changes to Firestore or Supabase, enabling Android and web clients to participate in the same data sync graph as iOS clients.
+
+- [ ] **TypeScript**: Create `packages/sync-relay/` — a standalone Cloudflare Worker (or AWS Lambda) that receives CloudKit server-to-server notifications and writes changes to a configurable target (Firestore or Supabase)
+- [ ] **TypeScript**: Implement bidirectional sync — changes from Firestore/Supabase are pushed back to CloudKit via the server-to-server API, with conflict resolution using last-writer-wins timestamps
+- [ ] **TypeScript**: Add `configureSyncRelay(options: SyncRelayOptions): Promise<void>` to the main module — connects the Android/web client to the relay endpoint instead of CloudKit directly
+- [ ] **TypeScript**: Add `SyncRelayOptions`, `SyncRelayStatus` types to `src/types.ts`
+- [ ] **Docs**: Document relay setup: Cloudflare Worker deployment, CloudKit server-to-server key configuration, Firestore/Supabase project setup, and security considerations
+
+_Done when_: A record saved on iOS via CloudKit appears on an Android device via the Firestore relay within 30 seconds. A record saved on Android via Firestore appears on iOS via CloudKit within 30 seconds. Conflicts are resolved consistently across both paths.
+
+---
+
+### M.2 — SwiftData / Core Data Bridge
+_Effort: M (Swift) | Agent: ios-native-dev_
+
+Bridge between expo-cloudkit's record model and SwiftData (iOS 17+) / Core Data persistent stores, enabling developers to use CloudKit-backed SwiftData models alongside React Native.
+
+- [ ] **Swift**: Create `ios/SwiftData/CloudKitSwiftDataBridge.swift` — maps `CloudKitRecord` fields to `@Model` properties via a `CloudKitModelDescriptor` configuration
+- [ ] **Swift**: Implement `syncToSwiftData(modelContainer:, recordType:, zoneID:)` — listens for CKSyncEngine events and upserts/deletes SwiftData model instances
+- [ ] **Swift**: Implement `syncFromSwiftData(modelContainer:, recordType:, zoneID:)` — observes `ModelContext` changes and pushes to CloudKit via the existing record manager
+- [ ] **Swift**: Add Core Data fallback for iOS 16 — `NSPersistentCloudKitContainer` adapter that wraps the same bridging logic for `NSManagedObject` models
+- [ ] **TypeScript**: Export `enableSwiftDataSync(options: SwiftDataSyncOptions): Promise<void>` and `disableSwiftDataSync(): Promise<void>`
+
+_Done when_: A SwiftData `@Model` class annotated with `CloudKitModelDescriptor` automatically syncs its instances to/from CloudKit via the existing sync engine. Changes made via React Native's `saveRecords` appear in the SwiftData store and vice versa.
+
+---
+
+## Phase N — Developer Experience
+
+### N.1 — Schema Evolution / Migrations (versioned schemas, client-side field migration)
+_Effort: M (Swift + TypeScript) | Agent: ios-native-dev + ts-sdk-dev (parallel)_
+
+Versioned schema definitions with automatic client-side field migration, so apps can evolve their CloudKit record schemas without breaking existing records.
+
+- [ ] **TypeScript**: Create `src/migrations.ts` — export `defineSchema(version: number, schema: ZodType, migrations?: MigrationStep[])` that returns a `VersionedSchema` with `.parse(record)` auto-applying migrations from the record's `_schemaVersion` field to the current version
+- [ ] **TypeScript**: Implement `MigrationStep` type: `{ fromVersion: number, toVersion: number, migrate: (fields: Record<string, unknown>) => Record<string, unknown> }` — migrations run sequentially, each transforming fields for the next version
+- [ ] **Swift**: On record save, automatically stamp `_schemaVersion: Int` field on every CKRecord managed by a versioned schema
+- [ ] **Swift**: On record fetch, check `_schemaVersion` and emit a `onSchemaMigrationNeeded` event if the record's version is older than the current schema version
+- [ ] **TypeScript**: Add `useVersionedRecord(recordName: string, schema: VersionedSchema)` hook — fetches the record, auto-migrates fields if needed, and optionally re-saves the migrated record
+- [ ] **TypeScript**: Add `VersionedSchema`, `MigrationStep`, `MigrationResult` types to `src/types.ts`
+
+_Done when_: A record saved with schema version 1 is automatically migrated to version 3 (via v1->v2 and v2->v3 migration steps) when fetched by a client running schema version 3. The migrated record displays correctly and can optionally be re-saved with the updated schema version.
+
+---
+
+### N.2 — Mock Factory / Testing Kit (in-memory CloudKit for Jest)
+_Effort: S (TypeScript only) | Agent: ts-sdk-dev_
+
+An in-memory mock implementation of the expo-cloudkit API surface for use in Jest tests, eliminating the need for a real CloudKit container during development.
+
+- [ ] **TypeScript**: Create `src/testing/index.ts` — export `createMockCloudKit()` returning a mock module that implements all 44 exported functions against an in-memory record store
+- [ ] **TypeScript**: Implement in-memory store with zone support, query filtering (predicate parsing for `==`, `!=`, `>`, `<`, `CONTAINS`, `BEGINSWITH`), cursor-based pagination, and `sortDescriptors` ordering
+- [ ] **TypeScript**: Add `mockSyncEvent(event: SyncEvent)` and `mockError(fn: string, error: CloudKitError)` helpers for simulating sync cycles and error conditions in tests
+- [ ] **TypeScript**: Add `createMockRecord(overrides?: Partial<CloudKitRecord>): CloudKitRecord` factory with sensible defaults (auto-generated `recordName`, current timestamps, empty fields)
+- [ ] **TypeScript**: Add `src/testing/__tests__/mock-cloudkit.test.ts` — at least 8 test cases covering CRUD, queries, pagination, sync events, and error simulation
+
+_Done when_: `const ck = createMockCloudKit(); await ck.saveRecords([record]); const result = await ck.queryRecords('Note', 'title == "Hello"');` returns the saved record. Mock sync events trigger registered listeners. No network calls or CloudKit container required.
+
+---
+
+### N.3 — DevTools Dashboard (`<CloudKitDevTools />` overlay component)
+_Effort: M (TypeScript + React) | Agent: ts-sdk-dev_
+
+A development-only overlay component that displays CloudKit state, sync activity, record cache, and offline queue status in a floating panel within the app.
+
+- [ ] **TypeScript**: Create `src/devtools/CloudKitDevTools.tsx` — a React component rendering a draggable overlay panel with tabs: Records, Sync, Queue, Errors, Network
+- [ ] **TypeScript**: Records tab — displays cached records grouped by record type, with field inspection and a "refetch" button per record
+- [ ] **TypeScript**: Sync tab — live sync state, last sync timestamp, sent/received/failed counts (powered by `useSyncHealth()`), and a "force sync" button
+- [ ] **TypeScript**: Queue tab — offline queue contents with retry status, manual retry/discard buttons per item
+- [ ] **TypeScript**: Errors tab — scrollable error log with timestamps, error codes, recovery suggestions, and stack traces
+- [ ] **TypeScript**: Auto-strip in production — export wrapped in `__DEV__` check; component renders `null` in production builds with zero bundle size impact
+- [ ] **TypeScript**: Add `DevToolsConfig` type to `src/types.ts` — options for panel position, default tab, and record type filters
+
+_Done when_: Adding `<CloudKitDevTools />` to the app's root component shows a floating panel with live sync status, cached records, and offline queue state. The component tree-shakes to zero bytes in production builds.
+
+---
+
+### N.4 — App Intents / Shortcuts (AppIntent actions for Siri/Shortcuts)
+_Effort: M (Swift + TypeScript) | Agent: ios-native-dev + ts-sdk-dev (parallel)_
+
+Expose CloudKit record operations as App Intents, enabling Siri voice commands and Shortcuts automation for CloudKit-backed apps.
+
+- [ ] **Swift**: Create `ios/Intents/CloudKitAppIntents.swift` — define `FetchRecordIntent`, `SaveRecordIntent`, `QueryRecordsIntent`, `DeleteRecordIntent` structs conforming to `AppIntent` protocol (iOS 16+)
+- [ ] **Swift**: Each intent declares parameters via `@Parameter` property wrappers — record type, record name, zone ID, fields (as JSON string), predicate
+- [ ] **Swift**: Implement `perform()` on each intent to call the existing `CloudKitRecordManager` methods; return results as `IntentResult` with dialog snippets
+- [ ] **Swift**: Add `registerAppIntents(intents: [String])` AsyncFunction to `ExpoCloudKitModule.swift` — allows JS to configure which intents are active at runtime
+- [ ] **TypeScript**: Export `registerAppIntents(intents: AppIntentConfig[]): Promise<void>` — configures active intents with display names, parameter defaults, and Shortcuts visibility
+- [ ] **TypeScript**: Add `AppIntentConfig`, `AppIntentResult` types to `src/types.ts`
+- [ ] **TypeScript**: Add `onAppIntentTriggered` event listener — fires when a Shortcut or Siri invokes a CloudKit intent, allowing the app to update its UI in response
+
+_Done when_: A user can say "Hey Siri, fetch my notes from CloudKit" and receive a spoken summary of record titles. A Shortcuts automation can query CloudKit records and pass results to the next action. The app receives an `onAppIntentTriggered` event when an intent runs.
+
+---
+
+### Phase K-N Batch Execution Plan
+
+#### Batch 1 (parallel — Phase K is highest priority)
+| Phase | Goal | Agent(s) | Effort |
+|-------|------|----------|--------|
+| K.1 | Presence & cursor tracking | ios-native-dev + ts-sdk-dev | M |
+| K.2 | CRDT-based conflict resolution | ios-native-dev + ts-sdk-dev | M |
+| N.2 | Mock factory / testing kit | ts-sdk-dev | S |
+
+#### Batch 2 (parallel — after Batch 1)
+| Phase | Goal | Agent(s) | Effort |
+|-------|------|----------|--------|
+| K.3 | Live Activities / Widgets bridge | ios-native-dev + ts-sdk-dev | M |
+| N.1 | Schema evolution / migrations | ios-native-dev + ts-sdk-dev | M |
+| N.3 | DevTools dashboard overlay | ts-sdk-dev | M |
+
+#### Batch 3 (parallel — after Batch 2)
+| Phase | Goal | Agent(s) | Effort |
+|-------|------|----------|--------|
+| L.1 | On-device ML over CloudKit data | ios-native-dev + ts-sdk-dev | M |
+| L.2 | Encrypted search index | ios-native-dev + ts-sdk-dev | M |
+| N.4 | App Intents / Shortcuts | ios-native-dev + ts-sdk-dev | M |
+
+#### Batch 4 (parallel — after Batch 3)
+| Phase | Goal | Agent(s) | Effort |
+|-------|------|----------|--------|
+| M.1 | Android/Web sync relay | ts-sdk-dev + devops | M |
+| M.2 | SwiftData / Core Data bridge | ios-native-dev | M |
+
+#### Batch 5 (after PCC APIs available)
+| Phase | Goal | Agent(s) | Effort |
+|-------|------|----------|--------|
+| L.3 | Private Cloud Compute bridge | architect | S |
+
+### Priority & Rationale
+
+**Batch 1 starts with K.1 + K.2 + N.2.** Phase K (Live Collaboration) is the highest priority feature set. Presence (K.1) and CRDTs (K.2) are independent of each other and can be built in parallel. N.2 (mock factory) is a pure TypeScript utility with no native dependencies — it can run alongside K.1/K.2 without conflicts and immediately benefits testing of the new collaboration features.
+
+**Batch 2 (K.3 + N.1 + N.3)** completes the Live Collaboration phase with widget/activity integration (K.3) and adds two high-value DX features. Schema migrations (N.1) builds on the Zod patterns from Phase J.2. DevTools (N.3) leverages the observability hooks from Phase I.3.
+
+**Batch 3 (L.1 + L.2 + N.4)** delivers AI/privacy features and Shortcuts integration. These are independent of each other and of the collaboration features from Batches 1-2.
+
+**Batch 4 (M.1 + M.2)** is the cross-platform phase. The sync relay (M.1) is the most architecturally significant item in Phases K-N — it introduces server-side infrastructure for the first time. SwiftData bridge (M.2) is iOS-only and can run in parallel.
+
+**Batch 5 (L.3)** is a placeholder that activates when Apple publishes PCC APIs.
