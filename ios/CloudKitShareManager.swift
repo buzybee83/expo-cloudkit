@@ -829,6 +829,358 @@ final class CloudKitShareManager {
   }
   #endif // canImport(UIKit)
 
+  // MARK: - Leave Share
+
+  /// Lets the current user leave a CKShare they previously accepted.
+  ///
+  /// Fetches the CKShare from the specified database, locates the current user's
+  /// participant entry via `share.currentUserParticipant`, removes them, then
+  /// saves the modified share via `CKModifyRecordsOperation`.
+  ///
+  /// CloudKit notes:
+  /// - The owner cannot leave their own share — CloudKit will reject the save.
+  ///   Callers should use `deleteShare` instead when the current user is the owner.
+  /// - If `currentUserParticipant` is nil (e.g. the share was fetched from the
+  ///   owner's private DB rather than the shared DB), this rejects with
+  ///   `participantNotFound("current user")`.
+  ///
+  /// - Parameters:
+  ///   - shareRecordName: The `CKRecord.ID.recordName` of the `CKShare`.
+  ///   - zoneName: Optional zone name. Defaults to the default zone.
+  ///   - database: Database that contains the share (typically `sharedCloudDatabase`).
+  ///   - completion: Called with `Void` on success, or an error on failure.
+  func leaveShare(
+    shareRecordName: String,
+    zoneName: String?,
+    database: CKDatabase,
+    completion: @escaping (Result<Void, Error>) -> Void
+  ) {
+    fetchShare(recordName: shareRecordName, zoneName: zoneName, database: database) { [weak self] result in
+      guard let self = self else { return }
+
+      switch result {
+      case .failure(let error):
+        completion(.failure(error))
+
+      case .success(let share):
+        guard let currentUser = share.currentUserParticipant else {
+          completion(.failure(ShareManagerError.participantNotFound("current user")))
+          return
+        }
+        share.removeParticipant(currentUser)
+        self.saveShare(share, database: database) { saveResult in
+          completion(saveResult.map { _ in () })
+        }
+      }
+    }
+  }
+
+  // MARK: - Create Share From Template
+
+  /// Creates a CKShare with pre-configured metadata in a single server round trip.
+  ///
+  /// Combines the functionality of `createShare`/`createZoneShare` +
+  /// `setShareMetadata` + `setDefaultParticipantPermission` + `addParticipant`
+  /// into one atomic `CKModifyRecordsOperation`. This avoids 3–4 separate
+  /// round trips when you already know the desired share configuration.
+  ///
+  /// Participant lookup (by email) is performed serially before the save operation.
+  /// If any email lookup fails, the entire call fails before touching CloudKit records.
+  ///
+  /// - Parameters:
+  ///   - recordName: When provided, creates a record-level share for this record.
+  ///     When nil, creates a zone-level share using a sentinel anchor record.
+  ///   - zoneName: Zone name. Required.
+  ///   - database: Database to operate on. Typically `privateCloudDatabase`.
+  ///   - title: Optional display title for share previews in Messages/Mail.
+  ///   - thumbnailBase64: Optional base64-encoded PNG/JPEG thumbnail.
+  ///   - publicPermission: Default permission for the share URL. Defaults to `.none`.
+  ///   - participantEmails: Optional initial participants to invite (email + permission pairs).
+  ///   - completion: Called with a share dictionary on success, or an error.
+  func createShareFromTemplate(
+    recordName: String?,
+    zoneName: String,
+    database: CKDatabase,
+    title: String?,
+    thumbnailBase64: String?,
+    publicPermission: CKShare.ParticipantPermission,
+    participantEmails: [(email: String, permission: CKShare.ParticipantPermission)],
+    completion: @escaping (Result<[String: Any], Error>) -> Void
+  ) {
+    let zoneID = CKRecordZone.ID(zoneName: zoneName, ownerName: CKCurrentUserDefaultName)
+
+    // Step 1: Look up all participant identities upfront, before touching records.
+    // This avoids creating the share only to fail at participant addition.
+    lookupParticipants(emails: participantEmails.map { $0.email }) { [weak self] lookupResult in
+      guard let self = self else { return }
+
+      switch lookupResult {
+      case .failure(let error):
+        completion(.failure(error))
+
+      case .success(let participants):
+        // Step 2: Fetch or construct the root record.
+        if let rootRecordName = recordName {
+          let rootRecordID = CKRecord.ID(recordName: rootRecordName, zoneID: zoneID)
+          database.fetch(withRecordID: rootRecordID) { record, error in
+            if let error = error {
+              completion(.failure(error))
+              return
+            }
+            guard let rootRecord = record else {
+              completion(.failure(CKError(.unknownItem)))
+              return
+            }
+            self.saveShareFromTemplate(
+              rootRecord: rootRecord,
+              zoneID: zoneID,
+              database: database,
+              title: title,
+              thumbnailBase64: thumbnailBase64,
+              publicPermission: publicPermission,
+              participants: participants,
+              participantEmails: participantEmails,
+              completion: completion
+            )
+          }
+        } else {
+          // Zone-level share: create a sentinel anchor record.
+          let anchorID = CKRecord.ID(
+            recordName: "\(zoneName)_zoneShareAnchor",
+            zoneID: zoneID
+          )
+          let anchorRecord = CKRecord(recordType: "_zoneShare", recordID: anchorID)
+          self.saveShareFromTemplate(
+            rootRecord: anchorRecord,
+            zoneID: zoneID,
+            database: database,
+            title: title,
+            thumbnailBase64: thumbnailBase64,
+            publicPermission: publicPermission,
+            participants: participants,
+            participantEmails: participantEmails,
+            completion: completion
+          )
+        }
+      }
+    }
+  }
+
+  /// Internal helper: builds the share, applies metadata, adds participants, and saves.
+  private func saveShareFromTemplate(
+    rootRecord: CKRecord,
+    zoneID: CKRecordZone.ID,
+    database: CKDatabase,
+    title: String?,
+    thumbnailBase64: String?,
+    publicPermission: CKShare.ParticipantPermission,
+    participants: [CKShare.Participant],
+    participantEmails: [(email: String, permission: CKShare.ParticipantPermission)],
+    completion: @escaping (Result<[String: Any], Error>) -> Void
+  ) {
+    let share = CKShare(rootRecord: rootRecord)
+    share.publicPermission = publicPermission
+
+    if let title = title {
+      share[CKShare.SystemFieldKey.title] = title as CKRecordValue
+    }
+
+    if let thumbnailBase64 = thumbnailBase64,
+       let thumbnailData = Data(base64Encoded: thumbnailBase64) {
+      share[CKShare.SystemFieldKey.thumbnailImageData] = thumbnailData as CKRecordValue
+    }
+
+    // Apply per-participant permissions and add each one.
+    for (participant, entry) in zip(participants, participantEmails) {
+      participant.permission = entry.permission
+      share.addParticipant(participant)
+    }
+
+    let operation = CKModifyRecordsOperation(
+      recordsToSave: [rootRecord, share],
+      recordIDsToDelete: nil
+    )
+    operation.savePolicy = .changedKeys
+    operation.qualityOfService = .userInitiated
+
+    operation.modifyRecordsResultBlock = { result in
+      switch result {
+      case .success:
+        completion(.success(Converters.toShareDictionary(share)))
+      case .failure(let error):
+        completion(.failure(error))
+      }
+    }
+
+    database.add(operation)
+  }
+
+  /// Resolves an array of email addresses to `CKShare.Participant` objects.
+  /// Calls the completion with `.failure` on the first lookup error.
+  private func lookupParticipants(
+    emails: [String],
+    completion: @escaping (Result<[CKShare.Participant], Error>) -> Void
+  ) {
+    guard !emails.isEmpty else {
+      completion(.success([]))
+      return
+    }
+
+    var participants: [CKShare.Participant] = []
+    var pendingCount = emails.count
+
+    for email in emails {
+      ckContainer.fetchShareParticipant(withEmailAddress: email) { participant, error in
+        if let error = error {
+          completion(.failure(error))
+          return
+        }
+        guard let participant = participant else {
+          completion(.failure(ShareManagerError.participantLookupFailed))
+          return
+        }
+        participants.append(participant)
+        pendingCount -= 1
+        if pendingCount == 0 {
+          completion(.success(participants))
+        }
+      }
+    }
+  }
+
+  // MARK: - Share Activity Summary
+
+  /// Returns a summary of recent record modifications in the specified zone,
+  /// grouped by the last-modifying user.
+  ///
+  /// Uses a `CKQuery` with `TRUEPREDICATE` sorted by `modificationDate` descending,
+  /// limited to `limit` records. Each record's `lastModifiedUserRecordID` is used
+  /// to group activity. When `discoverUserIdentity` succeeds for a user, the
+  /// display name is included; otherwise `displayName` is nil.
+  ///
+  /// - Parameters:
+  ///   - zoneName: Zone to summarise.
+  ///   - database: Database containing the zone.
+  ///   - limit: Maximum number of records to scan (capped at 200 for CloudKit limits).
+  ///   - completion: Called with an array of `ShareActivityEntry` dictionaries, or an error.
+  func getShareActivity(
+    zoneName: String,
+    database: CKDatabase,
+    limit: Int,
+    completion: @escaping (Result<[[String: Any]], Error>) -> Void
+  ) {
+    let zoneID = CKRecordZone.ID(zoneName: zoneName, ownerName: CKCurrentUserDefaultName)
+    let predicate = NSPredicate(value: true)
+    let query = CKQuery(recordType: "CloudDocument", predicate: predicate)
+    query.sortDescriptors = [NSSortDescriptor(key: "modificationDate", ascending: false)]
+
+    let operation = CKQueryOperation(query: query)
+    operation.zoneID = zoneID
+    operation.resultsLimit = max(1, min(limit, 200))
+    // Fetch only the system metadata fields needed — avoid over-fetching user data.
+    operation.desiredKeys = []
+    operation.qualityOfService = .userInitiated
+
+    // Accumulate { userRecordName → (recordCount, lastModifiedAt, recordTypes) }
+    var activityMap: [String: (recordCount: Int, lastModifiedAt: Date, recordTypes: Set<String>)] = [:]
+
+    operation.recordMatchedBlock = { _, result in
+      switch result {
+      case .success(let record):
+        guard let userRecordID = record.lastModifiedUserRecordID else { return }
+        let userKey = userRecordID.recordName
+        let modDate = record.modificationDate ?? Date.distantPast
+        if var entry = activityMap[userKey] {
+          entry.recordCount += 1
+          if modDate > entry.lastModifiedAt { entry.lastModifiedAt = modDate }
+          entry.recordTypes.insert(record.recordType)
+          activityMap[userKey] = entry
+        } else {
+          activityMap[userKey] = (
+            recordCount: 1,
+            lastModifiedAt: modDate,
+            recordTypes: [record.recordType]
+          )
+        }
+      case .failure:
+        // Partial record failure — skip and continue accumulating.
+        break
+      }
+    }
+
+    operation.queryResultBlock = { [weak self] result in
+      guard let self = self else { return }
+
+      switch result {
+      case .failure(let error):
+        completion(.failure(error))
+
+      case .success:
+        // Attempt to discover display names for each user record ID.
+        self.resolveDisplayNames(
+          userRecordNames: Array(activityMap.keys)
+        ) { displayNames in
+          let entries: [[String: Any]] = activityMap.map { userKey, entry in
+            [
+              "userRecordName": userKey,
+              "displayName": displayNames[userKey] as Any,
+              "recordCount": entry.recordCount,
+              "lastModifiedAt": entry.lastModifiedAt.timeIntervalSince1970 * 1000,
+              "recordTypes": Array(entry.recordTypes)
+            ]
+          }.sorted {
+            // Sort by most recent activity descending.
+            let a = $0["lastModifiedAt"] as? Double ?? 0
+            let b = $1["lastModifiedAt"] as? Double ?? 0
+            return a > b
+          }
+          completion(.success(entries))
+        }
+      }
+    }
+
+    database.add(operation)
+  }
+
+  /// Attempts to resolve display names for a list of user record names.
+  /// Names are filled in best-effort — any lookup failure leaves the entry nil.
+  /// Completes asynchronously once all lookups have resolved or failed.
+  private func resolveDisplayNames(
+    userRecordNames: [String],
+    completion: @escaping ([String: String?]) -> Void
+  ) {
+    guard !userRecordNames.isEmpty else {
+      completion([:])
+      return
+    }
+
+    var displayNames: [String: String?] = [:]
+    var pendingCount = userRecordNames.count
+
+    let lock = NSLock()
+
+    for recordName in userRecordNames {
+      let recordID = CKRecord.ID(recordName: recordName)
+      ckContainer.discoverUserIdentity(withUserRecordID: recordID) { identity, _ in
+        lock.lock()
+        defer { lock.unlock() }
+
+        if let identity = identity,
+           let components = identity.nameComponents {
+          let formatter = PersonNameComponentsFormatter()
+          displayNames[recordName] = formatter.string(from: components)
+        } else {
+          displayNames[recordName] = nil
+        }
+
+        pendingCount -= 1
+        if pendingCount == 0 {
+          completion(displayNames)
+        }
+      }
+    }
+  }
+
   // MARK: - Private Helpers
 
   /// Builds a CKRecordZone.ID from an optional zone name.

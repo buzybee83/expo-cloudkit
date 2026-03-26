@@ -76,6 +76,10 @@ import type {
   BatchFetchResult,
   RateLimitedEvent,
   ShareMetadata,
+  LeaveShareOptions,
+  CreateShareFromTemplateOptions,
+  GetShareActivityOptions,
+  ShareActivityEntry,
 } from './types';
 import {
   configureAuthPersistence,
@@ -1629,5 +1633,35 @@ export function fetchZoneRecords(
   _predicate?: QueryPredicate,
   _database: DatabaseScope = 'private'
 ): Promise<{ records: CloudKitRecord[]; count: number }> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+// ---------------------------------------------------------------------------
+// Share Convenience — web stubs (CloudKit JS does not support CKShare)
+// ---------------------------------------------------------------------------
+
+/**
+ * Not supported on web — CKShare participant management requires native CloudKit.
+ * @throws {CloudKitNotSupportedError}
+ */
+export function leaveShare(_options: LeaveShareOptions): Promise<void> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+/**
+ * Not supported on web — CKShare creation requires native CloudKit.
+ * @throws {CloudKitNotSupportedError}
+ */
+export function createShareFromTemplate(_options: CreateShareFromTemplateOptions): Promise<Share> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+/**
+ * Not supported on web — CKShare activity queries require native CloudKit.
+ * @throws {CloudKitNotSupportedError}
+ */
+export function getShareActivity(
+  _options: GetShareActivityOptions
+): Promise<ShareActivityEntry[]> {
   return Promise.reject(new CloudKitNotSupportedError());
 }

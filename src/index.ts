@@ -122,6 +122,11 @@ export type {
   // Phase I.1 — Batch Fetch & Rate Limiting
   BatchFetchResult,
   RateLimitedEvent,
+  // Share Convenience
+  LeaveShareOptions,
+  CreateShareFromTemplateOptions,
+  GetShareActivityOptions,
+  ShareActivityEntry,
 } from './types';
 
 // Errors
@@ -286,3 +291,6 @@ export { registerBackgroundSync, scheduleBackgroundSync } from './ExpoCloudKit';
 
 // Token management — persist CKServerChangeToken across reinstalls
 export { getZoneChangeToken, setZoneChangeToken } from './ExpoCloudKit';
+
+// Share Convenience — leaveShare, createShareFromTemplate, getShareActivity
+export { leaveShare, createShareFromTemplate, getShareActivity } from './ExpoCloudKit';
