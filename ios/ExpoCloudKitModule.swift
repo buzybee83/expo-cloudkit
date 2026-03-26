@@ -116,6 +116,12 @@ public class ExpoCloudKitModule: Module {
   /// Diffs are emitted as `onParticipantChanged` events to JS.
   private var knownShareParticipants: [String: Set<String>] = [:]
 
+  // MARK: - Encrypted search (L.2)
+
+  /// One `CloudKitEncryptedSearch` instance per zone, keyed by "<database>/<zoneName>".
+  /// Lazily created on first `indexEncryptedRecord` or `searchEncrypted` call for a zone.
+  private var searchEngines: [String: CloudKitEncryptedSearch] = [:]
+
   // MARK: - Module Definition
 
   public func definition() -> ModuleDefinition {
@@ -2842,6 +2848,162 @@ public class ExpoCloudKitModule: Module {
       }
       store.saveZoneToken(token, zoneID: zoneID, scope: scope)
     }
+
+    // -------------------------------------------------------------------------
+    // Encrypted Search (L.2)
+    // -------------------------------------------------------------------------
+
+    /// Indexes the extracted plaintext content of a record's encrypted fields.
+    ///
+    /// Callers should pass the plaintext values **before** encrypting them.
+    /// The index stores only opaque tokens (lowercased words), not the values.
+    ///
+    /// Options:
+    ///   - `recordName`  String — the CKRecord.ID.recordName
+    ///   - `zoneName`    String — the zone the record lives in
+    ///   - `database`    String? — "private" | "public" | "shared" (default: "private")
+    ///   - `textValues`  [String] — plaintext strings to tokenise and index
+    AsyncFunction("indexEncryptedRecord") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self, let container = self.container else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+      guard
+        let recordName = options["recordName"] as? String,
+        let zoneName   = options["zoneName"]   as? String
+      else {
+        promise.reject(CloudKitModuleError.invalidArgument(
+          "indexEncryptedRecord requires 'recordName' and 'zoneName'."
+        ))
+        return
+      }
+      let textValues  = options["textValues"] as? [String] ?? []
+      let dbString    = options["database"]   as? String ?? "private"
+      let scope       = Converters.toDatabaseScope(dbString)
+      let db          = ExpoCloudKitModule.ckDatabase(scope: scope, container: container.ckContainer)
+      let zoneID      = CKRecordZone.ID(zoneName: zoneName, ownerName: CKCurrentUserDefaultName)
+      let engineKey   = "\(dbString)/\(zoneName)"
+
+      let engine: CloudKitEncryptedSearch
+      if let existing = self.searchEngines[engineKey] {
+        engine = existing
+      } else {
+        engine = CloudKitEncryptedSearch(
+          container: container.ckContainer,
+          database: db,
+          zone: zoneID
+        )
+        self.searchEngines[engineKey] = engine
+      }
+
+      engine.index(recordName: recordName, encryptedTextValues: textValues) { error in
+        if let error = error {
+          promise.reject(Converters.toExpoError(error))
+        } else {
+          promise.resolve(nil)
+        }
+      }
+    }
+
+    /// Removes a record from the encrypted search index.
+    ///
+    /// Options:
+    ///   - `recordName`  String — the CKRecord.ID.recordName to remove
+    ///   - `zoneName`    String — zone the record lives in
+    ///   - `database`    String? — "private" | "public" | "shared" (default: "private")
+    AsyncFunction("deindexRecord") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self, let container = self.container else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+      guard
+        let recordName = options["recordName"] as? String,
+        let zoneName   = options["zoneName"]   as? String
+      else {
+        promise.reject(CloudKitModuleError.invalidArgument(
+          "deindexRecord requires 'recordName' and 'zoneName'."
+        ))
+        return
+      }
+      let dbString  = options["database"] as? String ?? "private"
+      let scope     = Converters.toDatabaseScope(dbString)
+      let db        = ExpoCloudKitModule.ckDatabase(scope: scope, container: container.ckContainer)
+      let zoneID    = CKRecordZone.ID(zoneName: zoneName, ownerName: CKCurrentUserDefaultName)
+      let engineKey = "\(dbString)/\(zoneName)"
+
+      let engine: CloudKitEncryptedSearch
+      if let existing = self.searchEngines[engineKey] {
+        engine = existing
+      } else {
+        engine = CloudKitEncryptedSearch(
+          container: container.ckContainer,
+          database: db,
+          zone: zoneID
+        )
+        self.searchEngines[engineKey] = engine
+      }
+
+      engine.deindex(recordName: recordName) { error in
+        if let error = error {
+          promise.reject(Converters.toExpoError(error))
+        } else {
+          promise.resolve(nil)
+        }
+      }
+    }
+
+    /// Searches the encrypted search index for records matching a query string.
+    ///
+    /// All tokens produced by tokenising `query` must appear in the record's
+    /// index for it to be included in the result (AND semantics).
+    ///
+    /// Options:
+    ///   - `query`     String — the search query
+    ///   - `zoneName`  String — zone to search within
+    ///   - `database`  String? — "private" | "public" | "shared" (default: "private")
+    ///
+    /// Resolves with an array of `recordName` strings.
+    AsyncFunction("searchEncrypted") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self, let container = self.container else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+      guard
+        let query    = options["query"]    as? String,
+        let zoneName = options["zoneName"] as? String
+      else {
+        promise.reject(CloudKitModuleError.invalidArgument(
+          "searchEncrypted requires 'query' and 'zoneName'."
+        ))
+        return
+      }
+      let dbString  = options["database"] as? String ?? "private"
+      let scope     = Converters.toDatabaseScope(dbString)
+      let db        = ExpoCloudKitModule.ckDatabase(scope: scope, container: container.ckContainer)
+      let zoneID    = CKRecordZone.ID(zoneName: zoneName, ownerName: CKCurrentUserDefaultName)
+      let engineKey = "\(dbString)/\(zoneName)"
+
+      let engine: CloudKitEncryptedSearch
+      if let existing = self.searchEngines[engineKey] {
+        engine = existing
+      } else {
+        engine = CloudKitEncryptedSearch(
+          container: container.ckContainer,
+          database: db,
+          zone: zoneID
+        )
+        self.searchEngines[engineKey] = engine
+      }
+
+      engine.search(query: query) { result in
+        switch result {
+        case .success(let recordNames):
+          promise.resolve(recordNames)
+        case .failure(let error):
+          promise.reject(Converters.toExpoError(error))
+        }
+      }
+    }
   }
 }
 
@@ -3200,4 +3362,24 @@ extension Notification.Name {
   static let expoCloudKitSyncStateChanged = Notification.Name(
     "ExpoCloudKitSyncStateChanged"
   )
+}
+
+// MARK: - Database scope helper (L.2 — Encrypted Search)
+
+extension ExpoCloudKitModule {
+  /// Resolves a `CKDatabase.Scope` to a concrete `CKDatabase` on the given container.
+  /// Used by the encrypted-search AsyncFunctions to avoid duplicating this switch
+  /// across each call site.
+  static func ckDatabase(scope: CKDatabase.Scope, container: CKContainer) -> CKDatabase {
+    switch scope {
+    case .private:
+      return container.privateCloudDatabase
+    case .shared:
+      return container.sharedCloudDatabase
+    case .public:
+      return container.publicCloudDatabase
+    @unknown default:
+      return container.privateCloudDatabase
+    }
+  }
 }
