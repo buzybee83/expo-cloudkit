@@ -21,6 +21,23 @@ enum SyncProviderState: String {
   case notStarted = "notStarted"
 }
 
+// MARK: - Conflict Strategy
+
+/// Determines how the sync layer resolves a `serverRecordChanged` conflict.
+///
+/// The strategy is selected at `startSyncEngine()` time and held by each
+/// provider. Both `CloudKitSyncEngineAdapter` and `CloudKitSyncFallbackAdapter`
+/// honour it in their conflict resolution paths.
+enum ConflictStrategy {
+  /// Default: start from the server record and overlay the client's changed keys on top.
+  case serverWins
+
+  /// Auto-merge using CRDT algorithms defined in `crdtSchema`.
+  /// CRDT-governed fields are merged by `CRDTManager.merge`; all other fields
+  /// fall back to server-wins.
+  case crdtMerge
+}
+
 // MARK: - Sync Provider Protocol
 
 /// Abstraction over CKSyncEngine (iOS 17+) and the manual token fetch fallback (iOS 16).

@@ -31,6 +31,10 @@ final class CloudKitSyncEngineAdapter: CloudKitSyncProvider {
   private let tokenStore: ChangeTokenStore
   private let ckContainer: CKContainer
 
+  /// CRDT manager set when `crdtSchema` is provided in `startSyncEngine` config.
+  /// When non-nil, conflict resolution uses `ConflictStrategy.crdtMerge`.
+  var crdtManager: CRDTManager?
+
   /// Serial queue protecting all mutable state: pendingSaves, pendingDeletes, state.
   private let pendingQueue = DispatchQueue(label: "expo.cloudkit.sync.pending")
   private var pendingSaves: [CKRecord] = []
@@ -242,10 +246,24 @@ extension CloudKitSyncEngineAdapter: CKSyncEngineDelegate {
 
   // MARK: - Conflict Resolution
 
-  /// Server-record-wins merge: start with the server record and overlay the
-  /// client's changed fields on top. This preserves the server's system fields
-  /// (changeTag, modificationDate) while applying the client's intent.
+  /// Resolves a conflict between a client and server record.
+  ///
+  /// When `crdtManager` is set, delegates to CRDT merge for schema fields
+  /// and server-wins for all other fields.
+  /// When `crdtManager` is nil, applies the plain server-wins overlay.
   private func resolveConflict(clientRecord: CKRecord, serverRecord: CKRecord) -> CKRecord {
+    if let crdtManager = crdtManager {
+      // CRDT path: work in dictionary space, then re-encode to CKRecord.
+      let clientDict = Converters.toDictionary(clientRecord)
+      let serverDict = Converters.toDictionary(serverRecord)
+      let mergedDict = crdtManager.merge(client: clientDict, server: serverDict)
+      if let mergedRecord = try? Converters.toCKRecord(from: mergedDict) {
+        return mergedRecord
+      }
+      // Fall through to server-wins if encoding fails.
+    }
+
+    // Default: server-record-wins overlay.
     for key in clientRecord.changedKeys() {
       serverRecord[key] = clientRecord[key]
     }

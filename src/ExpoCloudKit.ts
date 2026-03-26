@@ -16,6 +16,9 @@ import type {
   AssetProgress,
   CloudKitRecord,
   DatabaseScope,
+  IncrementCRDTCounterOptions,
+  LWWSetOptions,
+  ORSetMutationOptions,
   PendingRecordChange,
   QueryPredicate,
   QueryResult,
@@ -398,6 +401,66 @@ export function addSyncEngineListener(
  */
 export function stopSyncEngine(): Promise<void> {
   return callAsync(() => NativeModule!.stopSyncEngine());
+}
+
+// ---------------------------------------------------------------------------
+// Phase K.2 — CRDT Mutations
+// ---------------------------------------------------------------------------
+
+/**
+ * Increments a `gcounter` or `pncounter` field by `delta`.
+ *
+ * The record is fetched, the mutation is applied to the local CRDT state,
+ * and the result is enqueued through the sync engine (not a direct save).
+ *
+ * - For `gcounter`: `delta` must be ≥ 1.
+ * - For `pncounter`: negative `delta` values are valid (decrement).
+ *
+ * @throws {CloudKitError} CRDT_NOT_CONFIGURED if no `crdtSchema` was passed to `startSyncEngine`.
+ * @throws {CloudKitError} SYNC_ENGINE_NOT_RUNNING if the sync engine is not active.
+ */
+export function incrementCRDTCounter(options: IncrementCRDTCounterOptions): Promise<CloudKitRecord> {
+  return callAsync(() => NativeModule!.incrementCRDTCounter({ delta: 1, ...options }));
+}
+
+/**
+ * Adds a string value to an `orset` field.
+ *
+ * Uses add-wins semantics: if a concurrent remove arrives from another device,
+ * this add will survive after the next merge.
+ *
+ * @throws {CloudKitError} CRDT_NOT_CONFIGURED if no `crdtSchema` was passed to `startSyncEngine`.
+ * @throws {CloudKitError} SYNC_ENGINE_NOT_RUNNING if the sync engine is not active.
+ */
+export function addToORSet(options: ORSetMutationOptions): Promise<CloudKitRecord> {
+  return callAsync(() => NativeModule!.addToORSet(options));
+}
+
+/**
+ * Removes a string value from an `orset` field.
+ *
+ * Uses observed-remove semantics: only UUIDs observed before the remove are
+ * retracted. Concurrent adds from other devices will survive.
+ *
+ * @throws {CloudKitError} CRDT_NOT_CONFIGURED if no `crdtSchema` was passed to `startSyncEngine`.
+ * @throws {CloudKitError} SYNC_ENGINE_NOT_RUNNING if the sync engine is not active.
+ */
+export function removeFromORSet(options: ORSetMutationOptions): Promise<CloudKitRecord> {
+  return callAsync(() => NativeModule!.removeFromORSet(options));
+}
+
+/**
+ * Sets an `lww` (last-writer-wins) register field to a new value.
+ *
+ * The write is timestamped with the current wall clock. On merge, the write
+ * with the highest timestamp wins. When timestamps are equal, a deterministic
+ * node-ID tiebreak is applied.
+ *
+ * @throws {CloudKitError} CRDT_NOT_CONFIGURED if no `crdtSchema` was passed to `startSyncEngine`.
+ * @throws {CloudKitError} SYNC_ENGINE_NOT_RUNNING if the sync engine is not active.
+ */
+export function setLWWRegister(options: LWWSetOptions): Promise<CloudKitRecord> {
+  return callAsync(() => NativeModule!.setLWWRegister(options));
 }
 
 // ---------------------------------------------------------------------------

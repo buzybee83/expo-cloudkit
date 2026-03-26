@@ -330,6 +330,16 @@ export interface SharedZone {
  * On iOS 17+, `automaticallySync` delegates scheduling to CKSyncEngine.
  * On iOS 16, it starts a timer-based polling loop (default 30s interval).
  */
+/**
+ * How the sync layer resolves a `serverRecordChanged` conflict.
+ *
+ * - `'serverWins'`  — Default. Start from the server record and overlay the
+ *                     client's changed keys on top.
+ * - `'crdtMerge'`  — Auto-merge using the CRDT algorithms defined in `crdtSchema`.
+ *                     CRDT-governed fields are merged; all other fields use server-wins.
+ */
+export type ConflictStrategy = 'serverWins' | 'crdtMerge';
+
 export interface SyncEngineConfig {
   /** Zone names to track with the sync engine. */
   zones: string[];
@@ -342,6 +352,23 @@ export interface SyncEngineConfig {
    * Default: true.
    */
   automaticallySync?: boolean;
+  /**
+   * CRDT field schema. When provided, conflict resolution for the named fields
+   * uses the specified CRDT algorithm. Setting this implicitly enables
+   * `conflictStrategy: 'crdtMerge'` for those fields.
+   *
+   * Fields absent from this schema still use server-wins on conflict.
+   *
+   * @example
+   * ```typescript
+   * crdtSchema: {
+   *   likeCount: 'pncounter',
+   *   tags: 'orset',
+   *   title: 'lww',
+   * }
+   * ```
+   */
+  crdtSchema?: CRDTSchema;
 }
 
 /**
@@ -460,4 +487,89 @@ export interface PendingRecordChange {
   record?: RecordToSave;
   /** Required when type is 'delete'. The record to delete. */
   recordIdentifier?: RecordIdentifier;
+}
+
+// ---------------------------------------------------------------------------
+// Phase K.2 — CRDT-Based Conflict Resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * The four CRDT algorithms supported by expo-cloudkit.
+ *
+ * - `'lww'`       — Last-writer-wins register (any field type; resolved by wall-clock timestamp).
+ * - `'gcounter'`  — Grow-only counter (non-negative integer; monotonically increasing).
+ * - `'pncounter'` — Positive/negative counter (signed integer; supports increment and decrement).
+ * - `'orset'`     — Observed-remove set (set of strings; add-wins on concurrent add+remove).
+ */
+export type CRDTFieldType = 'lww' | 'gcounter' | 'pncounter' | 'orset';
+
+/**
+ * Maps field names to their CRDT type.
+ *
+ * Pass this as `crdtSchema` in `SyncEngineConfig` to enable CRDT-based
+ * conflict resolution for the named fields. Fields not in the schema
+ * are resolved with the default server-wins strategy.
+ *
+ * @example
+ * ```typescript
+ * const schema: CRDTSchema = {
+ *   likeCount: 'pncounter',
+ *   tags: 'orset',
+ *   title: 'lww',
+ *   views: 'gcounter',
+ * };
+ * ```
+ */
+export interface CRDTSchema {
+  [fieldName: string]: CRDTFieldType;
+}
+
+// ---------------------------------------------------------------------------
+// CRDT mutation option types
+// ---------------------------------------------------------------------------
+
+/** Options for `incrementCRDTCounter`. */
+export interface IncrementCRDTCounterOptions {
+  /** The recordName of the target record. */
+  recordName: string;
+  /** The zone the record lives in. */
+  zoneName: string;
+  /** Which database. Default: 'private'. */
+  database?: DatabaseScope;
+  /** The field name, which must be 'gcounter' or 'pncounter' in the schema. */
+  field: string;
+  /**
+   * Amount to increment. Defaults to 1.
+   * Negative values decrement — valid for `pncounter` only.
+   * Must be ≥ 1 for `gcounter`.
+   */
+  delta?: number;
+}
+
+/** Options for `addToORSet` and `removeFromORSet`. */
+export interface ORSetMutationOptions {
+  /** The recordName of the target record. */
+  recordName: string;
+  /** The zone the record lives in. */
+  zoneName: string;
+  /** Which database. Default: 'private'. */
+  database?: DatabaseScope;
+  /** The field name, which must be 'orset' in the schema. */
+  field: string;
+  /** The string value to add or remove. */
+  value: string;
+}
+
+/** Options for `setLWWRegister`. */
+export interface LWWSetOptions {
+  /** The recordName of the target record. */
+  recordName: string;
+  /** The zone the record lives in. */
+  zoneName: string;
+  /** Which database. Default: 'private'. */
+  database?: DatabaseScope;
+  /** The field name, which must be 'lww' in the schema. */
+  field: string;
+  /** The new value. Must be a valid CloudKit field value. */
+  value: RecordFieldValue;
 }

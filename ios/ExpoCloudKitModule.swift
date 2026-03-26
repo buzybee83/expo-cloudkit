@@ -21,6 +21,12 @@ public class ExpoCloudKitModule: Module {
   private var zoneManager: CloudKitZoneManager?
   private var recordManager: CloudKitRecordManager?
 
+  // MARK: - CRDT manager (Phase K.2)
+
+  /// Set when `crdtSchema` is provided in `startSyncEngine` config.
+  /// Shared with the active sync provider for conflict resolution.
+  private var crdtManager: CRDTManager?
+
   // MARK: - Sync provider (Phase B)
 
   /// Active sync provider — either CKSyncEngine adapter (iOS 17+) or the
@@ -312,20 +318,41 @@ public class ExpoCloudKitModule: Module {
       self.syncProvider?.stop()
       self.syncProvider = nil
 
+      // Parse optional crdtSchema: { fieldName: "lww"|"gcounter"|"pncounter"|"orset" }
+      var crdtManager: CRDTManager? = nil
+      if let schemaDict = config["crdtSchema"] as? [String: String] {
+        var schema: [String: CRDTType] = [:]
+        for (fieldName, typeString) in schemaDict {
+          if let crdtType = CRDTType(rawValue: typeString) {
+            schema[fieldName] = crdtType
+          }
+          // Unknown type strings are silently ignored — a warning in production
+          // would require a logging facility not yet wired in this module.
+        }
+        if !schema.isEmpty {
+          crdtManager = CRDTManager(schema: schema)
+        }
+      }
+
       let provider: CloudKitSyncProvider
       if #available(iOS 17.0, *) {
-        provider = CloudKitSyncEngineAdapter(
+        let engineAdapter = CloudKitSyncEngineAdapter(
           ckContainer: container.ckContainer,
           tokenStore: store
         )
+        engineAdapter.crdtManager = crdtManager
+        provider = engineAdapter
       } else {
-        provider = CloudKitSyncFallbackAdapter(
+        let fallbackAdapter = CloudKitSyncFallbackAdapter(
           ckContainer: container.ckContainer,
           tokenStore: store
         )
+        fallbackAdapter.crdtManager = crdtManager
+        provider = fallbackAdapter
       }
 
       self.syncProvider = provider
+      self.crdtManager = crdtManager
 
       provider.start(
         zones: zoneIDs,
@@ -395,6 +422,230 @@ public class ExpoCloudKitModule: Module {
       provider.stop()
       self?.syncProvider = nil
       promise.resolve(nil)
+    }
+
+    // -------------------------------------------------------------------------
+    // CRDT Mutations — Phase K.2
+    //
+    // Each mutation:
+    //  1. Fetches the record (or starts from an empty dict if not yet saved)
+    //  2. Applies the CRDT mutation via CRDTManager
+    //  3. Re-enqueues via enqueuePendingChange (sync engine path, not direct save)
+    //
+    // All four functions reject immediately when:
+    //  - The module is not configured
+    //  - No sync provider is running (crdtManager is only wired during startSyncEngine)
+    //  - The field is not in the schema
+    //  - The operation is invalid for the field's CRDT type
+    // -------------------------------------------------------------------------
+
+    /// Increments a gcounter or pncounter field by `delta`.
+    /// `delta` defaults to 1. Negative values are valid for pncounter only.
+    AsyncFunction("incrementCRDTCounter") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self else { return promise.reject(CloudKitModuleError.notConfigured) }
+      guard let recordManager = self.recordManager else {
+        return promise.reject(CloudKitModuleError.notConfigured)
+      }
+      guard let provider = self.syncProvider else {
+        return promise.reject(CloudKitModuleError.syncEngineNotRunning)
+      }
+      guard let crdtManager = self.crdtManager else {
+        return promise.reject(CloudKitModuleError.crdtNotConfigured)
+      }
+      guard let field = options["field"] as? String,
+            let recordName = options["recordName"] as? String,
+            let zoneName = options["zoneName"] as? String else {
+        return promise.reject(CloudKitModuleError.missingRequiredField)
+      }
+      let delta = options["delta"] as? Int ?? 1
+      let dbString = options["database"] as? String ?? "private"
+      let scope = Converters.toDatabaseScope(dbString)
+
+      recordManager.fetchRecord(
+        recordType: "__crdt_placeholder__",
+        recordId: recordName,
+        zoneName: zoneName,
+        database: scope
+      ) { result in
+        let baseDict: [String: Any]
+        switch result {
+        case .success(let record):
+          baseDict = Converters.toDictionary(record)
+        case .failure:
+          // Record may not exist yet — start with an empty dict.
+          baseDict = [
+            "recordType": "__crdt_placeholder__",
+            "recordName": recordName,
+            "zoneName": zoneName,
+            "fields": [String: Any]()
+          ]
+        }
+
+        var mutableDict = baseDict
+        do {
+          try crdtManager.applyIncrement(to: &mutableDict, field: field, delta: delta)
+          provider.enqueueSave(try Converters.toCKRecord(from: mutableDict))
+          promise.resolve(mutableDict)
+        } catch {
+          promise.reject(error)
+        }
+      }
+    }
+
+    /// Adds a string value to an orset field.
+    AsyncFunction("addToORSet") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self else { return promise.reject(CloudKitModuleError.notConfigured) }
+      guard let recordManager = self.recordManager else {
+        return promise.reject(CloudKitModuleError.notConfigured)
+      }
+      guard let provider = self.syncProvider else {
+        return promise.reject(CloudKitModuleError.syncEngineNotRunning)
+      }
+      guard let crdtManager = self.crdtManager else {
+        return promise.reject(CloudKitModuleError.crdtNotConfigured)
+      }
+      guard let field = options["field"] as? String,
+            let recordName = options["recordName"] as? String,
+            let zoneName = options["zoneName"] as? String,
+            let value = options["value"] as? String else {
+        return promise.reject(CloudKitModuleError.missingRequiredField)
+      }
+      let dbString = options["database"] as? String ?? "private"
+      let scope = Converters.toDatabaseScope(dbString)
+
+      recordManager.fetchRecord(
+        recordType: "__crdt_placeholder__",
+        recordId: recordName,
+        zoneName: zoneName,
+        database: scope
+      ) { result in
+        let baseDict: [String: Any]
+        switch result {
+        case .success(let record):
+          baseDict = Converters.toDictionary(record)
+        case .failure:
+          baseDict = [
+            "recordType": "__crdt_placeholder__",
+            "recordName": recordName,
+            "zoneName": zoneName,
+            "fields": [String: Any]()
+          ]
+        }
+
+        var mutableDict = baseDict
+        do {
+          try crdtManager.applyAdd(to: &mutableDict, field: field, value: value)
+          provider.enqueueSave(try Converters.toCKRecord(from: mutableDict))
+          promise.resolve(mutableDict)
+        } catch {
+          promise.reject(error)
+        }
+      }
+    }
+
+    /// Removes a string value from an orset field.
+    AsyncFunction("removeFromORSet") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self else { return promise.reject(CloudKitModuleError.notConfigured) }
+      guard let recordManager = self.recordManager else {
+        return promise.reject(CloudKitModuleError.notConfigured)
+      }
+      guard let provider = self.syncProvider else {
+        return promise.reject(CloudKitModuleError.syncEngineNotRunning)
+      }
+      guard let crdtManager = self.crdtManager else {
+        return promise.reject(CloudKitModuleError.crdtNotConfigured)
+      }
+      guard let field = options["field"] as? String,
+            let recordName = options["recordName"] as? String,
+            let zoneName = options["zoneName"] as? String,
+            let value = options["value"] as? String else {
+        return promise.reject(CloudKitModuleError.missingRequiredField)
+      }
+      let dbString = options["database"] as? String ?? "private"
+      let scope = Converters.toDatabaseScope(dbString)
+
+      recordManager.fetchRecord(
+        recordType: "__crdt_placeholder__",
+        recordId: recordName,
+        zoneName: zoneName,
+        database: scope
+      ) { result in
+        let baseDict: [String: Any]
+        switch result {
+        case .success(let record):
+          baseDict = Converters.toDictionary(record)
+        case .failure:
+          baseDict = [
+            "recordType": "__crdt_placeholder__",
+            "recordName": recordName,
+            "zoneName": zoneName,
+            "fields": [String: Any]()
+          ]
+        }
+
+        var mutableDict = baseDict
+        do {
+          try crdtManager.applyRemove(to: &mutableDict, field: field, value: value)
+          provider.enqueueSave(try Converters.toCKRecord(from: mutableDict))
+          promise.resolve(mutableDict)
+        } catch {
+          promise.reject(error)
+        }
+      }
+    }
+
+    /// Sets an lww-register field to a new value, timestamped now.
+    AsyncFunction("setLWWRegister") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self else { return promise.reject(CloudKitModuleError.notConfigured) }
+      guard let recordManager = self.recordManager else {
+        return promise.reject(CloudKitModuleError.notConfigured)
+      }
+      guard let provider = self.syncProvider else {
+        return promise.reject(CloudKitModuleError.syncEngineNotRunning)
+      }
+      guard let crdtManager = self.crdtManager else {
+        return promise.reject(CloudKitModuleError.crdtNotConfigured)
+      }
+      guard let field = options["field"] as? String,
+            let recordName = options["recordName"] as? String,
+            let zoneName = options["zoneName"] as? String else {
+        return promise.reject(CloudKitModuleError.missingRequiredField)
+      }
+      // `value` may be any JSON-serialisable type — presence is required.
+      guard let value = options["value"] else {
+        return promise.reject(CloudKitModuleError.missingRequiredField)
+      }
+      let dbString = options["database"] as? String ?? "private"
+      let scope = Converters.toDatabaseScope(dbString)
+
+      recordManager.fetchRecord(
+        recordType: "__crdt_placeholder__",
+        recordId: recordName,
+        zoneName: zoneName,
+        database: scope
+      ) { result in
+        let baseDict: [String: Any]
+        switch result {
+        case .success(let record):
+          baseDict = Converters.toDictionary(record)
+        case .failure:
+          baseDict = [
+            "recordType": "__crdt_placeholder__",
+            "recordName": recordName,
+            "zoneName": zoneName,
+            "fields": [String: Any]()
+          ]
+        }
+
+        var mutableDict = baseDict
+        do {
+          try crdtManager.applySet(to: &mutableDict, field: field, value: value)
+          provider.enqueueSave(try Converters.toCKRecord(from: mutableDict))
+          promise.resolve(mutableDict)
+        } catch {
+          promise.reject(error)
+        }
+      }
     }
 
     // -------------------------------------------------------------------------
@@ -486,6 +737,10 @@ enum CloudKitModuleError: Error, LocalizedError {
   case requiresiOS17
   case notImplemented(String)
   case syncEngineNotRunning
+  /// `startSyncEngine` was called without a `crdtSchema` but a CRDT mutation was attempted.
+  case crdtNotConfigured
+  /// A required option key was missing from the options dictionary passed to a native function.
+  case missingRequiredField
 
   var errorDescription: String? {
     switch self {
@@ -497,6 +752,10 @@ enum CloudKitModuleError: Error, LocalizedError {
       return "\(feature) is not yet implemented in this phase of expo-cloudkit."
     case .syncEngineNotRunning:
       return "Sync engine is not running. Call startSyncEngine() first."
+    case .crdtNotConfigured:
+      return "CRDT mutations require a crdtSchema in the startSyncEngine() config."
+    case .missingRequiredField:
+      return "A required option field is missing from the CRDT mutation options."
     }
   }
 
@@ -507,6 +766,8 @@ enum CloudKitModuleError: Error, LocalizedError {
     case .requiresiOS17:         return "REQUIRES_IOS_17"
     case .notImplemented:        return "NOT_IMPLEMENTED"
     case .syncEngineNotRunning:  return "SYNC_ENGINE_NOT_RUNNING"
+    case .crdtNotConfigured:     return "CRDT_NOT_CONFIGURED"
+    case .missingRequiredField:  return "MISSING_REQUIRED_FIELD"
     }
   }
 }

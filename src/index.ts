@@ -52,6 +52,7 @@ export type {
   SortDescriptor,
   Subscription,
   // Phase B — CKSyncEngine
+  ConflictStrategy,
   SyncEngineConfig,
   SyncEngineEvent,
   SyncEngineEventType,
@@ -63,6 +64,12 @@ export type {
   SyncErrorEvent,
   Zone,
   ZoneChanges,
+  // Phase K.2 — CRDT
+  CRDTFieldType,
+  CRDTSchema,
+  IncrementCRDTCounterOptions,
+  ORSetMutationOptions,
+  LWWSetOptions,
 } from './types';
 
 // Errors
@@ -96,3 +103,11 @@ export {
 
 // Phase D — CKAsset
 export { downloadAsset, addAssetProgressListener } from './ExpoCloudKit';
+
+// Phase K.2 — CRDT
+export {
+  incrementCRDTCounter,
+  addToORSet,
+  removeFromORSet,
+  setLWWRegister,
+} from './ExpoCloudKit';

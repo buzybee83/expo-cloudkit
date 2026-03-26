@@ -43,6 +43,10 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
   /// Default: 1 retry on conflict before surfacing the error.
   private let maxConflictRetries = 1
 
+  /// CRDT manager set when `crdtSchema` is provided in `startSyncEngine` config.
+  /// When non-nil, conflict resolution uses CRDT merge for schema fields.
+  var crdtManager: CRDTManager?
+
   /// Serial queue for all mutable state access and sync cycle coordination.
   private let pendingQueue = DispatchQueue(label: "expo.cloudkit.syncfallback.pending")
   private var pendingSaves: [CKRecord] = []
@@ -340,9 +344,22 @@ final class CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
 
   // MARK: - Conflict Resolution
 
-  /// Server-record-wins merge: start with server record and overlay client's
-  /// changed fields. Mirrors the strategy in `CloudKitSyncEngineAdapter`.
+  /// Resolves a conflict between a client and server record.
+  ///
+  /// When `crdtManager` is set, delegates to CRDT merge for schema fields
+  /// and server-wins for all other fields.
+  /// When `crdtManager` is nil, applies the plain server-wins overlay.
   private func resolveConflict(clientRecord: CKRecord, serverRecord: CKRecord) -> CKRecord {
+    if let crdtManager = crdtManager {
+      let clientDict = Converters.toDictionary(clientRecord)
+      let serverDict = Converters.toDictionary(serverRecord)
+      let mergedDict = crdtManager.merge(client: clientDict, server: serverDict)
+      if let mergedRecord = try? Converters.toCKRecord(from: mergedDict) {
+        return mergedRecord
+      }
+      // Fall through to server-wins if encoding fails.
+    }
+
     for key in clientRecord.changedKeys() {
       serverRecord[key] = clientRecord[key]
     }
