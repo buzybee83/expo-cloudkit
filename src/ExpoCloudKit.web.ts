@@ -523,6 +523,16 @@ export async function saveRecords(
       zoneName: r.zoneName ?? '_defaultZone',
       ownerRecordName: '__defaultOwner__',
     };
+    // CloudKit JS does not support encryptedValues. Warn the caller and merge
+    // encrypted fields into regular fields so data is not silently dropped.
+    if (r.encryptedFields && Object.keys(r.encryptedFields).length > 0) {
+      console.warn(
+        '[expo-cloudkit] encryptedFields are not supported on web — ' +
+          'encrypted fields will be saved as regular (unencrypted) fields.'
+      );
+      const existingFields = (body['fields'] as Record<string, unknown>) ?? {};
+      body['fields'] = { ...existingFields, ...r.encryptedFields };
+    }
     return body;
   });
 

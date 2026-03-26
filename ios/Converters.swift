@@ -35,6 +35,18 @@ enum Converters {
       }
     }
 
+    // Serialize encrypted fields (iOS 15+). Uses the same typed-dict format
+    // as regular fields so JS callers receive a uniform structure. On iOS < 15
+    // this key is absent from the returned dictionary.
+    var encryptedFields: [String: [String: Any]] = [:]
+    if #available(iOS 15.0, *) {
+      for key in record.encryptedValues.allKeys() {
+        if let fieldDict = fieldToDictionary(record.encryptedValues[key], for: key) {
+          encryptedFields[key] = fieldDict
+        }
+      }
+    }
+
     var dict: [String: Any] = [
       "recordType": record.recordType,
       "recordName": record.recordID.recordName,
@@ -43,6 +55,10 @@ enum Converters {
       "changeTag": record.recordChangeTag as Any,
       "fields": fields
     ]
+
+    if #available(iOS 15.0, *), !encryptedFields.isEmpty {
+      dict["encryptedFields"] = encryptedFields
+    }
 
     // System metadata — absent on locally-created records that have not yet
     // been saved to CloudKit. Serialised as Unix ms timestamps so JS callers
@@ -159,6 +175,17 @@ enum Converters {
       for (key, fieldDict) in fields {
         if let value = try fieldDictToValue(fieldDict) {
           record[key] = value
+        }
+      }
+    }
+
+    // Apply encrypted fields (iOS 15+). On iOS < 15 these are silently
+    // dropped — the record is saved as if encryptedFields were absent.
+    if #available(iOS 15.0, *),
+       let encryptedFields = dict["encryptedFields"] as? [String: [String: Any]] {
+      for (key, fieldDict) in encryptedFields {
+        if let value = try fieldDictToValue(fieldDict) {
+          record.encryptedValues[key] = value
         }
       }
     }
