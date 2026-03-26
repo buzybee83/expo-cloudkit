@@ -11,6 +11,33 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.19.0] — 2026-03-25
+
+### Added
+
+#### Encrypted Fields
+- **Encrypted field support (`CKRecord.encryptedValues`, iOS 15+)** — `RecordToSave` and `CloudKitRecord` now accept/return `encryptedFields?: Record<string, RecordField>`. Fields stored in `encryptedValues` are end-to-end encrypted by CloudKit — only share participants can decrypt them. Silently ignored on iOS < 15. On web, encrypted fields are merged into regular fields with a console warning.
+
+#### Participant Enhancements
+- **Phone number participant lookup** — `addParticipant` now accepts `phoneNumber` as an alternative to `email`. Uses `CKContainer.fetchShareParticipant(withPhoneNumber:)`. Email takes precedence if both are provided.
+- **`displayName` on `ShareParticipant`** — computed field with fallback: "First Last" → "First" → "Last" → "Unknown Participant". Eliminates null-checking boilerplate in participant lists.
+- **`addParticipants(options)`** — bulk invite: fetches the share once, looks up all participants concurrently, adds them all, saves once. Much more efficient than calling `addParticipant` N times.
+- **`addParticipantChangeListener(callback)`** — fires when participants join, leave, or have permissions changed on shares you own. Detects changes by diffing participant sets when CKShare records arrive via sync.
+
+#### Sync Collaboration
+- **`conflictStrategy` on `SyncEngineConfig`** — built-in conflict resolution strategies: `'serverWins'` (default), `'clientWins'`, `'fieldLevelMerge'` (per-field newest-wins), `'manual'` (emit event for JS resolution). Replaces the boolean `resolveConflicts` option (now deprecated).
+- **`autoSyncNewShares` on `SyncEngineConfig`** — when `true` and syncing the shared database, newly-accepted shared zones are automatically added to the sync engine without requiring a restart.
+
+#### Share Convenience
+- **`leaveShare(options)`** — lets the current user leave a share they previously accepted. Removes their participant entry and saves the modified CKShare.
+- **`createShareFromTemplate(options)`** — creates a share with title, thumbnail, public permission, and initial participants in a single round trip. Supports both record-level and zone-level shares.
+- **`getShareActivity(options)`** — returns recent activity in a shared zone: who modified what record types, when, and how many records. Uses `CKContainer.discoverUserIdentity` for display names.
+
+### New Types
+- `ConflictStrategy`, `BulkParticipantEntry`, `AddParticipantsOptions`, `ParticipantChangedEvent`, `LeaveShareOptions`, `CreateShareFromTemplateOptions`, `GetShareActivityOptions`, `ShareActivityEntry`
+
+---
+
 ## [0.18.0] — 2026-03-24
 
 ### Added
