@@ -2227,6 +2227,28 @@ export function searchEncrypted(options: SearchEncryptedOptions): Promise<string
 }
 
 // ---------------------------------------------------------------------------
+// Phase K.2 — CRDT Mutations
+// ---------------------------------------------------------------------------
+
+import type { IncrementCRDTCounterOptions, ORSetMutationOptions, LWWSetOptions } from './types';
+
+export function incrementCRDTCounter(options: IncrementCRDTCounterOptions): Promise<CloudKitRecord> {
+  return callAsync(() => NativeModule!.incrementCRDTCounter({ delta: 1, ...options }));
+}
+
+export function addToORSet(options: ORSetMutationOptions): Promise<CloudKitRecord> {
+  return callAsync(() => NativeModule!.addToORSet(options));
+}
+
+export function removeFromORSet(options: ORSetMutationOptions): Promise<CloudKitRecord> {
+  return callAsync(() => NativeModule!.removeFromORSet(options));
+}
+
+export function setLWWRegister(options: LWWSetOptions): Promise<CloudKitRecord> {
+  return callAsync(() => NativeModule!.setLWWRegister(options));
+}
+
+// ---------------------------------------------------------------------------
 // Phase K.1 — Presence & Cursors
 // ---------------------------------------------------------------------------
 

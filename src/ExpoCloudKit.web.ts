@@ -83,6 +83,10 @@ import type {
   IndexEncryptedRecordOptions,
   DeindexRecordOptions,
   SearchEncryptedOptions,
+  // Phase K.2 — CRDT
+  IncrementCRDTCounterOptions,
+  ORSetMutationOptions,
+  LWWSetOptions,
   // Phase K.3 — Live Activities / Widgets
   ConfigureExtensionBridgeOptions,
   RegisterWidgetBindingOptions,
@@ -1728,4 +1732,24 @@ export function addLiveActivityListener(
   _callback: (event: LiveActivityUpdateEvent) => void
 ): Subscription {
   return noopSubscription;
+}
+
+// ---------------------------------------------------------------------------
+// Phase K.2 — CRDT Mutations (web stubs)
+// ---------------------------------------------------------------------------
+
+export function incrementCRDTCounter(_options: IncrementCRDTCounterOptions): Promise<CloudKitRecord> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+export function addToORSet(_options: ORSetMutationOptions): Promise<CloudKitRecord> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+export function removeFromORSet(_options: ORSetMutationOptions): Promise<CloudKitRecord> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+export function setLWWRegister(_options: LWWSetOptions): Promise<CloudKitRecord> {
+  return Promise.reject(new CloudKitNotSupportedError());
 }

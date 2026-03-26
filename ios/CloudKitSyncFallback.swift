@@ -52,6 +52,8 @@ actor CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
   /// Default: 1 retry on conflict before surfacing the error.
   private let maxConflictRetries = 1
 
+  /// CRDT manager set when `crdtSchema` is provided in `startSyncEngine` config.
+  var crdtManager: CRDTManager?
   private var pendingSaves: [CKRecord] = []
   private var pendingDeletes: [CKRecord.ID] = []
 
@@ -539,12 +541,23 @@ actor CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
 
   // MARK: - Conflict Resolution
 
-  /// Server-record-wins: start with server record, overlay client's changed fields.
+  /// Resolves a conflict: CRDT merge when configured, else server-wins.
   private func resolveConflict(clientRecord: CKRecord, serverRecord: CKRecord) -> CKRecord {
-    CloudKitSyncFallbackAdapter.resolveConflictServerWinsStatic(clientRecord: clientRecord, serverRecord: serverRecord)
+    if let crdtManager = crdtManager {
+      let clientDict = Converters.toDictionary(clientRecord)
+      let serverDict = Converters.toDictionary(serverRecord)
+      let mergedDict = crdtManager.merge(client: clientDict, server: serverDict)
+      if let mergedRecord = try? Converters.toCKRecord(from: mergedDict) {
+        return mergedRecord
+      }
+    }
+    for key in clientRecord.changedKeys() {
+      serverRecord[key] = clientRecord[key]
+    }
+    return serverRecord
   }
 
-  /// Static version — called from nonisolated `perRecordSaveBlock` closure.
+  /// Server-wins (static) — used from nonisolated perRecordSaveBlock closures.
   private static func resolveConflictServerWinsStatic(clientRecord: CKRecord, serverRecord: CKRecord) -> CKRecord {
     for key in clientRecord.changedKeys() {
       serverRecord[key] = clientRecord[key]

@@ -765,14 +765,9 @@ export type ConflictStrategy =
   | 'serverWins'
   | 'clientWins'
   | 'fieldLevelMerge'
-  | 'manual';
+  | 'manual'
+  | 'crdtMerge';
 
-/**
- * Configuration passed to `startSyncEngine()`.
- *
- * On iOS 17+, `automaticallySync` delegates scheduling to CKSyncEngine.
- * On iOS 16, it starts a timer-based polling loop (default 30s interval).
- */
 export interface SyncEngineConfig {
   /** Zone names to track with the sync engine. */
   zones: string[];
@@ -806,42 +801,19 @@ export interface SyncEngineConfig {
    * When `true`, the module emits `onSyncConflict` events instead of applying
    * server-record-wins automatically whenever a write conflict is detected.
    *
-   * The caller MUST listen for these events via `addSyncEngineListener` (filtering
-   * for `event.type === 'conflict'`) and call `resolveSyncConflict()` for each
-   * emitted conflict. If `resolveSyncConflict()` is never called for a given
-   * `requestId`, the sync engine will hang waiting for resolution — no further
-   * records will be sent until every pending conflict is resolved.
-   *
-   * Set to `false` (or omit) to retain the default server-record-wins behavior,
-   * in which conflicts are silently resolved by discarding the client version.
-   *
    * @deprecated Prefer `conflictStrategy: 'manual'` for explicit intent.
-   * When `conflictStrategy` is also set, it takes precedence and `resolveConflicts`
-   * is ignored.
-   *
-   * Default: `false`.
    */
   resolveConflicts?: boolean;
-  /**
-   * Built-in strategy for resolving write conflicts detected during a sync cycle.
-   *
-   * When set, this overrides `resolveConflicts`.
-   * Default: `'serverWins'`.
-   *
-   * @see ConflictStrategy
-   */
+  /** Built-in strategy for resolving write conflicts. Default: `'serverWins'`. */
   conflictStrategy?: ConflictStrategy;
-  /**
-   * When true and `databases` includes `'shared'`, automatically detects
-   * newly-accepted shared zones and adds them to the running sync engine
-   * without requiring a full `startSyncEngine` restart.
-   *
-   * The zone ID is extracted from the `onShareAccepted` event and passed
-   * directly to the shared-scope sync provider's `addZone` method.
-   *
-   * Default: false.
-   */
+  /** When true, auto-adds newly-accepted shared zones to the running engine. Default: false. */
   autoSyncNewShares?: boolean;
+  /**
+   * CRDT field schema. When provided, conflict resolution for the named fields
+   * uses the specified CRDT algorithm. Setting this implicitly enables
+   * `conflictStrategy: 'crdtMerge'` for those fields.
+   */
+  crdtSchema?: CRDTSchema;
 }
 
 /**
@@ -2149,4 +2121,89 @@ export interface ConfigureExtensionBridgeOptions {
    * Must start with `"group."`.
    */
   appGroupIdentifier: string;
+}
+
+// ---------------------------------------------------------------------------
+// Phase K.2 — CRDT-Based Conflict Resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * The four CRDT algorithms supported by expo-cloudkit.
+ *
+ * - `'lww'`       — Last-writer-wins register (any field type; resolved by wall-clock timestamp).
+ * - `'gcounter'`  — Grow-only counter (non-negative integer; monotonically increasing).
+ * - `'pncounter'` — Positive/negative counter (signed integer; supports increment and decrement).
+ * - `'orset'`     — Observed-remove set (set of strings; add-wins on concurrent add+remove).
+ */
+export type CRDTFieldType = 'lww' | 'gcounter' | 'pncounter' | 'orset';
+
+/**
+ * Maps field names to their CRDT type.
+ *
+ * Pass this as `crdtSchema` in `SyncEngineConfig` to enable CRDT-based
+ * conflict resolution for the named fields. Fields not in the schema
+ * are resolved with the default server-wins strategy.
+ *
+ * @example
+ * ```typescript
+ * const schema: CRDTSchema = {
+ *   likeCount: 'pncounter',
+ *   tags: 'orset',
+ *   title: 'lww',
+ *   views: 'gcounter',
+ * };
+ * ```
+ */
+export interface CRDTSchema {
+  [fieldName: string]: CRDTFieldType;
+}
+
+// ---------------------------------------------------------------------------
+// CRDT mutation option types
+// ---------------------------------------------------------------------------
+
+/** Options for `incrementCRDTCounter`. */
+export interface IncrementCRDTCounterOptions {
+  /** The recordName of the target record. */
+  recordName: string;
+  /** The zone the record lives in. */
+  zoneName: string;
+  /** Which database. Default: 'private'. */
+  database?: DatabaseScope;
+  /** The field name, which must be 'gcounter' or 'pncounter' in the schema. */
+  field: string;
+  /**
+   * Amount to increment. Defaults to 1.
+   * Negative values decrement — valid for `pncounter` only.
+   * Must be ≥ 1 for `gcounter`.
+   */
+  delta?: number;
+}
+
+/** Options for `addToORSet` and `removeFromORSet`. */
+export interface ORSetMutationOptions {
+  /** The recordName of the target record. */
+  recordName: string;
+  /** The zone the record lives in. */
+  zoneName: string;
+  /** Which database. Default: 'private'. */
+  database?: DatabaseScope;
+  /** The field name, which must be 'orset' in the schema. */
+  field: string;
+  /** The string value to add or remove. */
+  value: string;
+}
+
+/** Options for `setLWWRegister`. */
+export interface LWWSetOptions {
+  /** The recordName of the target record. */
+  recordName: string;
+  /** The zone the record lives in. */
+  zoneName: string;
+  /** Which database. Default: 'private'. */
+  database?: DatabaseScope;
+  /** The field name, which must be 'lww' in the schema. */
+  field: string;
+  /** The new value. Must be a valid CloudKit field value. */
+  value: RecordFieldValue;
 }

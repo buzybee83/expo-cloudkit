@@ -141,6 +141,12 @@ export type {
   PresenceEntry,
   PresenceChangedEvent,
   StartPresenceOptions,
+  // Phase K.2 — CRDT
+  CRDTFieldType,
+  CRDTSchema,
+  IncrementCRDTCounterOptions,
+  ORSetMutationOptions,
+  LWWSetOptions,
 } from './types';
 
 // Errors
@@ -361,3 +367,11 @@ export type {
   RegisterLiveActivityBindingOptions,
   LiveActivityUpdateEvent,
 } from './types';
+
+// Phase K.2 — CRDT
+export {
+  incrementCRDTCounter,
+  addToORSet,
+  removeFromORSet,
+  setLWWRegister,
+} from './ExpoCloudKit';

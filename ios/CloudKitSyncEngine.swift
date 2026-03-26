@@ -43,20 +43,16 @@ actor CloudKitSyncEngineAdapter: CloudKitSyncProvider {
   private let ckContainer: CKContainer
 
   /// Built-in conflict resolution strategy. Default: `.serverWins`.
-  ///
-  /// Declared `nonisolated(unsafe)` so the module can set it synchronously before
-  /// calling `start()`. It is written exactly once at configuration time and never
-  /// mutated during an in-flight sync cycle, making the unsynchronised write safe.
   nonisolated(unsafe) var conflictStrategy: ConflictStrategy = .serverWins
 
-  /// Backwards-compatibility alias. Setting this to `true` is equivalent to
-  /// setting `conflictStrategy = .manual`. The module sets this for legacy
-  /// `resolveConflicts: true` callers that do not supply `conflictStrategy`.
+  /// Backwards-compatibility alias.
   nonisolated(unsafe) var conflictResolutionEnabled: Bool {
     get { conflictStrategy == .manual }
     set { if newValue { conflictStrategy = .manual } }
   }
 
+  /// CRDT manager set when `crdtSchema` is provided in `startSyncEngine` config.
+  var crdtManager: CRDTManager?
   private var pendingSaves: [CKRecord] = []
   private var pendingDeletes: [CKRecord.ID] = []
 
@@ -263,7 +259,7 @@ actor CloudKitSyncEngineAdapter: CloudKitSyncProvider {
       switch strategy {
       case .serverWins:
         // Default: start with server record, overlay client's changed fields.
-        let merged = resolveConflictServerWins(clientRecord: clientRecord, serverRecord: serverRecord)
+        let merged = resolveConflict(clientRecord: clientRecord, serverRecord: serverRecord)
         pendingSaves.append(merged)
         syncEngine.state.add(pendingRecordZoneChanges: [.saveRecord(merged.recordID)])
 
@@ -417,10 +413,17 @@ actor CloudKitSyncEngineAdapter: CloudKitSyncProvider {
 
   // MARK: - Conflict Resolution
 
-  /// Server-record-wins: start with the server record and overlay the client's
-  /// changed fields on top. Preserves the server's changeTag and system dates
-  /// while applying the client's intent for fields it modified.
-  private func resolveConflictServerWins(clientRecord: CKRecord, serverRecord: CKRecord) -> CKRecord {
+  /// Resolves a conflict between a client and server record.
+  /// When `crdtManager` is set, delegates to CRDT merge; otherwise server-wins.
+  private func resolveConflict(clientRecord: CKRecord, serverRecord: CKRecord) -> CKRecord {
+    if let crdtManager = crdtManager {
+      let clientDict = Converters.toDictionary(clientRecord)
+      let serverDict = Converters.toDictionary(serverRecord)
+      let mergedDict = crdtManager.merge(client: clientDict, server: serverDict)
+      if let mergedRecord = try? Converters.toCKRecord(from: mergedDict) {
+        return mergedRecord
+      }
+    }
     for key in clientRecord.changedKeys() {
       serverRecord[key] = clientRecord[key]
     }
