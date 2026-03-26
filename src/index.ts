@@ -145,6 +145,17 @@ export { isNativeModuleAvailable } from './ExpoCloudKit';
 export { createCloudKitSchema } from './schema';
 export type { CloudKitParser } from './schema';
 
+// Phase N.1 — Schema migrations
+// Testing utilities (createMockCloudKit) are intentionally NOT exported here.
+// Import them directly from 'expo-cloudkit/src/testing' in test environments only.
+export { createCloudKitMigration } from './migration';
+export type {
+  CloudKitMigration,
+  CloudKitSchema,
+  CreateCloudKitMigrationOptions,
+  MigrationStep,
+} from './migration';
+
 // Phase J.3 — Android sign-in helpers
 export { authenticateAndroid, handleAuthRedirect } from './android/auth';
 
