@@ -132,6 +132,10 @@ export type {
   MLBatchPredictOptions,
   MLOutputValue,
   MLPredictResult,
+  // Encrypted Search (L.2)
+  IndexEncryptedRecordOptions,
+  DeindexRecordOptions,
+  SearchEncryptedOptions,
 } from './types';
 
 // Errors
@@ -321,3 +325,5 @@ export type { CloudKitIntentDefinition, CloudKitIntentParameter } from './intent
 
 // Phase L — On-Device ML
 export { mlPredict, mlBatchPredict, mlModelSchema } from './ExpoCloudKit';
+// Encrypted Search (L.2) — client-side index over encrypted fields
+export { indexEncryptedRecord, deindexRecord, searchEncrypted } from './ExpoCloudKit';

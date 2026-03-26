@@ -80,6 +80,9 @@ import type {
   CreateShareFromTemplateOptions,
   GetShareActivityOptions,
   ShareActivityEntry,
+  IndexEncryptedRecordOptions,
+  DeindexRecordOptions,
+  SearchEncryptedOptions,
 } from './types';
 import {
   configureAuthPersistence,
@@ -1663,5 +1666,35 @@ export function createShareFromTemplate(_options: CreateShareFromTemplateOptions
 export function getShareActivity(
   _options: GetShareActivityOptions
 ): Promise<ShareActivityEntry[]> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+// ---------------------------------------------------------------------------
+// Encrypted Search (L.2) — web stubs
+// ---------------------------------------------------------------------------
+
+/**
+ * Not supported on web — the encrypted search index is backed by CloudKit
+ * native operations (`CKFetchRecordsOperation`, `CKModifyRecordsOperation`)
+ * that are unavailable in CloudKit JS.
+ * @throws {CloudKitNotSupportedError}
+ */
+export function indexEncryptedRecord(_options: IndexEncryptedRecordOptions): Promise<void> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+/**
+ * Not supported on web.
+ * @throws {CloudKitNotSupportedError}
+ */
+export function deindexRecord(_options: DeindexRecordOptions): Promise<void> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+/**
+ * Not supported on web.
+ * @throws {CloudKitNotSupportedError}
+ */
+export function searchEncrypted(_options: SearchEncryptedOptions): Promise<string[]> {
   return Promise.reject(new CloudKitNotSupportedError());
 }

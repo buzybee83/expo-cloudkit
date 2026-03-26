@@ -72,6 +72,9 @@ import type {
   CreateShareFromTemplateOptions,
   GetShareActivityOptions,
   ShareActivityEntry,
+  IndexEncryptedRecordOptions,
+  DeindexRecordOptions,
+  SearchEncryptedOptions,
 } from './types';
 
 // ---------------------------------------------------------------------------
@@ -2170,4 +2173,50 @@ export function mlBatchPredict(options: MLBatchPredictOptions): Promise<MLPredic
 
 export function mlModelSchema(modelPath: string): Promise<Record<string, string>> {
   return callAsync(() => NativeModule!.mlModelSchema(modelPath));
+}
+
+// Encrypted Search (L.2)
+/**
+ * Indexes the extracted plaintext content of a record's encrypted fields.
+ *
+ * Call this after saving a record whose encrypted fields you want to be
+ * searchable. Pass the plaintext values **before** encrypting them; the native
+ * layer tokenises the strings and writes only opaque tokens (lowercase words
+ * of 2+ characters) to a non-encrypted `_SearchIndex` CloudKit record in the
+ * same zone.
+ *
+ * @param options - `recordName`, `zoneName`, optional `database`, `textValues`.
+ */
+export function indexEncryptedRecord(options: IndexEncryptedRecordOptions): Promise<void> {
+  return callAsync(() => NativeModule!.indexEncryptedRecord(options));
+}
+
+/**
+ * Removes a record from the encrypted search index.
+ *
+ * Call this when a record is deleted, or when you no longer want it to appear
+ * in search results. Safe to call even if the record was never indexed.
+ *
+ * @param options - `recordName`, `zoneName`, optional `database`.
+ */
+export function deindexRecord(options: DeindexRecordOptions): Promise<void> {
+  return callAsync(() => NativeModule!.deindexRecord(options));
+}
+
+/**
+ * Searches the client-side encrypted index for records matching a query.
+ *
+ * The query is tokenised with the same rules as `indexEncryptedRecord` and an
+ * AND match is applied: all tokens must appear in the record's index for it to
+ * be returned. Returns an empty array for empty or all-stopword queries.
+ *
+ * Because the index lives in CloudKit (not on-device), this requires a network
+ * round-trip to fetch the `_SearchIndex` record on the first call per zone per
+ * session.
+ *
+ * @param options - `query`, `zoneName`, optional `database`.
+ * @returns Array of `recordName` strings for matching records.
+ */
+export function searchEncrypted(options: SearchEncryptedOptions): Promise<string[]> {
+  return callAsync(() => NativeModule!.searchEncrypted(options));
 }

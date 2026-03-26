@@ -1897,3 +1897,56 @@ export type MLOutputValue = string | number | number[];
 export interface MLPredictResult {
   [featureName: string]: MLOutputValue;
 }
+
+// ---------------------------------------------------------------------------
+// Phase L.2 — Encrypted Search
+// ---------------------------------------------------------------------------
+
+/**
+ * Options for `indexEncryptedRecord`.
+ * Pass the plaintext strings **before** they are encrypted. The native layer
+ * tokenises them and stores only the resulting tokens in a non-encrypted
+ * `_SearchIndex` record, so no plaintext reaches the index.
+ */
+export interface IndexEncryptedRecordOptions {
+  /** CKRecord.ID.recordName of the record being indexed. */
+  recordName: string;
+  /** Zone the record lives in. */
+  zoneName: string;
+  /** Database scope. Default: `'private'`. */
+  database?: DatabaseScope;
+  /**
+   * Plaintext strings to index (extracted from the encrypted field values
+   * before encrypting them). Each string is lowercased, split on whitespace
+   * and punctuation, and filtered to tokens of at least 2 characters.
+   */
+  textValues: string[];
+}
+
+/**
+ * Options for `deindexRecord`.
+ * Removes all index entries that reference `recordName` in the given zone.
+ */
+export interface DeindexRecordOptions {
+  /** CKRecord.ID.recordName of the record to remove from the index. */
+  recordName: string;
+  /** Zone the record lives in. */
+  zoneName: string;
+  /** Database scope. Default: `'private'`. */
+  database?: DatabaseScope;
+}
+
+/**
+ * Options for `searchEncrypted`.
+ * Runs an AND query: all tokens produced from `query` must appear in the
+ * record's index for it to be returned.
+ */
+export interface SearchEncryptedOptions {
+  /** Search query string. Tokenised with the same rules as `indexEncryptedRecord`
+   * (lowercase, split on whitespace/punctuation, min 2 characters). */
+  query: string;
+  /** Zone to search within. */
+  zoneName: string;
+  /** Database scope. Default: `'private'`. */
+  database?: DatabaseScope;
+}
