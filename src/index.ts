@@ -305,3 +305,11 @@ export { getZoneChangeToken, setZoneChangeToken } from './ExpoCloudKit';
 
 // Share Convenience — leaveShare, createShareFromTemplate, getShareActivity
 export { leaveShare, createShareFromTemplate, getShareActivity } from './ExpoCloudKit';
+
+// Phase N — DevTools (dev-only floating overlay; renders null in production)
+export { CloudKitDevTools } from './devtools';
+export type { CloudKitDevToolsProps } from './devtools';
+
+// Phase N — App Intents (iOS 16+ Shortcuts / Siri integration helpers)
+export { generateAppIntentSwift } from './intents';
+export type { CloudKitIntentDefinition, CloudKitIntentParameter } from './intents';
