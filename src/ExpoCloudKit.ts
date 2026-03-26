@@ -17,12 +17,15 @@ import type {
   CloudKitRecord,
   DatabaseScope,
   PendingRecordChange,
+  PresenceChangedEvent,
+  PresenceEntry,
   QueryPredicate,
   QueryResult,
   RecordIdentifier,
   RecordToSave,
   SavedRecord,
   SortDescriptor,
+  StartPresenceOptions,
   Subscription,
   SyncEngineConfig,
   SyncEngineEvent,
@@ -444,4 +447,146 @@ export function downloadAsset(
       database
     )
   );
+}
+
+// ---------------------------------------------------------------------------
+// Presence & Cursors — Phase K.1
+// ---------------------------------------------------------------------------
+
+/**
+ * Starts real-time presence tracking in a shared CloudKit zone.
+ *
+ * Creates an `ExpoPresence` CKRecord for the local user and begins a 30-second
+ * heartbeat. Other participants will see the local user appear in their
+ * `onPresenceChanged` event stream.
+ *
+ * Presence records are filtered from the normal `recordsFetched` sync event —
+ * they arrive only via `addPresenceListener`.
+ *
+ * @param options - Zone, database scope, display name, initial status, metadata.
+ * @throws {CloudKitError} NOT_CONFIGURED if the module has not been configured.
+ * @throws {CloudKitError} NOT_AUTHENTICATED if the user is not signed in to iCloud.
+ */
+export function startPresence(options: StartPresenceOptions): Promise<void> {
+  return callAsync(() => NativeModule!.startPresence(options));
+}
+
+/**
+ * Stops presence tracking in a zone and deletes the local user's presence record.
+ *
+ * This is best-effort on force-kill — if the app is killed, the record will
+ * persist until another heartbeat cycle from this user or until another client
+ * observes the stale `lastSeen` and emits a `'left'` event locally.
+ *
+ * @param options - Zone name and optional database scope.
+ */
+export function stopPresence(options: {
+  zoneName: string;
+  database?: DatabaseScope;
+}): Promise<void> {
+  return callAsync(() => NativeModule!.stopPresence(options));
+}
+
+/**
+ * Updates the local user's cursor position in a shared zone.
+ *
+ * Calls are debounced 500 ms — rapid successive calls are coalesced before
+ * writing to CloudKit. Other participants receive the updated cursor via their
+ * `onPresenceChanged` event stream with `changeType: 'updated'`.
+ *
+ * CloudKit is not a real-time database. Other participants will see cursor
+ * updates with ~1–2 seconds of latency (500 ms debounce + sync engine batch
+ * interval). This is appropriate for "User X is here" indicators but not for
+ * character-by-character text collaboration.
+ *
+ * @param options - Zone name and cursor position (app-defined shape).
+ */
+export function updatePresenceCursor(options: {
+  zoneName: string;
+  cursor: Record<string, unknown>;
+}): Promise<void> {
+  return callAsync(() => NativeModule!.updatePresenceCursor(options));
+}
+
+/**
+ * Updates the local user's status in a shared zone.
+ *
+ * @param options - Zone name and status string ('active' | 'idle' | 'editing').
+ */
+export function updatePresenceStatus(options: {
+  zoneName: string;
+  status: 'active' | 'idle' | 'editing';
+}): Promise<void> {
+  return callAsync(() => NativeModule!.updatePresenceStatus(options));
+}
+
+/**
+ * Returns a snapshot of all currently online presence entries for a zone.
+ *
+ * This reads in-memory state accumulated from sync events — it does not
+ * make a CloudKit network request. Subscribe to `addPresenceListener` for
+ * real-time updates.
+ *
+ * @param options - Zone name and optional database scope.
+ * @returns       - Online participants (lastSeen within the 90-second threshold).
+ */
+export function getPresence(options: {
+  zoneName: string;
+  database?: DatabaseScope;
+}): Promise<PresenceEntry[]> {
+  return callAsync(() => NativeModule!.getPresence(options));
+}
+
+/**
+ * Registers a listener for presence change events in all zones.
+ *
+ * Events are emitted when:
+ * - A participant joins (first heartbeat received, or came back online).
+ * - A participant updates their cursor or status.
+ * - A participant leaves (deleted their presence record, or `lastSeen` is stale).
+ *
+ * Filter by `event.zoneName` when tracking multiple zones simultaneously.
+ *
+ * @param callback - Called on the main thread whenever a presence event fires.
+ * @returns A Subscription; call `.remove()` to stop receiving events.
+ *
+ * @example
+ * ```typescript
+ * const sub = addPresenceListener((event) => {
+ *   if (event.changeType === 'joined') {
+ *     showAvatar(event.participant);
+ *   } else if (event.changeType === 'left') {
+ *     removeAvatar(event.participant.userRecordName);
+ *   }
+ * });
+ * // Later:
+ * sub.remove();
+ * ```
+ */
+export function addPresenceListener(
+  callback: (event: PresenceChangedEvent) => void
+): Subscription {
+  assertNativeAvailable();
+  // The native layer emits the PresenceEntry fields merged with changeType and zoneName
+  // at the top level of the payload. Reconstruct the typed event shape here.
+  const subscription = emitter!.addListener(
+    'onPresenceChanged',
+    (raw: Record<string, unknown>) => {
+      const event: PresenceChangedEvent = {
+        zoneName: raw['zoneName'] as string,
+        changeType: raw['changeType'] as PresenceChangedEvent['changeType'],
+        participant: {
+          userRecordName: raw['userRecordName'] as string,
+          displayName: (raw['displayName'] as string | null) ?? null,
+          lastSeen: raw['lastSeen'] as number,
+          status: raw['status'] as PresenceEntry['status'],
+          cursor: (raw['cursor'] as PresenceEntry['cursor']) ?? null,
+          metadata: (raw['metadata'] as PresenceEntry['metadata']) ?? null,
+          isCurrentUser: raw['isCurrentUser'] as boolean,
+        },
+      };
+      callback(event);
+    }
+  );
+  return { remove: () => subscription.remove() };
 }

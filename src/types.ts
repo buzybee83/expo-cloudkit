@@ -461,3 +461,93 @@ export interface PendingRecordChange {
   /** Required when type is 'delete'. The record to delete. */
   recordIdentifier?: RecordIdentifier;
 }
+
+// ---------------------------------------------------------------------------
+// Presence & Cursors — Phase K.1
+// ---------------------------------------------------------------------------
+
+/**
+ * Structured cursor position — app-defined, opaque to the module.
+ *
+ * CloudKit stores this as a JSON-serialised string on the ExpoPresence record.
+ * The module never inspects the contents — it is passed through as-is.
+ *
+ * @example
+ * ```typescript
+ * // Text-editor cursor
+ * { position: 'paragraph-3', data: { offset: 42 } }
+ * // Canvas cursor
+ * { position: 'canvas', data: { x: 120, y: 88 } }
+ * ```
+ */
+export interface PresenceCursor {
+  /** Application-defined position identifier (e.g. record name being edited). */
+  position: string;
+  /** Optional structured payload (e.g. { field: 'title', offset: 42 }). */
+  data?: Record<string, unknown>;
+}
+
+/**
+ * A single participant's presence state in a shared CloudKit zone.
+ *
+ * Backed by an `ExpoPresence` CKRecord. `status` is synthesised to `'offline'`
+ * client-side when `lastSeen` is more than 90 seconds ago.
+ */
+export interface PresenceEntry {
+  /**
+   * The CKCurrentUserDefaultName-resolved record name for this participant.
+   * Stable for the lifetime of the iCloud account.
+   */
+  userRecordName: string;
+  /** Display name provided when calling `startPresence`. Null if not set. */
+  displayName: string | null;
+  /**
+   * Unix ms timestamp of the participant's last heartbeat.
+   * Participants whose lastSeen is older than 90 s are considered offline.
+   */
+  lastSeen: number;
+  /**
+   * Current status reported by the participant.
+   * `'offline'` is synthesised locally when `lastSeen` is stale — the participant
+   * never writes `'offline'` to their own record.
+   */
+  status: 'active' | 'idle' | 'editing' | 'offline';
+  /**
+   * Most recent cursor position sent by this participant.
+   * Null when no cursor has been set or the participant is offline.
+   */
+  cursor: PresenceCursor | null;
+  /** App-specific metadata (avatar URL, display colour, etc.). Null when not set. */
+  metadata: Record<string, unknown> | null;
+  /** True when this entry belongs to the current device's iCloud account. */
+  isCurrentUser: boolean;
+}
+
+/**
+ * Event emitted on the `onPresenceChanged` channel whenever a participant's
+ * presence state changes (joined, updated, or left).
+ */
+export interface PresenceChangedEvent {
+  /** The zone this participant belongs to. */
+  zoneName: string;
+  /** The updated presence entry for this participant. */
+  participant: PresenceEntry;
+  /** Why this event was fired. */
+  changeType: 'joined' | 'left' | 'updated';
+}
+
+/**
+ * Options passed to `startPresence()`.
+ */
+export interface StartPresenceOptions {
+  /** Name of the shared zone to track presence in. Must exist before calling. */
+  zoneName: string;
+  /** Database scope. Default: 'shared'. */
+  database?: DatabaseScope;
+  /** Your display name — shown to other participants. */
+  displayName?: string;
+  /** Initial status. Default: 'active'. */
+  status?: 'active' | 'idle' | 'editing';
+  /** Arbitrary app metadata to include on the presence record. */
+  metadata?: Record<string, unknown>;
+}

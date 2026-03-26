@@ -63,6 +63,11 @@ export type {
   SyncErrorEvent,
   Zone,
   ZoneChanges,
+  // Phase K.1 — Presence & Cursors
+  PresenceCursor,
+  PresenceEntry,
+  PresenceChangedEvent,
+  StartPresenceOptions,
 } from './types';
 
 // Errors
@@ -96,3 +101,15 @@ export {
 
 // Phase D — CKAsset
 export { downloadAsset, addAssetProgressListener } from './ExpoCloudKit';
+
+// Phase K.1 — Presence & Cursors
+export {
+  startPresence,
+  stopPresence,
+  updatePresenceCursor,
+  updatePresenceStatus,
+  getPresence,
+  addPresenceListener,
+} from './ExpoCloudKit';
+
+export { usePresence } from './presence';
