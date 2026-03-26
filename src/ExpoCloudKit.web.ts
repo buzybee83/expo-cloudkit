@@ -80,6 +80,11 @@ import type {
   CreateShareFromTemplateOptions,
   GetShareActivityOptions,
   ShareActivityEntry,
+  // Phase K.3 — Live Activities / Widgets
+  ConfigureExtensionBridgeOptions,
+  RegisterWidgetBindingOptions,
+  RegisterLiveActivityBindingOptions,
+  LiveActivityUpdateEvent,
 } from './types';
 import {
   configureAuthPersistence,
@@ -1664,4 +1669,75 @@ export function getShareActivity(
   _options: GetShareActivityOptions
 ): Promise<ShareActivityEntry[]> {
   return Promise.reject(new CloudKitNotSupportedError());
+}
+
+// ---------------------------------------------------------------------------
+// Phase K.3 — Live Activities / Widgets Integration (web stubs)
+//
+// WidgetKit and ActivityKit are iOS-only frameworks. None of these functions
+// have a web equivalent — all stubs throw CloudKitNotSupportedError.
+// ---------------------------------------------------------------------------
+
+/**
+ * Not supported on web — WidgetKit is iOS-only.
+ * @throws {CloudKitNotSupportedError}
+ */
+export function configureExtensionBridge(
+  _options: ConfigureExtensionBridgeOptions
+): Promise<void> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+/**
+ * Not supported on web — WidgetKit is iOS-only.
+ * @throws {CloudKitNotSupportedError}
+ */
+export function registerWidgetBinding(
+  _options: RegisterWidgetBindingOptions
+): Promise<void> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+/**
+ * Not supported on web — WidgetKit is iOS-only.
+ * @throws {CloudKitNotSupportedError}
+ */
+export function removeWidgetBinding(_id: string): Promise<void> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+/**
+ * Not supported on web — ActivityKit is iOS-only.
+ * @throws {CloudKitNotSupportedError}
+ */
+export function registerLiveActivityBinding(
+  _options: RegisterLiveActivityBindingOptions
+): Promise<void> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+/**
+ * Not supported on web — ActivityKit is iOS-only.
+ * @throws {CloudKitNotSupportedError}
+ */
+export function removeLiveActivityBinding(_id: string): Promise<void> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+/**
+ * Not supported on web — WidgetKit is iOS-only.
+ * @throws {CloudKitNotSupportedError}
+ */
+export function reloadWidgetTimeline(_widgetKind: string): Promise<void> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+/**
+ * Returns a no-op subscription on web — `onLiveActivityUpdate` events are
+ * never emitted outside of iOS native.
+ */
+export function addLiveActivityListener(
+  _callback: (event: LiveActivityUpdateEvent) => void
+): Subscription {
+  return noopSubscription;
 }

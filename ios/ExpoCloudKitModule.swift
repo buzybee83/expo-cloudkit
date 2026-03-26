@@ -116,6 +116,15 @@ public class ExpoCloudKitModule: Module {
   /// Diffs are emitted as `onParticipantChanged` events to JS.
   private var knownShareParticipants: [String: Set<String>] = [:]
 
+  // MARK: - Phase K.3 — Live Activities / Widgets bridge
+
+  /// Bridges CloudKit record changes to WidgetKit timelines and ActivityKit Live Activities
+  /// via a shared App Group UserDefaults container.
+  ///
+  /// Initialised during `configure()` when `appGroupIdentifier` is present in options.
+  /// Nil when no App Group is configured (feature is opt-in).
+  private var extensionBridgeManager: CloudKitExtensionBridgeManager?
+
   // MARK: - Module Definition
 
   public func definition() -> ModuleDefinition {
@@ -133,7 +142,8 @@ public class ExpoCloudKitModule: Module {
       "onOfflineQueueEvent",
       "onSyncConflict",
       "onRateLimited",
-      "onParticipantChanged"
+      "onParticipantChanged",
+      "onLiveActivityUpdate"
     )
 
     // -------------------------------------------------------------------------
@@ -2842,6 +2852,188 @@ public class ExpoCloudKitModule: Module {
       }
       store.saveZoneToken(token, zoneID: zoneID, scope: scope)
     }
+
+    // -------------------------------------------------------------------------
+    // Phase K.3 — Live Activities / Widgets Integration
+    // -------------------------------------------------------------------------
+
+    /// Configures the extension bridge for WidgetKit and ActivityKit integration.
+    ///
+    /// Must be called after `configure()`. When `appGroupIdentifier` is provided in
+    /// the config plugin options, call this function once at startup with the same
+    /// App Group identifier to enable widget timeline reloads and Live Activity events.
+    ///
+    /// Options keys:
+    ///   - appGroupIdentifier (String, required) — App Group container identifier
+    ///     e.g. "group.com.example.myapp"
+    AsyncFunction("configureExtensionBridge") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+      guard let appGroupId = options["appGroupIdentifier"] as? String, !appGroupId.isEmpty else {
+        promise.reject(CloudKitModuleError.invalidArgument("appGroupIdentifier is required"))
+        return
+      }
+      let manager = CloudKitExtensionBridgeManager(appGroupIdentifier: appGroupId)
+      manager.onActivityUpdate = { [weak self] payload in
+        DispatchQueue.main.async {
+          self?.sendEvent("onLiveActivityUpdate", payload)
+        }
+      }
+      self.extensionBridgeManager = manager
+      promise.resolve(nil)
+    }
+
+    /// Registers a WidgetKit widget binding.
+    ///
+    /// After registration, whenever a sync cycle produces record changes in the
+    /// specified zone, the module writes the records to App Group UserDefaults and
+    /// requests a WidgetKit timeline reload for the given widget kind (throttled to
+    /// once every 5 minutes).
+    ///
+    /// Options keys:
+    ///   - id         (String, required) — opaque identifier for this binding
+    ///   - widgetKind (String, required) — matches `Widget.kind` in the widget extension
+    ///   - zoneName   (String, required) — zone to watch
+    ///   - database   (String, optional) — "private"|"shared"|"public", default "private"
+    ///   - recordType (String, optional) — only changes of this record type trigger a reload
+    AsyncFunction("registerWidgetBinding") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+      guard let manager = self.extensionBridgeManager else {
+        promise.reject(CloudKitExtensionBridgeNotConfiguredException())
+        return
+      }
+      guard let id = options["id"] as? String, !id.isEmpty else {
+        promise.reject(CloudKitModuleError.invalidArgument("id is required"))
+        return
+      }
+      guard let widgetKind = options["widgetKind"] as? String, !widgetKind.isEmpty else {
+        promise.reject(CloudKitModuleError.invalidArgument("widgetKind is required"))
+        return
+      }
+      guard let zoneName = options["zoneName"] as? String, !zoneName.isEmpty else {
+        promise.reject(CloudKitModuleError.invalidArgument("zoneName is required"))
+        return
+      }
+      let dbString = options["database"] as? String ?? "private"
+      let scope = Converters.toDatabaseScope(dbString)
+      let recordType = options["recordType"] as? String
+
+      let binding = CloudKitExtensionBridgeManager.WidgetBinding(
+        id: id,
+        widgetKind: widgetKind,
+        zoneName: zoneName,
+        database: scope,
+        recordType: recordType
+      )
+      manager.registerWidgetBinding(binding)
+      promise.resolve(nil)
+    }
+
+    /// Removes a previously registered widget binding.
+    ///
+    /// Options keys:
+    ///   - id (String, required) — the binding ID passed to `registerWidgetBinding`
+    AsyncFunction("removeWidgetBinding") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self else {
+        promise.resolve(nil)
+        return
+      }
+      guard let id = options["id"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("id is required"))
+        return
+      }
+      self.extensionBridgeManager?.removeWidgetBinding(id: id)
+      promise.resolve(nil)
+    }
+
+    /// Registers an ActivityKit Live Activity binding.
+    ///
+    /// After registration, whenever a sync cycle produces record changes in the
+    /// specified zone, the module emits an `onLiveActivityUpdate` event to JS so
+    /// the app can call `Activity.update()` with fresh CloudKit data.
+    ///
+    /// Options keys:
+    ///   - id           (String, required) — opaque identifier for this binding
+    ///   - activityType (String, required) — activity type e.g. "com.myapp.DeliveryActivity"
+    ///   - zoneName     (String, required) — zone to watch
+    ///   - database     (String, optional) — "private"|"shared"|"public", default "private"
+    ///   - recordType   (String, optional) — only changes of this record type emit an event
+    AsyncFunction("registerLiveActivityBinding") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+      guard let manager = self.extensionBridgeManager else {
+        promise.reject(CloudKitExtensionBridgeNotConfiguredException())
+        return
+      }
+      guard let id = options["id"] as? String, !id.isEmpty else {
+        promise.reject(CloudKitModuleError.invalidArgument("id is required"))
+        return
+      }
+      guard let activityType = options["activityType"] as? String, !activityType.isEmpty else {
+        promise.reject(CloudKitModuleError.invalidArgument("activityType is required"))
+        return
+      }
+      guard let zoneName = options["zoneName"] as? String, !zoneName.isEmpty else {
+        promise.reject(CloudKitModuleError.invalidArgument("zoneName is required"))
+        return
+      }
+      let dbString = options["database"] as? String ?? "private"
+      let scope = Converters.toDatabaseScope(dbString)
+      let recordType = options["recordType"] as? String
+
+      let binding = CloudKitExtensionBridgeManager.ActivityBinding(
+        id: id,
+        activityType: activityType,
+        zoneName: zoneName,
+        database: scope,
+        recordType: recordType
+      )
+      manager.registerActivityBinding(binding)
+      promise.resolve(nil)
+    }
+
+    /// Removes a previously registered Live Activity binding.
+    ///
+    /// Options keys:
+    ///   - id (String, required) — the binding ID passed to `registerLiveActivityBinding`
+    AsyncFunction("removeLiveActivityBinding") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self else {
+        promise.resolve(nil)
+        return
+      }
+      guard let id = options["id"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("id is required"))
+        return
+      }
+      self.extensionBridgeManager?.removeActivityBinding(id: id)
+      promise.resolve(nil)
+    }
+
+    /// Manually requests a WidgetKit timeline reload for the given widget kind.
+    ///
+    /// This bypasses the 5-minute throttle — use for explicit user-initiated refreshes.
+    ///
+    /// Options keys:
+    ///   - widgetKind (String, required) — the widget kind to reload
+    AsyncFunction("reloadWidgetTimeline") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self else {
+        promise.resolve(nil)
+        return
+      }
+      guard let widgetKind = options["widgetKind"] as? String, !widgetKind.isEmpty else {
+        promise.reject(CloudKitModuleError.invalidArgument("widgetKind is required"))
+        return
+      }
+      self.extensionBridgeManager?.forceReloadWidgetTimeline(widgetKind: widgetKind)
+      promise.resolve(nil)
+    }
   }
 }
 
@@ -2900,6 +3092,25 @@ extension ExpoCloudKitModule {
       for record in changed {
         guard let share = record as? CKShare else { continue }
         diffAndEmitParticipantChanges(share: share, zoneName: zoneName)
+      }
+
+      // Phase K.3 — Bridge record changes to WidgetKit and ActivityKit.
+      // Only invoked when an App Group was configured via configureExtensionBridge().
+      if let bridgeManager = extensionBridgeManager {
+        let scope = Converters.toDatabaseScope(databaseScope)
+        let changedDicts = changed.map { Converters.toDictionary($0) }
+        let deletedDicts: [[String: Any]] = deleted.map { id in
+          [
+            "recordName": id.recordName,
+            "zoneName": id.zoneID.zoneName
+          ]
+        }
+        bridgeManager.handleZoneChanges(
+          zoneName: zoneName,
+          database: scope,
+          changedRecords: changedDicts,
+          deletedRecordIDs: deletedDicts
+        )
       }
 
     case .recordsSent(let saved, let failed):
@@ -3149,6 +3360,14 @@ class OfflineQueueFullException: Exception {
 class BackgroundSyncUnavailableException: Exception {
   override var reason: String {
     "Background sync via BGTaskScheduler requires iOS 13 or later."
+  }
+}
+
+/// Raised when a Phase K.3 widget/activity binding method is called before
+/// `configureExtensionBridge()` has been called with a valid App Group identifier.
+class CloudKitExtensionBridgeNotConfiguredException: Exception {
+  override var reason: String {
+    "Extension bridge is not configured. Call configureExtensionBridge({ appGroupIdentifier }) first."
   }
 }
 
