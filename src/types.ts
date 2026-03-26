@@ -1812,3 +1812,88 @@ export interface RateLimitedEvent {
   /** Retry attempt number (starts at 1). */
   retryCount: number;
 }
+
+// ---------------------------------------------------------------------------
+// Core ML Bridge — Phase L (iOS 14+)
+// ---------------------------------------------------------------------------
+
+/**
+ * Options for `mlPredict` — runs a Core ML model on a single CloudKit record.
+ *
+ * The model must be compiled (`.mlmodelc`) and bundled with the app.
+ * Use `expo-asset` to resolve asset paths at runtime.
+ */
+export interface MLPredictOptions {
+  /**
+   * A CloudKit record dictionary, as returned by `fetchRecord` or `queryRecords`.
+   * Fields are in `{ type, value }` format.
+   */
+  record: CloudKitRecord;
+  /**
+   * Absolute path to the compiled `.mlmodelc` bundle on the device.
+   * Use `Asset.loadAsync` from `expo-asset` to resolve this path.
+   *
+   * @example
+   * ```typescript
+   * import { Asset } from 'expo-asset';
+   * const [asset] = await Asset.loadAsync(require('./models/NoteClassifier.mlmodelc'));
+   * const modelPath = asset.localUri!;
+   * ```
+   */
+  modelPath: string;
+  /**
+   * Names of record fields to pass as model inputs.
+   * Only `string`, `number`, `int64`, and `data` fields are mapped to Core ML features.
+   * Other field types (location, reference, asset, lists) are silently skipped.
+   */
+  inputFields: string[];
+  /**
+   * Names of model output features to include in the result.
+   * Pass an empty array to return all output features.
+   */
+  outputFeatures: string[];
+}
+
+/**
+ * Options for `mlBatchPredict` — runs a Core ML model on multiple CloudKit records.
+ *
+ * The model is loaded once and reused for all records in the batch.
+ * Records whose fields cannot be mapped are omitted from the result array
+ * rather than failing the entire batch.
+ */
+export interface MLBatchPredictOptions {
+  /** Array of CloudKit record dictionaries (same shape as returned by `queryRecords`). */
+  records: CloudKitRecord[];
+  /** Absolute path to the compiled `.mlmodelc` bundle. */
+  modelPath: string;
+  /** Record field names to use as model inputs. */
+  inputFields: string[];
+  /** Model output feature names to return per record. */
+  outputFeatures: string[];
+}
+
+/**
+ * A single output value from Core ML inference.
+ *
+ * - `string`    — String output feature
+ * - `number`    — Double or Int64 output feature
+ * - `number[]`  — MLMultiArray output feature, flattened to a 1-D array
+ */
+export type MLOutputValue = string | number | number[];
+
+/**
+ * The result of a single `mlPredict` call.
+ *
+ * Keys are the model output feature names requested in `outputFeatures`.
+ * Values are `string`, `number`, or `number[]` depending on the feature type.
+ *
+ * @example
+ * ```typescript
+ * const result = await mlPredict({ record, modelPath, inputFields, outputFeatures });
+ * console.log(result['category']);   // e.g. "work"
+ * console.log(result['confidence']); // e.g. 0.92
+ * ```
+ */
+export interface MLPredictResult {
+  [featureName: string]: MLOutputValue;
+}

@@ -127,6 +127,11 @@ export type {
   CreateShareFromTemplateOptions,
   GetShareActivityOptions,
   ShareActivityEntry,
+  // Phase L — On-Device ML
+  MLPredictOptions,
+  MLBatchPredictOptions,
+  MLOutputValue,
+  MLPredictResult,
 } from './types';
 
 // Errors
@@ -313,3 +318,6 @@ export type { CloudKitDevToolsProps } from './devtools';
 // Phase N — App Intents (iOS 16+ Shortcuts / Siri integration helpers)
 export { generateAppIntentSwift } from './intents';
 export type { CloudKitIntentDefinition, CloudKitIntentParameter } from './intents';
+
+// Phase L — On-Device ML
+export { mlPredict, mlBatchPredict, mlModelSchema } from './ExpoCloudKit';

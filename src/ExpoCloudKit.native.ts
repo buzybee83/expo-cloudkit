@@ -2153,3 +2153,21 @@ export function getShareActivity(
 ): Promise<ShareActivityEntry[]> {
   return callAsync(() => NativeModule!.getShareActivity(options));
 }
+
+// ---------------------------------------------------------------------------
+// Phase L — On-Device ML (Core ML bridge, iOS 14+)
+// ---------------------------------------------------------------------------
+
+import type { MLPredictOptions, MLBatchPredictOptions, MLPredictResult } from './types';
+
+export function mlPredict(options: MLPredictOptions): Promise<MLPredictResult> {
+  return callAsync(() => NativeModule!.mlPredict(options));
+}
+
+export function mlBatchPredict(options: MLBatchPredictOptions): Promise<MLPredictResult[]> {
+  return callAsync(() => NativeModule!.mlBatchPredict(options));
+}
+
+export function mlModelSchema(modelPath: string): Promise<Record<string, string>> {
+  return callAsync(() => NativeModule!.mlModelSchema(modelPath));
+}

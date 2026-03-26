@@ -2394,6 +2394,101 @@ public class ExpoCloudKitModule: Module {
       }
     }
 
+
+    // MARK: - Phase L — Core ML Bridge
+
+    // -------------------------------------------------------------------------
+    // Core ML Bridge — Phase L (iOS 14+)
+    // -------------------------------------------------------------------------
+    /// Runs an on-device Core ML model on a single CloudKit record.
+    ///
+    /// - options keys:
+    ///   - `record`         [String: Any]   CloudKit record dict (from fetchRecord/queryRecords)
+    ///   - `modelPath`      String          Absolute path to compiled `.mlmodelc` bundle
+    ///   - `inputFields`    [String]        Record field names to pass as model inputs
+    ///   - `outputFeatures` [String]        Model output feature names to return
+    ///
+    /// Resolves with a `[String: Any]` mapping output feature names to values
+    /// (String, Int64, Double, or [Double]).
+    AsyncFunction("mlPredict") { [weak self] (options: [String: Any], promise: Promise) in
+      _ = self  // captured to keep module alive during dispatch
+      guard #available(iOS 14.0, *) else {
+        promise.reject(CloudKitModuleError.invalidArgument("Core ML bridge requires iOS 14+"))
+      DispatchQueue.global(qos: .userInitiated).async {
+          let record = options["record"] as? [String: Any] ?? [:]
+          let modelPath = options["modelPath"] as? String ?? ""
+          let inputFields = options["inputFields"] as? [String] ?? []
+          let outputFeatures = options["outputFeatures"] as? [String] ?? []
+          let result = try CloudKitMLBridge.predict(
+            record: record,
+            modelPath: modelPath,
+            inputFields: inputFields,
+            outputFeatures: outputFeatures
+          promise.resolve(result)
+        } catch let mlError as CloudKitMLError {
+          promise.reject(mlError.toExpoError())
+          promise.reject(ExpoCloudKitBridgeError(
+            code: "ML_INFERENCE_FAILED",
+            message: error.localizedDescription,
+            retryAfterSeconds: nil,
+            serverRecord: nil
+          ))
+    /// Runs an on-device Core ML model on a batch of CloudKit records.
+    /// - options keys:
+    ///   - `records`        [[String: Any]] Array of CloudKit record dicts
+    ///   - `modelPath`      String          Absolute path to compiled `.mlmodelc` bundle
+    ///   - `inputFields`    [String]        Record field names to pass as model inputs
+    ///   - `outputFeatures` [String]        Model output feature names to return
+    /// Resolves with an array of output dicts (one per record). Records whose fields
+    /// cannot be mapped are omitted from the result rather than failing the whole batch.
+    AsyncFunction("mlBatchPredict") { [weak self] (options: [String: Any], promise: Promise) in
+      _ = self
+      guard #available(iOS 14.0, *) else {
+        promise.reject(CloudKitModuleError.invalidArgument("Core ML bridge requires iOS 14+"))
+      DispatchQueue.global(qos: .userInitiated).async {
+        do {
+          let records = options["records"] as? [[String: Any]] ?? []
+          let modelPath = options["modelPath"] as? String ?? ""
+          let inputFields = options["inputFields"] as? [String] ?? []
+          let outputFeatures = options["outputFeatures"] as? [String] ?? []
+          let results = try CloudKitMLBridge.batchPredict(
+            records: records,
+            modelPath: modelPath,
+            inputFields: inputFields,
+            outputFeatures: outputFeatures
+          )
+          promise.resolve(results)
+        } catch let mlError as CloudKitMLError {
+          promise.reject(mlError.toExpoError())
+        } catch {
+          promise.reject(ExpoCloudKitBridgeError(
+            code: "ML_INFERENCE_FAILED",
+            message: error.localizedDescription,
+            retryAfterSeconds: nil,
+            serverRecord: nil
+          ))
+    /// Returns the input feature names and type descriptions for a compiled Core ML model.
+    /// - Parameter modelPath: Absolute path to the compiled `.mlmodelc` bundle.
+    /// - Resolves with `[String: String]` mapping feature name → type name
+    ///   (e.g. `{ "title": "String", "score": "Double" }`).
+    AsyncFunction("mlModelSchema") { [weak self] (modelPath: String, promise: Promise) in
+      _ = self
+      guard #available(iOS 14.0, *) else {
+        promise.reject(CloudKitModuleError.invalidArgument("Core ML bridge requires iOS 14+"))
+      DispatchQueue.global(qos: .userInitiated).async {
+        do {
+          let schema = try CloudKitMLBridge.modelSchema(modelPath: modelPath)
+          promise.resolve(schema)
+        } catch let mlError as CloudKitMLError {
+          promise.reject(mlError.toExpoError())
+        } catch {
+          promise.reject(ExpoCloudKitBridgeError(
+            code: "ML_MODEL_LOAD_FAILED",
+            message: error.localizedDescription,
+            retryAfterSeconds: nil,
+            serverRecord: nil
+          ))
+
     // -------------------------------------------------------------------------
     // Debug Helpers — Phase C (dev-only, never call from production)
     // -------------------------------------------------------------------------
