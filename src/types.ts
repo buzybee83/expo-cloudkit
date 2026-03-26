@@ -1530,6 +1530,102 @@ export interface SyncHealthEvent {
 }
 
 // ---------------------------------------------------------------------------
+// Share Convenience — leaveShare, createShareFromTemplate, getShareActivity
+// ---------------------------------------------------------------------------
+
+/** Options for `leaveShare`. */
+export interface LeaveShareOptions {
+  /** The `CKRecord.ID.recordName` of the CKShare. */
+  shareRecordName: string;
+  /** Zone name. Omit to use the default zone. */
+  zoneName?: string;
+  /**
+   * Which database the share lives in.
+   * Defaults to `'shared'` — accepted shares appear in the shared database.
+   */
+  database?: DatabaseScope;
+}
+
+/**
+ * Options for `createShareFromTemplate`.
+ *
+ * Combines createShare/createZoneShare + setShareMetadata +
+ * setDefaultParticipantPermission + addParticipant into a single round trip.
+ */
+export interface CreateShareFromTemplateOptions {
+  /** Zone to share. Required. */
+  zoneName: string;
+  /**
+   * Record name to share at the record level.
+   * When omitted, creates a zone-level share using a sentinel anchor record.
+   */
+  recordName?: string;
+  /** Database to operate on. Default: `'private'`. */
+  database?: DatabaseScope;
+  /** Display title shown in Messages/Mail share previews. */
+  title?: string;
+  /** Base64-encoded PNG or JPEG image for share previews. */
+  thumbnailData?: string;
+  /**
+   * Default permission granted to anyone who joins via the share URL.
+   * Default: `'none'` (URL-based joining disabled).
+   */
+  publicPermission?: SharePermission;
+  /**
+   * Initial participants to invite immediately.
+   * Each entry requires an `email` and an optional `permission` (default `'readOnly'`).
+   */
+  participants?: Array<{
+    /** iCloud email address of the person to invite. */
+    email: string;
+    /** Permission to grant this participant. Default: `'readOnly'`. */
+    permission?: SharePermission;
+  }>;
+}
+
+/**
+ * One entry in the array returned by `getShareActivity`.
+ *
+ * Represents all record modifications made by a single user within
+ * the queried zone and time window.
+ */
+export interface ShareActivityEntry {
+  /** CKRecord.ID.recordName for the user who made the changes. */
+  userRecordName: string;
+  /**
+   * Formatted display name (first + last) when CloudKit discoverability
+   * is enabled for this user. Null otherwise.
+   */
+  displayName: string | null;
+  /** Number of records this user last modified in the scanned window. */
+  recordCount: number;
+  /**
+   * Unix timestamp (ms) of this user's most recent modification
+   * within the scanned window.
+   */
+  lastModifiedAt: number;
+  /** Distinct CKRecord.recordType values this user modified. */
+  recordTypes: string[];
+}
+
+/** Options for `getShareActivity`. */
+export interface GetShareActivityOptions {
+  /** Zone to summarise. */
+  zoneName: string;
+  /**
+   * Which database to query.
+   * Default: `'shared'` — shared zones appear in the shared database.
+   */
+  database?: DatabaseScope;
+  /**
+   * Maximum number of records to scan.
+   * Capped to 200 by the native layer (CloudKit per-operation limit).
+   * Default: 100.
+   */
+  limit?: number;
+}
+
+// ---------------------------------------------------------------------------
 // Batch Fetch (Phase I.1)
 // ---------------------------------------------------------------------------
 

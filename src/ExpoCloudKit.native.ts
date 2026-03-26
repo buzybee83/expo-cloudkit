@@ -66,6 +66,10 @@ import type {
   BatchFetchResult,
   RateLimitedEvent,
   ShareMetadata,
+  LeaveShareOptions,
+  CreateShareFromTemplateOptions,
+  GetShareActivityOptions,
+  ShareActivityEntry,
 } from './types';
 
 // ---------------------------------------------------------------------------
@@ -2010,4 +2014,72 @@ export function setZoneChangeToken(
 ): void {
   if (!NativeModule) return;
   NativeModule.setZoneChangeToken(zoneName, database, tokenBase64);
+}
+
+// ---------------------------------------------------------------------------
+// Share Convenience — leaveShare, createShareFromTemplate, getShareActivity
+// ---------------------------------------------------------------------------
+
+/**
+ * Lets the current user leave a CKShare they previously accepted.
+ *
+ * Fetches the share, removes the current user's participant entry, and saves
+ * the modified share back. The owner cannot leave their own share — call
+ * `deleteShare` instead when you are the owner.
+ *
+ * @param options - `shareRecordName`, optional `zoneName`, optional `database`
+ *   (defaults to `'shared'` since accepted shares live in the shared database).
+ *
+ * @throws {CloudKitError} code `PARTICIPANT_NOT_FOUND` if the current user is
+ *   not a participant on this share (e.g. already removed, or fetched from the
+ *   wrong database).
+ * @throws {CloudKitError} code `PERMISSION_DENIED` if the current user is the owner.
+ */
+export function leaveShare(options: LeaveShareOptions): Promise<void> {
+  return callAsync(() => NativeModule!.leaveShare(options));
+}
+
+/**
+ * Creates a CKShare with pre-configured metadata in a single server round trip.
+ *
+ * Equivalent to calling `createShare` (or `createZoneShare`) followed by
+ * `setShareMetadata`, `setDefaultParticipantPermission`, and one `addParticipant`
+ * per email — but batched into a single `CKModifyRecordsOperation`.
+ *
+ * When `recordName` is omitted, a zone-level share is created using a sentinel
+ * anchor record (`_zoneShare` record type), mirroring `createZoneShare` behaviour.
+ *
+ * @param options - Zone, optional record name, metadata, and initial participants.
+ * @returns The created `Share` record including the share URL.
+ *
+ * @throws {CloudKitError} code `PARTICIPANT_LOOKUP_FAILED` if any email cannot
+ *   be resolved to an iCloud account. The share is NOT created in this case.
+ * @throws {CloudKitError} code `RECORD_NOT_FOUND` if `recordName` is provided
+ *   but the record does not exist.
+ */
+export function createShareFromTemplate(
+  options: CreateShareFromTemplateOptions
+): Promise<Share> {
+  return callAsync(() => NativeModule!.createShareFromTemplate(options));
+}
+
+/**
+ * Returns a summary of recent record modifications in a shared zone,
+ * grouped by the user who made each change.
+ *
+ * Scans up to `limit` records (default 100, capped at 200) sorted by
+ * `modificationDate` descending. Display names are resolved via
+ * `CKContainer.discoverUserIdentity` and are only available when the user
+ * has opted into iCloud discoverability — otherwise `displayName` is null.
+ *
+ * @param options - `zoneName`, optional `database` (default `'shared'`), optional `limit`.
+ * @returns Array of activity entries sorted by `lastModifiedAt` descending.
+ *
+ * @throws {CloudKitError} code `ZONE_NOT_FOUND` if the zone does not exist.
+ * @throws {CloudKitError} code `NOT_AUTHENTICATED` if the user is not signed in.
+ */
+export function getShareActivity(
+  options: GetShareActivityOptions
+): Promise<ShareActivityEntry[]> {
+  return callAsync(() => NativeModule!.getShareActivity(options));
 }

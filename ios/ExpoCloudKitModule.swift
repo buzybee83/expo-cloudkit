@@ -2133,6 +2133,163 @@ public class ExpoCloudKitModule: Module {
     }
 
     // -------------------------------------------------------------------------
+    // Share Convenience — leaveShare, createShareFromTemplate, getShareActivity
+    // -------------------------------------------------------------------------
+
+    /// Lets the current user leave a CKShare they previously accepted.
+    ///
+    /// The current user must be a participant (not the owner) — owners should
+    /// call `deleteShare` instead. Rejects with PARTICIPANT_NOT_FOUND if the
+    /// current user's participant entry is absent from the share record.
+    ///
+    /// Options keys:
+    ///   - shareRecordName (String, required)
+    ///   - zoneName (String, optional)
+    ///   - database (String, default "shared") — usually the shared database
+    AsyncFunction("leaveShare") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self, let shareManager = self.shareManager, let container = self.container else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+
+      guard let shareRecordName = options["shareRecordName"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("shareRecordName is required"))
+        return
+      }
+
+      let zoneName = options["zoneName"] as? String
+      let dbString = options["database"] as? String ?? "shared"
+      let scope = Converters.toDatabaseScope(dbString)
+      let database = container.ckContainer.database(with: scope)
+
+      shareManager.leaveShare(
+        shareRecordName: shareRecordName,
+        zoneName: zoneName,
+        database: database
+      ) { result in
+        switch result {
+        case .success:
+          promise.resolve(nil)
+        case .failure(let error):
+          if case ShareManagerError.participantNotFound = error {
+            promise.reject(CloudKitModuleError.participantNotFound("current user"))
+          } else {
+            promise.reject(Converters.toExpoError(error))
+          }
+        }
+      }
+    }
+
+    /// Creates a CKShare with pre-configured metadata in a single server round trip.
+    ///
+    /// Combines createShare/createZoneShare + setShareMetadata +
+    /// setDefaultParticipantPermission + addParticipant into one operation.
+    ///
+    /// Options keys:
+    ///   - zoneName (String, required)
+    ///   - recordName (String, optional — zone-level share when omitted)
+    ///   - database (String, default "private")
+    ///   - title (String, optional)
+    ///   - thumbnailData (String base64, optional)
+    ///   - publicPermission ("none"|"readOnly"|"readWrite", default "none")
+    ///   - participants ([{ email, permission }], optional)
+    AsyncFunction("createShareFromTemplate") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self, let shareManager = self.shareManager, let container = self.container else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+
+      guard let zoneName = options["zoneName"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("zoneName is required"))
+        return
+      }
+
+      let recordName = options["recordName"] as? String
+      let dbString = options["database"] as? String ?? "private"
+      let scope = Converters.toDatabaseScope(dbString)
+      let database = container.ckContainer.database(with: scope)
+
+      let title = options["title"] as? String
+      let thumbnailBase64 = options["thumbnailData"] as? String
+
+      let permissionString = options["publicPermission"] as? String ?? "none"
+      let publicPermission = Converters.toSharePermission(permissionString)
+
+      var participantEmails: [(email: String, permission: CKShare.ParticipantPermission)] = []
+      if let rawParticipants = options["participants"] as? [[String: Any]] {
+        for p in rawParticipants {
+          guard let email = p["email"] as? String else { continue }
+          let perm = Converters.toSharePermission(p["permission"] as? String ?? "readOnly")
+          participantEmails.append((email: email, permission: perm))
+        }
+      }
+
+      shareManager.createShareFromTemplate(
+        recordName: recordName,
+        zoneName: zoneName,
+        database: database,
+        title: title,
+        thumbnailBase64: thumbnailBase64,
+        publicPermission: publicPermission,
+        participantEmails: participantEmails
+      ) { result in
+        switch result {
+        case .success(let shareDict):
+          promise.resolve(shareDict)
+        case .failure(let error):
+          switch error {
+          case ShareManagerError.participantLookupFailed,
+               ShareManagerError.participantNotFound:
+            promise.reject(CloudKitModuleError.participantLookupFailed)
+          default:
+            promise.reject(Converters.toExpoError(error))
+          }
+        }
+      }
+    }
+
+    /// Returns a summary of recent record modifications in a shared zone,
+    /// grouped by the user who made each change.
+    ///
+    /// Queries up to `limit` records (default 100, max 200) sorted by
+    /// modificationDate descending. Display names are resolved via
+    /// `CKContainer.discoverUserIdentity` (requires user opt-in to discoverability).
+    ///
+    /// Options keys:
+    ///   - zoneName (String, required)
+    ///   - database (String, default "shared")
+    ///   - limit (Int, default 100)
+    AsyncFunction("getShareActivity") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self, let shareManager = self.shareManager, let container = self.container else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+
+      guard let zoneName = options["zoneName"] as? String else {
+        promise.reject(CloudKitModuleError.invalidArgument("zoneName is required"))
+        return
+      }
+
+      let dbString = options["database"] as? String ?? "shared"
+      let scope = Converters.toDatabaseScope(dbString)
+      let database = container.ckContainer.database(with: scope)
+      let limit = options["limit"] as? Int ?? 100
+
+      shareManager.getShareActivity(
+        zoneName: zoneName,
+        database: database,
+        limit: limit
+      ) { result in
+        switch result {
+        case .success(let entries):
+          promise.resolve(entries)
+        case .failure(let error):
+          promise.reject(Converters.toExpoError(error))
+        }
+      }
+    }
+
+    // -------------------------------------------------------------------------
     // Debug Helpers — Phase C (dev-only, never call from production)
     // -------------------------------------------------------------------------
 
