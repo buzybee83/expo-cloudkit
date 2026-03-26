@@ -11,6 +11,50 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.20.0] — 2026-03-25
+
+### Added
+
+#### Real-Time Presence & Cursors (K.1)
+- **`startPresence(options)` / `stopPresence(options)`** — join/leave a shared CloudKit zone's presence list. Each participant's state is stored as an `ExpoPresence` CKRecord with a 30-second heartbeat. Participants not seen in 90 seconds are surfaced as `'offline'` locally.
+- **`updatePresenceCursor(options)`** — broadcast a cursor position (debounced 500ms) to other participants in the zone.
+- **`updatePresenceStatus(options)`** — update your presence status (`'active'` | `'idle'` | `'editing'`).
+- **`getPresence(options)`** — snapshot the current participant list for a zone.
+- **`addPresenceListener(callback)`** — subscribe to `onPresenceChanged` events (joined/left/updated).
+- **`usePresence(zoneName, options)`** hook — React hook wrapping the above; returns `{participants, allParticipants, setStatus, setCursor, isReady}`.
+- **`CloudKitPresenceManager`** Swift actor — one per zone; manages heartbeat Task, cursor debounce, and presence record diffing.
+- **Types**: `PresenceCursor`, `PresenceEntry`, `PresenceChangedEvent`, `StartPresenceOptions`.
+
+#### CRDT Conflict Resolution (K.2)
+- **`startSyncEngine({ crdtSchema })` option** — pass `crdtSchema: { fieldName: 'lww' | 'gcounter' | 'pncounter' | 'orset' }` to enable CRDT-based conflict resolution for named fields; other fields use `conflictStrategy`.
+- **`incrementCRDTCounter(options)`** — increment a `gcounter` or `pncounter` field by `delta`. Enqueued through sync engine.
+- **`addToORSet(options)` / `removeFromORSet(options)`** — mutate an `orset` field (add-wins semantics).
+- **`setLWWRegister(options)`** — set an `lww` field; resolved by wall-clock timestamp on merge.
+- **`ConflictStrategy`** — extended with `'crdtMerge'` value.
+- **`CRDTFieldType`**, **`CRDTSchema`**, **`IncrementCRDTCounterOptions`**, **`ORSetMutationOptions`**, **`LWWSetOptions`** types.
+- **`CRDTManager.swift`** + **`CRDTMerger.swift`** — pure-Swift CRDT implementation (LWW-Register, G-Counter, PN-Counter, OR-Set) with shadow fields (`__crdt_<fieldName>`).
+
+#### Live Activities & Widgets Bridge (K.3)
+- **`configureExtensionBridge(options)`** — configure App Group UserDefaults bridge for WidgetKit/ActivityKit. Must be called with `appGroupIdentifier` before registering bindings.
+- **`registerWidgetBinding(options)` / `removeWidgetBinding(id)`** — register a WidgetKit widget to reload when CloudKit records in a zone change (throttled to once every 5 minutes per widget kind).
+- **`registerLiveActivityBinding(options)` / `removeLiveActivityBinding(id)`** — register an ActivityKit Live Activity to receive `onLiveActivityUpdate` events on record changes.
+- **`reloadWidgetTimeline(widgetKind)`** — force-reload a widget timeline, bypassing the 5-minute throttle.
+- **`addLiveActivityListener(callback)`** — subscribe to `onLiveActivityUpdate` events.
+- **`CloudKitExtensionBridgeManager.swift`** — Swift manager; wraps WidgetCenter + App Group UserDefaults; guarded by `#if canImport(WidgetKit)` and `@available(iOS 14, *)`.
+- **Types**: `ConfigureExtensionBridgeOptions`, `RegisterWidgetBindingOptions`, `RegisterLiveActivityBindingOptions`, `LiveActivityUpdateEvent`.
+
+#### Encrypted Search (L.2)
+- **`indexEncryptedRecord(options)`** — store plaintext tokens of encrypted fields in a non-encrypted `_SearchIndex` CKRecord. Pass plaintext values *before* encrypting; only opaque tokens reach the index.
+- **`deindexRecord(options)`** — remove a record from the encrypted search index.
+- **`searchEncrypted(options)`** — AND-match search against the token index. Returns `recordName[]`.
+- **`CloudKitEncryptedSearch.swift`** — inverted token index per zone; tokenization: lowercase, split on non-alphanumeric, ≥2 char filter.
+- **Types**: `IndexEncryptedRecordOptions`, `DeindexRecordOptions`, `SearchEncryptedOptions`.
+
+#### SwiftData Bridge (M.2)
+- **`CloudKitSwiftDataBridge.swift`** — bidirectional bridge between CloudKit records and SwiftData `@Model` objects via `Mirror` reflection and KVC `setValue(_:forKey:)`. Available `@available(iOS 17.0, *)` + `#if canImport(SwiftData)`.
+
+---
+
 ## [0.19.0] — 2026-03-25
 
 ### Added
