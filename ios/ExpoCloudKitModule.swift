@@ -122,6 +122,11 @@ public class ExpoCloudKitModule: Module {
   /// Lazily created on first `indexEncryptedRecord` or `searchEncrypted` call for a zone.
   private var searchEngines: [String: CloudKitEncryptedSearch] = [:]
 
+  // MARK: - Presence managers (Phase K.1)
+
+  /// Active presence managers, keyed by zoneName. One per zone.
+  private var presenceManagers: [String: CloudKitPresenceManager] = [:]
+
   // MARK: - Module Definition
 
   public func definition() -> ModuleDefinition {
@@ -139,7 +144,9 @@ public class ExpoCloudKitModule: Module {
       "onOfflineQueueEvent",
       "onSyncConflict",
       "onRateLimited",
-      "onParticipantChanged"
+      "onParticipantChanged",
+      // Phase K.1 — Presence & Cursors
+      "onPresenceChanged"
     )
 
     // -------------------------------------------------------------------------
@@ -2610,6 +2617,200 @@ public class ExpoCloudKitModule: Module {
     }
 
     // -------------------------------------------------------------------------
+    // Presence & Cursors — Phase K.1
+    // -------------------------------------------------------------------------
+
+    /// Starts real-time presence tracking in a shared zone.
+    ///
+    /// Creates or updates an `ExpoPresence` record for the local user and begins
+    /// the 30-second heartbeat. The sync engine delivers presence records from
+    /// other participants via `onPresenceChanged` events.
+    ///
+    /// options keys:
+    ///   zoneName    — required; the shared zone to track presence in
+    ///   database    — optional; defaults to "shared"
+    ///   displayName — optional; shown to other participants
+    ///   status      — optional; "active" | "idle" | "editing"; defaults to "active"
+    ///   metadata    — optional; [String: Any] serialised to JSON in the record
+    AsyncFunction("startPresence") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self, let container = self.container else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+
+      guard let zoneName = options["zoneName"] as? String else {
+        promise.reject(CloudKitModuleError.notImplemented("startPresence: zoneName is required"))
+        return
+      }
+
+      let dbString = options["database"] as? String ?? "shared"
+      let scope = Converters.toDatabaseScope(dbString)
+      let displayName = options["displayName"] as? String
+      let status = options["status"] as? String ?? "active"
+      let metadata = options["metadata"] as? [String: Any]
+      let database = container.ckContainer.database(with: scope)
+
+      // Fetch the current user's record name so we can key the presence record.
+      container.ckContainer.fetchUserRecordID { [weak self] recordID, error in
+        guard let self = self else {
+          promise.reject(CloudKitModuleError.notConfigured)
+          return
+        }
+        if let error = error {
+          promise.reject(Converters.toExpoError(error))
+          return
+        }
+        guard let userRecordName = recordID?.recordName else {
+          promise.reject(CloudKitModuleError.notImplemented("startPresence: could not resolve user record ID"))
+          return
+        }
+
+        let manager = CloudKitPresenceManager(
+          ckContainer: container.ckContainer,
+          database: database,
+          zoneName: zoneName,
+          localUserRecordName: userRecordName
+        )
+
+        // Wire event emission back to JS.
+        manager.onPresenceChanged = { [weak self] payload in
+          DispatchQueue.main.async {
+            self?.sendEvent("onPresenceChanged", payload)
+          }
+        }
+
+        // Wire save/delete through the active sync provider for batching.
+        manager.enqueueSave = { [weak self] record in
+          self?.syncProvider?.enqueueSave(record)
+        }
+        manager.enqueueDelete = { [weak self] recordID in
+          self?.syncProvider?.enqueueDelete(recordID)
+        }
+
+        // Stop any existing manager for this zone before replacing it.
+        let existingManager = self.presenceManagers[zoneName]
+        self.presenceManagers[zoneName] = manager
+
+        Task {
+          if let existing = existingManager {
+            await existing.stop()
+          }
+          await manager.start(
+            displayName: displayName,
+            initialStatus: status,
+            metadata: metadata
+          )
+          promise.resolve(nil)
+        }
+      }
+    }
+
+    /// Stops presence tracking in a zone and deletes the local user's presence record.
+    ///
+    /// options keys:
+    ///   zoneName — required
+    ///   database — optional (unused; manager is keyed only by zoneName)
+    AsyncFunction("stopPresence") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+      guard let zoneName = options["zoneName"] as? String else {
+        promise.reject(CloudKitModuleError.notImplemented("stopPresence: zoneName is required"))
+        return
+      }
+      guard let manager = self.presenceManagers.removeValue(forKey: zoneName) else {
+        promise.resolve(nil) // Idempotent — no error if already stopped
+        return
+      }
+      Task {
+        await manager.stop()
+        promise.resolve(nil)
+      }
+    }
+
+    /// Updates the local user's cursor position in a shared zone.
+    /// Debounced 500 ms — rapid calls are coalesced before writing to CloudKit.
+    ///
+    /// options keys:
+    ///   zoneName — required
+    ///   cursor   — required; [String: Any] with app-defined position data
+    AsyncFunction("updatePresenceCursor") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+      guard let zoneName = options["zoneName"] as? String else {
+        promise.reject(CloudKitModuleError.notImplemented("updatePresenceCursor: zoneName is required"))
+        return
+      }
+      guard let cursor = options["cursor"] as? [String: Any] else {
+        promise.reject(CloudKitModuleError.notImplemented("updatePresenceCursor: cursor is required"))
+        return
+      }
+      guard let manager = self.presenceManagers[zoneName] else {
+        promise.resolve(nil) // No presence active in this zone; no-op
+        return
+      }
+      Task {
+        await manager.updateCursor(cursor)
+        promise.resolve(nil)
+      }
+    }
+
+    /// Updates the local user's status in a shared zone.
+    ///
+    /// options keys:
+    ///   zoneName — required
+    ///   status   — required; "active" | "idle" | "editing"
+    AsyncFunction("updatePresenceStatus") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+      guard let zoneName = options["zoneName"] as? String else {
+        promise.reject(CloudKitModuleError.notImplemented("updatePresenceStatus: zoneName is required"))
+        return
+      }
+      guard let status = options["status"] as? String else {
+        promise.reject(CloudKitModuleError.notImplemented("updatePresenceStatus: status is required"))
+        return
+      }
+      guard let manager = self.presenceManagers[zoneName] else {
+        promise.resolve(nil)
+        return
+      }
+      Task {
+        await manager.updateStatus(status)
+        promise.resolve(nil)
+      }
+    }
+
+    /// Returns all currently online presence entries for a zone.
+    ///
+    /// options keys:
+    ///   zoneName — required
+    ///   database — optional (unused; manager is keyed by zoneName)
+    AsyncFunction("getPresence") { [weak self] (options: [String: Any], promise: Promise) in
+      guard let self = self else {
+        promise.reject(CloudKitModuleError.notConfigured)
+        return
+      }
+      guard let zoneName = options["zoneName"] as? String else {
+        promise.reject(CloudKitModuleError.notImplemented("getPresence: zoneName is required"))
+        return
+      }
+      guard let manager = self.presenceManagers[zoneName] else {
+        promise.resolve([[String: Any]]()) // No presence active — return empty list
+        return
+      }
+      Task {
+        let participants = await manager.allOnlineParticipants()
+        promise.resolve(participants)
+      }
+    }
+
+    // -------------------------------------------------------------------------
     // CKAsset — Phase D
     // -------------------------------------------------------------------------
 
@@ -3140,10 +3341,35 @@ extension ExpoCloudKitModule {
       ]
 
     case .recordsFetched(let changed, let deleted, let zoneName):
+      // Phase K.1 — Filter ExpoPresence records out of the normal business-record event.
+      // Route them to the presence manager for this zone; everything else goes to JS.
+      let presenceRecords = changed.filter { $0.recordType == "ExpoPresence" }
+      let businessRecords = changed.filter { $0.recordType != "ExpoPresence" }
+
+      // Identify deleted records that are presence entries and route to manager.
+      let presenceDeletedIDs = deleted.filter { id in
+        id.recordName.hasPrefix("presence-")
+      }
+      let businessDeletedIDs = deleted.filter { id in
+        !id.recordName.hasPrefix("presence-")
+      }
+
+      if !presenceRecords.isEmpty || !presenceDeletedIDs.isEmpty,
+         let manager = presenceManagers[zoneName] {
+        Task {
+          if !presenceRecords.isEmpty {
+            await manager.handlePresenceRecords(presenceRecords)
+          }
+          for presenceID in presenceDeletedIDs {
+            await manager.handlePresenceDeletion(recordID: presenceID)
+          }
+        }
+      }
+
       payload = [
         "type": "recordsFetched",
-        "changedRecords": changed.map { Converters.toDictionary($0) },
-        "deletedRecordIDs": deleted.map { id in
+        "changedRecords": businessRecords.map { Converters.toDictionary($0) },
+        "deletedRecordIDs": businessDeletedIDs.map { id in
           [
             "recordName": id.recordName,
             "zoneName": id.zoneID.zoneName

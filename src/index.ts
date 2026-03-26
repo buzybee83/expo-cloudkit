@@ -136,6 +136,11 @@ export type {
   IndexEncryptedRecordOptions,
   DeindexRecordOptions,
   SearchEncryptedOptions,
+  // Phase K.1 — Presence & Cursors
+  PresenceCursor,
+  PresenceEntry,
+  PresenceChangedEvent,
+  StartPresenceOptions,
 } from './types';
 
 // Errors
@@ -327,3 +332,15 @@ export type { CloudKitIntentDefinition, CloudKitIntentParameter } from './intent
 export { mlPredict, mlBatchPredict, mlModelSchema } from './ExpoCloudKit';
 // Encrypted Search (L.2) — client-side index over encrypted fields
 export { indexEncryptedRecord, deindexRecord, searchEncrypted } from './ExpoCloudKit';
+
+// Phase K.1 — Presence & Cursors
+export {
+  startPresence,
+  stopPresence,
+  updatePresenceCursor,
+  updatePresenceStatus,
+  getPresence,
+  addPresenceListener,
+} from './ExpoCloudKit';
+
+export { usePresence } from './presence';

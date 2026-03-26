@@ -2220,3 +2220,34 @@ export function deindexRecord(options: DeindexRecordOptions): Promise<void> {
 export function searchEncrypted(options: SearchEncryptedOptions): Promise<string[]> {
   return callAsync(() => NativeModule!.searchEncrypted(options));
 }
+
+// ---------------------------------------------------------------------------
+// Phase K.1 — Presence & Cursors
+// ---------------------------------------------------------------------------
+
+import type { PresenceEntry, PresenceChangedEvent, StartPresenceOptions } from './types';
+
+export function startPresence(options: StartPresenceOptions): Promise<void> {
+  return callAsync(() => NativeModule!.startPresence(options));
+}
+
+export function stopPresence(options: { zoneName: string; database?: string }): Promise<void> {
+  return callAsync(() => NativeModule!.stopPresence(options));
+}
+
+export function updatePresenceCursor(options: { zoneName: string; cursor: Record<string, unknown> }): Promise<void> {
+  return callAsync(() => NativeModule!.updatePresenceCursor(options));
+}
+
+export function updatePresenceStatus(options: { zoneName: string; status: 'active' | 'idle' | 'editing' }): Promise<void> {
+  return callAsync(() => NativeModule!.updatePresenceStatus(options));
+}
+
+export function getPresence(options: { zoneName: string; database?: string }): Promise<PresenceEntry[]> {
+  return callAsync(() => NativeModule!.getPresence(options));
+}
+
+export function addPresenceListener(callback: (event: PresenceChangedEvent) => void): { remove: () => void } {
+  const subscription = emitter!.addListener('onPresenceChanged', callback);
+  return { remove: () => subscription.remove() };
+}
