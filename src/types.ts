@@ -1812,3 +1812,113 @@ export interface RateLimitedEvent {
   /** Retry attempt number (starts at 1). */
   retryCount: number;
 }
+
+// ---------------------------------------------------------------------------
+// Phase K.3 — Live Activities / Widgets Integration
+// ---------------------------------------------------------------------------
+
+/**
+ * Options for `registerWidgetBinding`.
+ *
+ * Registers a WidgetKit widget to be reloaded when CloudKit records in the
+ * specified zone change during a sync cycle. The native module writes the
+ * changed records to App Group UserDefaults and calls
+ * `WidgetCenter.shared.reloadTimelines(ofKind:)` (throttled to once every
+ * 5 minutes per widget kind).
+ */
+export interface RegisterWidgetBindingOptions {
+  /**
+   * Opaque identifier for this binding. Used as the UserDefaults key suffix
+   * so the widget extension can read the latest records under
+   * `"expo.cloudkit.widget.<id>"`.
+   */
+  id: string;
+  /**
+   * Must match the `Widget.kind` string declared in the widget extension target.
+   */
+  widgetKind: string;
+  /** The CloudKit zone whose changes trigger a widget reload. */
+  zoneName: string;
+  /**
+   * Which database the zone lives in.
+   * Default: `'private'`.
+   */
+  database?: DatabaseScope;
+  /**
+   * When set, only records of this CloudKit record type trigger a reload.
+   * When absent, any record change in the zone triggers a reload.
+   */
+  recordType?: string;
+}
+
+/**
+ * Options for `registerLiveActivityBinding`.
+ *
+ * Registers an ActivityKit Live Activity to receive `onLiveActivityUpdate`
+ * events when CloudKit records in the specified zone change. The app is
+ * responsible for calling `Activity.update()` in the event handler — the
+ * module does not manage ActivityKit lifecycle.
+ */
+export interface RegisterLiveActivityBindingOptions {
+  /**
+   * Opaque identifier for this binding, included in every `onLiveActivityUpdate`
+   * event so the app can route to the correct `Activity` instance.
+   */
+  id: string;
+  /**
+   * Activity type identifier, e.g. `"com.myapp.DeliveryActivity"`.
+   * Included in every event payload for routing.
+   */
+  activityType: string;
+  /** The CloudKit zone whose changes emit `onLiveActivityUpdate` events. */
+  zoneName: string;
+  /**
+   * Which database the zone lives in.
+   * Default: `'private'`.
+   */
+  database?: DatabaseScope;
+  /**
+   * When set, only records of this CloudKit record type emit an event.
+   * When absent, any record change in the zone emits an event.
+   */
+  recordType?: string;
+}
+
+/**
+ * Event emitted on `onLiveActivityUpdate` when watched CloudKit records change.
+ *
+ * The app should inspect `changedRecords` / `deletedRecordIDs` and call
+ * `Activity<T>.update()` with new `ContentState` derived from the fresh data.
+ *
+ * The module does NOT call `Activity.update()` directly — ActivityKit
+ * lifecycle management remains in the app layer.
+ */
+export interface LiveActivityUpdateEvent {
+  /** The binding ID passed to `registerLiveActivityBinding`. */
+  bindingId: string;
+  /** The activity type identifier passed to `registerLiveActivityBinding`. */
+  activityType: string;
+  /** The zone that produced the changes. */
+  zoneName: string;
+  /** Which database the zone belongs to. */
+  databaseScope: DatabaseScope;
+  /** Records that were added or modified in this sync cycle. */
+  changedRecords: CloudKitRecord[];
+  /** Records that were deleted in this sync cycle. */
+  deletedRecordIDs: RecordIdentifier[];
+}
+
+/**
+ * Options for `configureExtensionBridge`.
+ *
+ * Must match the `appGroupIdentifier` configured in the Expo config plugin.
+ * The App Group must be provisioned in your Apple Developer account and
+ * added to both the main app target and any widget/extension targets.
+ */
+export interface ConfigureExtensionBridgeOptions {
+  /**
+   * App Group container identifier, e.g. `"group.com.example.myapp"`.
+   * Must start with `"group."`.
+   */
+  appGroupIdentifier: string;
+}

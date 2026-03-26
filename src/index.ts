@@ -294,3 +294,20 @@ export { getZoneChangeToken, setZoneChangeToken } from './ExpoCloudKit';
 
 // Share Convenience — leaveShare, createShareFromTemplate, getShareActivity
 export { leaveShare, createShareFromTemplate, getShareActivity } from './ExpoCloudKit';
+
+// Phase K.3 — Live Activities & Widgets
+export {
+  configureExtensionBridge,
+  registerWidgetBinding,
+  removeWidgetBinding,
+  registerLiveActivityBinding,
+  removeLiveActivityBinding,
+  reloadWidgetTimeline,
+  addLiveActivityListener,
+} from './ExpoCloudKit';
+export type {
+  ConfigureExtensionBridgeOptions,
+  RegisterWidgetBindingOptions,
+  RegisterLiveActivityBindingOptions,
+  LiveActivityUpdateEvent,
+} from './types';

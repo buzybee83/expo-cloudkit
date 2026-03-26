@@ -72,6 +72,11 @@ import type {
   CreateShareFromTemplateOptions,
   GetShareActivityOptions,
   ShareActivityEntry,
+  // Phase K.3 — Live Activities / Widgets
+  ConfigureExtensionBridgeOptions,
+  RegisterWidgetBindingOptions,
+  RegisterLiveActivityBindingOptions,
+  LiveActivityUpdateEvent,
 } from './types';
 
 // ---------------------------------------------------------------------------
@@ -2152,4 +2157,139 @@ export function getShareActivity(
   options: GetShareActivityOptions
 ): Promise<ShareActivityEntry[]> {
   return callAsync(() => NativeModule!.getShareActivity(options));
+}
+
+// ---------------------------------------------------------------------------
+// Phase K.3 — Live Activities / Widgets Integration
+// ---------------------------------------------------------------------------
+
+/**
+ * Configures the extension bridge that connects CloudKit sync cycles to
+ * WidgetKit timeline reloads and ActivityKit Live Activity update events.
+ *
+ * Must be called after `configure()` and before any `registerWidgetBinding` /
+ * `registerLiveActivityBinding` calls. The `appGroupIdentifier` must match
+ * the App Group entitlement provisioned for both the main app target and any
+ * widget or Live Activity extension targets.
+ *
+ * @param options.appGroupIdentifier - App Group identifier, e.g. "group.com.example.myapp"
+ *
+ * @throws {CloudKitError} code `INVALID_ARGUMENT` if `appGroupIdentifier` is missing.
+ */
+export function configureExtensionBridge(
+  options: ConfigureExtensionBridgeOptions
+): Promise<void> {
+  return callAsync(() => NativeModule!.configureExtensionBridge(options));
+}
+
+/**
+ * Registers a WidgetKit widget to be reloaded when CloudKit records in the
+ * specified zone change.
+ *
+ * On each sync cycle that produces record changes matching the binding:
+ * 1. The changed records are written to App Group UserDefaults under the key
+ *    `"expo.cloudkit.widget.<id>"` as JSON.
+ * 2. `WidgetCenter.shared.reloadTimelines(ofKind: widgetKind)` is called,
+ *    throttled to at most once every 5 minutes per widget kind.
+ *
+ * Call `configureExtensionBridge` before registering any widget bindings.
+ *
+ * @param options - Binding configuration including `id`, `widgetKind`, `zoneName`.
+ *
+ * @throws {CloudKitError} code `EXTENSION_BRIDGE_NOT_CONFIGURED` if
+ *   `configureExtensionBridge` has not been called.
+ * @throws {CloudKitError} code `INVALID_ARGUMENT` if required fields are missing.
+ */
+export function registerWidgetBinding(
+  options: RegisterWidgetBindingOptions
+): Promise<void> {
+  return callAsync(() => NativeModule!.registerWidgetBinding(options));
+}
+
+/**
+ * Removes a previously registered widget binding.
+ *
+ * After removal, record changes in the associated zone no longer trigger
+ * WidgetKit reloads for that binding. Safe to call with an unregistered ID.
+ *
+ * @param id - The binding ID passed to `registerWidgetBinding`.
+ */
+export function removeWidgetBinding(id: string): Promise<void> {
+  return callAsync(() => NativeModule!.removeWidgetBinding({ id }));
+}
+
+/**
+ * Registers an ActivityKit Live Activity to receive `onLiveActivityUpdate`
+ * events when CloudKit records in the specified zone change.
+ *
+ * The module does NOT manage ActivityKit lifecycle — it only emits events.
+ * The app must call `Activity<T>.update()` inside the `onLiveActivityUpdate`
+ * listener with `ContentState` derived from `event.changedRecords`.
+ *
+ * Call `configureExtensionBridge` before registering any activity bindings.
+ *
+ * @param options - Binding configuration including `id`, `activityType`, `zoneName`.
+ *
+ * @throws {CloudKitError} code `EXTENSION_BRIDGE_NOT_CONFIGURED` if
+ *   `configureExtensionBridge` has not been called.
+ * @throws {CloudKitError} code `INVALID_ARGUMENT` if required fields are missing.
+ */
+export function registerLiveActivityBinding(
+  options: RegisterLiveActivityBindingOptions
+): Promise<void> {
+  return callAsync(() => NativeModule!.registerLiveActivityBinding(options));
+}
+
+/**
+ * Removes a previously registered Live Activity binding.
+ *
+ * After removal, record changes in the associated zone no longer emit
+ * `onLiveActivityUpdate` events for that binding. Safe to call with an
+ * unregistered ID.
+ *
+ * @param id - The binding ID passed to `registerLiveActivityBinding`.
+ */
+export function removeLiveActivityBinding(id: string): Promise<void> {
+  return callAsync(() => NativeModule!.removeLiveActivityBinding({ id }));
+}
+
+/**
+ * Requests an immediate WidgetKit timeline reload for the given widget kind,
+ * bypassing the 5-minute throttle enforced by `registerWidgetBinding`.
+ *
+ * Use this for explicit user-initiated refreshes where staleness is not
+ * acceptable. Avoid calling this in a tight loop — excessive reload requests
+ * are rate-limited by the OS.
+ *
+ * @param widgetKind - Matches `Widget.kind` in the widget extension target.
+ *
+ * @throws {CloudKitError} code `INVALID_ARGUMENT` if `widgetKind` is missing.
+ */
+export function reloadWidgetTimeline(widgetKind: string): Promise<void> {
+  return callAsync(() => NativeModule!.reloadWidgetTimeline({ widgetKind }));
+}
+
+/**
+ * Subscribes to `onLiveActivityUpdate` events emitted when watched CloudKit
+ * records change and a Live Activity binding is registered for the zone.
+ *
+ * The callback receives a `LiveActivityUpdateEvent` with `changedRecords` and
+ * `deletedRecordIDs` for the zone. Use `event.bindingId` to identify which
+ * Activity instance to update.
+ *
+ * @param callback - Called on the JS thread with the update event.
+ * @returns A `Subscription` handle; call `.remove()` to unsubscribe.
+ */
+export function addLiveActivityListener(
+  callback: (event: LiveActivityUpdateEvent) => void
+): Subscription {
+  if (!isIOS) return noopSubscription;
+  assertNativeAvailable();
+  const subscription = emitter!.addListener(
+    'onLiveActivityUpdate',
+    (event: LiveActivityUpdateEvent) => {
+      callback(event);
+    }
+  );
+  return { remove: () => subscription.remove() };
 }
