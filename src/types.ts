@@ -191,6 +191,13 @@ export interface CloudKitRecord {
   changeTag: string | null;
   /** All fields on the record, keyed by field name. */
   fields: Record<string, RecordField>;
+  /**
+   * End-to-end encrypted fields stored in CKRecord.encryptedValues (iOS 15+).
+   * Only participants of the record's CKShare can decrypt these fields.
+   * Uses the same RecordField shape as `fields`. Absent on iOS < 15 or when no
+   * encrypted fields are present on the record.
+   */
+  encryptedFields?: Record<string, RecordField>;
   /** recordName of the iCloud user who created this record. Absent until the record is saved. */
   createdByUserRecordID?: string;
   /** recordName of the iCloud user who last modified this record. Absent until the record is saved. */
@@ -215,6 +222,13 @@ export interface RecordToSave {
   changeTag?: string;
   /** Fields to set on the record. */
   fields: Record<string, RecordField>;
+  /**
+   * Encrypted fields to store in CKRecord.encryptedValues (iOS 15+).
+   * Only share participants can decrypt these fields. Uses the same RecordField
+   * shape as `fields`. Silently ignored on iOS < 15 and on web (where
+   * CKRecord.encryptedValues is unavailable).
+   */
+  encryptedFields?: Record<string, RecordField>;
 }
 
 /** A record returned after a successful save operation. */
@@ -229,6 +243,11 @@ export interface SavedRecord {
   modificationDate: number;
   changeTag: string;
   fields: Record<string, RecordField>;
+  /**
+   * Encrypted fields reflected back from CKRecord.encryptedValues (iOS 15+).
+   * Absent on iOS < 15 or when no encrypted fields were saved.
+   */
+  encryptedFields?: Record<string, RecordField>;
   /** recordName of the iCloud user who created this record. */
   createdByUserRecordID?: string;
   /** recordName of the iCloud user who last modified this record. */
