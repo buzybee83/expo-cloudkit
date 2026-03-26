@@ -544,13 +544,34 @@ enum Converters {
       dict["participantRecordName"] = userRecordID.recordName
     }
 
-    // Include name components when the user identity has been looked up.
+    // Extract first/last name and compute a displayName fallback.
+    var firstName: String? = nil
+    var lastName: String? = nil
     if let nameComponents = participant.userIdentity.nameComponents {
+      firstName = nameComponents.givenName
+      lastName = nameComponents.familyName
+      // Legacy nested name dict — kept for backwards compatibility.
       var nameDict: [String: Any] = [:]
-      if let givenName = nameComponents.givenName { nameDict["givenName"] = givenName }
-      if let familyName = nameComponents.familyName { nameDict["familyName"] = familyName }
+      if let given = firstName { nameDict["givenName"] = given }
+      if let family = lastName { nameDict["familyName"] = family }
       dict["name"] = nameDict
     }
+
+    // Flat firstName / lastName fields — easier to access from JS without
+    // drilling into the nested "name" dict.
+    dict["firstName"] = firstName as Any
+    dict["lastName"] = lastName as Any
+
+    // Computed displayName: prefer "First Last", fall back to either name alone,
+    // then "Unknown Participant" when both are absent.
+    let displayName: String
+    switch (firstName, lastName) {
+    case let (f?, l?): displayName = "\(f) \(l)"
+    case let (f?, nil): displayName = f
+    case let (nil, l?): displayName = l
+    default:            displayName = "Unknown Participant"
+    }
+    dict["displayName"] = displayName
 
     return dict
   }

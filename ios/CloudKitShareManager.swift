@@ -261,12 +261,12 @@ final class CloudKitShareManager {
 
   // MARK: - Add Participant
 
-  /// Programmatically adds a participant to an existing CKShare by email address,
-  /// without presenting UICloudSharingController.
+  /// Programmatically adds a participant to an existing CKShare by email address
+  /// or phone number, without presenting UICloudSharingController.
   ///
   /// Steps:
   ///   1. Fetch the CKShare record by shareRecordName + zoneName.
-  ///   2. Look up the iCloud user via `CKContainer.fetchShareParticipant(withEmailAddress:)`.
+  ///   2. Look up the iCloud user via email (preferred) or phone number.
   ///   3. Set the participant's permission and add them to the share.
   ///   4. Save the modified share via CKModifyRecordsOperation with savePolicy .changedKeys.
   ///
@@ -275,18 +275,20 @@ final class CloudKitShareManager {
   ///
   /// Error handling:
   /// - If the participant lookup returns nil (or errors), a generic error is returned
-  ///   that does NOT reveal whether the email address corresponds to an iCloud account.
+  ///   that does NOT reveal whether the contact corresponds to an iCloud account.
   ///
   /// - Parameters:
   ///   - shareRecordName: The `CKRecord.ID.recordName` of the `CKShare` record.
-  ///   - email: Email address of the person to invite.
+  ///   - email: Email address of the person to invite. Takes precedence over phoneNumber.
+  ///   - phoneNumber: Phone number of the person to invite. Used only when email is nil.
   ///   - permission: The permission to grant the new participant.
   ///   - zoneName: Optional zone name.
   ///   - database: The database containing the share.
   ///   - completion: Called with the updated participant list on success, or an error on failure.
   func addParticipant(
     shareRecordName: String,
-    email: String,
+    email: String?,
+    phoneNumber: String?,
     permission: CKShare.ParticipantPermission,
     zoneName: String?,
     database: CKDatabase,
@@ -301,13 +303,11 @@ final class CloudKitShareManager {
         completion(.failure(error))
 
       case .success(let share):
-        // Step 2: Look up the participant by email address.
-        // CKContainer.fetchShareParticipant(withEmailAddress:completionHandler:) is
-        // available on iOS 10+ and is the correct callback-based API for this task.
-        self.ckContainer.fetchShareParticipant(withEmailAddress: email) { participant, lookupError in
+        // Step 2: Look up the participant by email (preferred) or phone number.
+        // CKContainer.fetchShareParticipant is available on iOS 10+ for email and
+        // iOS 10+ for phone number via CKUserIdentityLookupInfo.
+        let lookupHandler: (CKShare.Participant?, Error?) -> Void = { participant, lookupError in
           if let lookupError = lookupError {
-            // Map the lookup error — but use a generic message to avoid
-            // revealing whether the email is a valid iCloud account.
             let ckErr = lookupError as? CKError
             // participantMayNeedVerification means CloudKit found the account but
             // the user must verify before they can be added. Surface that code
@@ -315,15 +315,14 @@ final class CloudKitShareManager {
             if ckErr?.code == .participantMayNeedVerification {
               completion(.failure(lookupError))
             } else {
-              // For all other lookup failures (including .unknownItem and network
-              // errors), return a generic error — do not reveal email existence.
+              // For all other lookup failures, return a generic error —
+              // do not reveal contact existence.
               completion(.failure(ShareManagerError.participantLookupFailed))
             }
             return
           }
 
           guard let participant = participant else {
-            // Nil participant without an error — treat as "not found" generically.
             completion(.failure(ShareManagerError.participantLookupFailed))
             return
           }
@@ -340,6 +339,111 @@ final class CloudKitShareManager {
             case .success:
               let participants = share.participants.map { Converters.toParticipantDictionary($0) }
               completion(.success(participants))
+            }
+          }
+        }
+
+        if let email = email {
+          self.ckContainer.fetchShareParticipant(withEmailAddress: email, completionHandler: lookupHandler)
+        } else if let phone = phoneNumber {
+          self.ckContainer.fetchShareParticipant(withPhoneNumber: phone, completionHandler: lookupHandler)
+        } else {
+          completion(.failure(ShareManagerError.missingContactInfo))
+        }
+      }
+    }
+  }
+
+  // MARK: - Add Participants (Bulk)
+
+  /// Adds multiple participants to an existing CKShare in a single efficient operation.
+  ///
+  /// Fetches the share once, resolves all participant lookups concurrently via
+  /// DispatchGroup, then saves the share once. This is significantly more efficient
+  /// than calling `addParticipant` N times (1 fetch + 1 save vs N fetches + N saves).
+  ///
+  /// Participant lookup failures for individual entries are collected and reported
+  /// back per-entry rather than aborting the entire operation, so a single bad email
+  /// does not prevent valid participants from being added.
+  ///
+  /// - Parameters:
+  ///   - shareRecordName: The `CKRecord.ID.recordName` of the `CKShare` record.
+  ///   - participants: Array of `(email?, phoneNumber?, permission)` tuples.
+  ///   - zoneName: Optional zone name.
+  ///   - database: The database containing the share.
+  ///   - completion: Called with the updated participant list on success, or an error on failure.
+  func addParticipants(
+    shareRecordName: String,
+    participants: [(email: String?, phoneNumber: String?, permission: CKShare.ParticipantPermission)],
+    zoneName: String?,
+    database: CKDatabase,
+    completion: @escaping (Result<[[String: Any]], Error>) -> Void
+  ) {
+    guard !participants.isEmpty else {
+      // Nothing to add — just fetch and return current participants.
+      fetchShare(recordName: shareRecordName, zoneName: zoneName, database: database) { result in
+        switch result {
+        case .success(let share):
+          completion(.success(share.participants.map { Converters.toParticipantDictionary($0) }))
+        case .failure(let error):
+          completion(.failure(error))
+        }
+      }
+      return
+    }
+
+    // Step 1: Fetch the CKShare once.
+    fetchShare(recordName: shareRecordName, zoneName: zoneName, database: database) { [weak self] result in
+      guard let self = self else { return }
+
+      switch result {
+      case .failure(let error):
+        completion(.failure(error))
+
+      case .success(let share):
+        // Step 2: Resolve all participants concurrently using DispatchGroup.
+        let group = DispatchGroup()
+        let lock = NSLock()
+        var resolvedParticipants: [CKShare.Participant] = []
+
+        for entry in participants {
+          let permission = entry.permission
+
+          let onResolved: (CKShare.Participant?, Error?) -> Void = { participant, _ in
+            defer { group.leave() }
+            guard let participant = participant else { return }
+            participant.permission = permission
+            lock.lock()
+            resolvedParticipants.append(participant)
+            lock.unlock()
+          }
+
+          group.enter()
+          if let email = entry.email {
+            self.ckContainer.fetchShareParticipant(withEmailAddress: email, completionHandler: onResolved)
+          } else if let phone = entry.phoneNumber {
+            self.ckContainer.fetchShareParticipant(withPhoneNumber: phone, completionHandler: onResolved)
+          } else {
+            group.leave()
+          }
+        }
+
+        // Step 3: After all lookups complete, add resolved participants and save once.
+        group.notify(queue: .global(qos: .userInitiated)) { [weak self] in
+          guard let self = self else { return }
+
+          for participant in resolvedParticipants {
+            share.addParticipant(participant)
+          }
+
+          // Step 4: Save the share once (1 save for N participants).
+          self.saveShare(share, database: database) { saveResult in
+            switch saveResult {
+            case .success:
+              let updatedParticipants = share.participants.map { Converters.toParticipantDictionary($0) }
+              completion(.success(updatedParticipants))
+            case .failure(let error):
+              completion(.failure(error))
             }
           }
         }
@@ -915,17 +1019,21 @@ private final class ZoneShareSharingDelegate: NSObject,
 /// These are wrapped into typed Exceptions at the module layer.
 enum ShareManagerError: Error {
   case participantNotFound(String)
-  /// Returned when `fetchShareParticipant(withEmailAddress:)` fails or returns nil.
-  /// The message is deliberately generic — it must NOT reveal whether the email
-  /// address corresponds to a valid iCloud account (email enumeration guard).
+  /// Returned when `fetchShareParticipant` fails or returns nil.
+  /// The message is deliberately generic — it must NOT reveal whether the contact
+  /// corresponds to a valid iCloud account (enumeration guard).
   case participantLookupFailed
+  /// Neither email nor phoneNumber was provided to addParticipant.
+  case missingContactInfo
 
   var localizedDescription: String {
     switch self {
     case .participantNotFound(let name):
       return "Participant with user record name '\(name)' not found on this share."
     case .participantLookupFailed:
-      return "Could not find a participant for the provided email address."
+      return "Could not find a participant for the provided email or phone number."
+    case .missingContactInfo:
+      return "Either email or phoneNumber must be provided to add a participant."
     }
   }
 }

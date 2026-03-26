@@ -17,6 +17,7 @@ import type {
   AcceptShareOptions,
   AccountStatus,
   AssetProgress,
+  AddParticipantsOptions,
   BatchProgress,
   CloudKitClient,
   CloudKitRecord,
@@ -26,6 +27,7 @@ import type {
   DatabaseScope,
   DeleteShareOptions,
   FetchParticipantsOptions,
+  ParticipantChangedEvent,
   PendingRecordChange,
   PresentSharingOptions,
   QueryPredicate,
@@ -1071,6 +1073,74 @@ export function removeShareParticipant(options: RemoveParticipantOptions): Promi
  */
 export function addParticipant(options: AddParticipantOptions): Promise<ShareParticipant[]> {
   return callAsync(() => NativeModule!.addParticipant(options));
+}
+
+/**
+ * Adds multiple participants to an existing CKShare in a single efficient operation.
+ *
+ * Fetches the share once, resolves all participant lookups (email or phone) concurrently
+ * via DispatchGroup, then saves the share once. This is significantly more efficient
+ * than calling `addParticipant` N times, which would require N fetches + N saves.
+ *
+ * Participants whose lookup fails are silently skipped — the operation succeeds for the
+ * remaining valid entries. Compare the returned participant list to the input array to
+ * detect any lookup failures.
+ *
+ * @param options - Share record name, participants array, optional zone and database.
+ * @returns The full participant list on the share after all resolved participants are added.
+ * @throws {CloudKitError} code SHARE_NOT_FOUND if the share record does not exist.
+ * @throws {CloudKitError} code NOT_CONFIGURED if `configure()` has not been called.
+ *
+ * @example
+ * ```typescript
+ * const participants = await addParticipants({
+ *   shareRecordName: 'share-uuid',
+ *   zoneName: 'MyZone',
+ *   participants: [
+ *     { email: 'alice@example.com', permission: 'readWrite' },
+ *     { phoneNumber: '+14155551234', permission: 'readOnly' },
+ *   ],
+ * });
+ * console.log(`Share now has ${participants.length} participants`);
+ * ```
+ */
+export function addParticipants(options: AddParticipantsOptions): Promise<ShareParticipant[]> {
+  return callAsync(() => NativeModule!.addParticipants(options));
+}
+
+/**
+ * Registers a callback that fires whenever a participant joins or leaves a CKShare
+ * owned by the current user that is being tracked by the sync engine.
+ *
+ * Detection works by diffing the participant set from each CKShare record received
+ * in `recordsFetched` sync events. One event is emitted per addition or removal.
+ *
+ * Requires the sync engine to be running (`startSyncEngine()`) and tracking the
+ * zone containing the share.
+ *
+ * @param callback - Receives a `ParticipantChangedEvent` for each change detected.
+ * @returns A Subscription; call `.remove()` to unsubscribe.
+ *
+ * @example
+ * ```typescript
+ * const sub = addParticipantChangeListener((event) => {
+ *   if (event.changeType === 'added') {
+ *     console.log(`${event.participant.displayName} joined the share`);
+ *   } else if (event.changeType === 'removed') {
+ *     console.log(`Participant ${event.participant.participantRecordName} left`);
+ *   }
+ * });
+ * // Later:
+ * sub.remove();
+ * ```
+ */
+export function addParticipantChangeListener(
+  callback: (event: ParticipantChangedEvent) => void
+): Subscription {
+  if (!isIOS) return noopSubscription;
+  assertNativeAvailable();
+  const subscription = emitter!.addListener('onParticipantChanged', callback);
+  return { remove: () => subscription.remove() };
 }
 
 /**
