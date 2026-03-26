@@ -83,6 +83,11 @@ import type {
   IndexEncryptedRecordOptions,
   DeindexRecordOptions,
   SearchEncryptedOptions,
+  // Phase K.3 — Live Activities / Widgets
+  ConfigureExtensionBridgeOptions,
+  RegisterWidgetBindingOptions,
+  RegisterLiveActivityBindingOptions,
+  LiveActivityUpdateEvent,
 } from './types';
 import {
   configureAuthPersistence,
@@ -1673,28 +1678,54 @@ export function getShareActivity(
 // Encrypted Search (L.2) — web stubs
 // ---------------------------------------------------------------------------
 
-/**
- * Not supported on web — the encrypted search index is backed by CloudKit
- * native operations (`CKFetchRecordsOperation`, `CKModifyRecordsOperation`)
- * that are unavailable in CloudKit JS.
- * @throws {CloudKitNotSupportedError}
- */
 export function indexEncryptedRecord(_options: IndexEncryptedRecordOptions): Promise<void> {
   return Promise.reject(new CloudKitNotSupportedError());
 }
 
-/**
- * Not supported on web.
- * @throws {CloudKitNotSupportedError}
- */
 export function deindexRecord(_options: DeindexRecordOptions): Promise<void> {
   return Promise.reject(new CloudKitNotSupportedError());
 }
 
-/**
- * Not supported on web.
- * @throws {CloudKitNotSupportedError}
- */
 export function searchEncrypted(_options: SearchEncryptedOptions): Promise<string[]> {
   return Promise.reject(new CloudKitNotSupportedError());
+}
+
+// ---------------------------------------------------------------------------
+// Phase K.3 — Live Activities / Widgets Integration (web stubs)
+// ---------------------------------------------------------------------------
+
+export function configureExtensionBridge(
+  _options: ConfigureExtensionBridgeOptions
+): Promise<void> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+export function registerWidgetBinding(
+  _options: RegisterWidgetBindingOptions
+): Promise<void> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+export function removeWidgetBinding(_id: string): Promise<void> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+export function registerLiveActivityBinding(
+  _options: RegisterLiveActivityBindingOptions
+): Promise<void> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+export function removeLiveActivityBinding(_id: string): Promise<void> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+export function reloadWidgetTimeline(_widgetKind: string): Promise<void> {
+  return Promise.reject(new CloudKitNotSupportedError());
+}
+
+export function addLiveActivityListener(
+  _callback: (event: LiveActivityUpdateEvent) => void
+): Subscription {
+  return noopSubscription;
 }

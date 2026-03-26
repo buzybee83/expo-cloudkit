@@ -69,6 +69,28 @@ export interface WithCloudKitOptions {
    * ```
    */
   backgroundSyncTaskIdentifier?: string;
+
+  /**
+   * Optional App Group identifier for Phase K.3 Live Activities and Widgets
+   * integration.
+   *
+   * When set, the plugin adds the `com.apple.security.application-groups`
+   * entitlement with this identifier. This allows the main app target and
+   * widget/Live Activity extension targets to share data via a common
+   * `UserDefaults` suite (used by `configureExtensionBridge`).
+   *
+   * Format: "group.com.example.yourapp"
+   *
+   * The identifier must be provisioned in your Apple Developer account and
+   * added to all targets (main app + widget extensions) that need to read
+   * or write the shared CloudKit record cache.
+   *
+   * @example
+   * ```json
+   * { "appGroupIdentifier": "group.com.example.myapp" }
+   * ```
+   */
+  appGroupIdentifier?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -76,8 +98,12 @@ export interface WithCloudKitOptions {
 // ---------------------------------------------------------------------------
 
 const withCloudKitPlugin: ConfigPlugin<WithCloudKitOptions> = (config, options) => {
-  const { containerIds, iCloudContainerEnvironment = 'Production', backgroundSyncTaskIdentifier } =
-    options;
+  const {
+    containerIds,
+    iCloudContainerEnvironment = 'Production',
+    backgroundSyncTaskIdentifier,
+    appGroupIdentifier,
+  } = options;
 
   if (!containerIds || containerIds.length === 0) {
     throw new Error(
@@ -116,6 +142,19 @@ const withCloudKitPlugin: ConfigPlugin<WithCloudKitOptions> = (config, options) 
     // Xcode requires exactly 'Development' or 'Production'.
     config.modResults['com.apple.developer.icloud-container-environment'] =
       iCloudContainerEnvironment;
+
+    // Phase K.3 — App Group entitlement for WidgetKit / Live Activity bridge.
+    // Allows the main app and widget/extension targets to share a UserDefaults suite.
+    if (appGroupIdentifier) {
+      const existingGroups: string[] =
+        (config.modResults['com.apple.security.application-groups'] as string[]) ?? [];
+      if (!existingGroups.includes(appGroupIdentifier)) {
+        config.modResults['com.apple.security.application-groups'] = [
+          ...existingGroups,
+          appGroupIdentifier,
+        ];
+      }
+    }
 
     return config;
   });

@@ -75,6 +75,11 @@ import type {
   IndexEncryptedRecordOptions,
   DeindexRecordOptions,
   SearchEncryptedOptions,
+  // Phase K.3 — Live Activities / Widgets
+  ConfigureExtensionBridgeOptions,
+  RegisterWidgetBindingOptions,
+  RegisterLiveActivityBindingOptions,
+  LiveActivityUpdateEvent,
 } from './types';
 
 // ---------------------------------------------------------------------------
@@ -2249,5 +2254,46 @@ export function getPresence(options: { zoneName: string; database?: string }): P
 
 export function addPresenceListener(callback: (event: PresenceChangedEvent) => void): { remove: () => void } {
   const subscription = emitter!.addListener('onPresenceChanged', callback);
+  return { remove: () => subscription.remove() };
+}
+
+// ---------------------------------------------------------------------------
+// Phase K.3 — Live Activities / Widgets Integration
+// ---------------------------------------------------------------------------
+
+export function configureExtensionBridge(
+  options: ConfigureExtensionBridgeOptions
+): Promise<void> {
+  return callAsync(() => NativeModule!.configureExtensionBridge(options));
+}
+
+export function registerWidgetBinding(
+  options: RegisterWidgetBindingOptions
+): Promise<void> {
+  return callAsync(() => NativeModule!.registerWidgetBinding(options));
+}
+
+export function removeWidgetBinding(id: string): Promise<void> {
+  return callAsync(() => NativeModule!.removeWidgetBinding({ id }));
+}
+
+export function registerLiveActivityBinding(
+  options: RegisterLiveActivityBindingOptions
+): Promise<void> {
+  return callAsync(() => NativeModule!.registerLiveActivityBinding(options));
+}
+
+export function removeLiveActivityBinding(id: string): Promise<void> {
+  return callAsync(() => NativeModule!.removeLiveActivityBinding({ id }));
+}
+
+export function reloadWidgetTimeline(widgetKind: string): Promise<void> {
+  return callAsync(() => NativeModule!.reloadWidgetTimeline({ widgetKind }));
+}
+
+export function addLiveActivityListener(
+  callback: (event: LiveActivityUpdateEvent) => void
+): { remove: () => void } {
+  const subscription = emitter!.addListener('onLiveActivityUpdate', callback);
   return { remove: () => subscription.remove() };
 }
