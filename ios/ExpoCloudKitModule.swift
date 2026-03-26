@@ -95,6 +95,13 @@ public class ExpoCloudKitModule: Module {
   /// Lazily created on first `startSyncEngine()` call.
   private var tokenStore: ChangeTokenStore?
 
+  // MARK: - Auto-sync new shares (Feature 2)
+
+  /// When true, newly-accepted shared zones are automatically added to any running
+  /// shared-database sync provider without requiring a full `startSyncEngine` restart.
+  /// Set from `startSyncEngine` config key `autoSyncNewShares`. Default: false.
+  private var autoSyncNewShares = false
+
   // MARK: - Offline queue (Phase C)
 
   /// Persists and retries CloudKit save/delete operations while offline.
@@ -790,6 +797,22 @@ public class ExpoCloudKitModule: Module {
       let autoSync = config["automaticallySync"] as? Bool ?? true
       let resolveConflicts = config["resolveConflicts"] as? Bool == true
 
+      // Feature 1: resolve conflictStrategy — explicit value takes precedence over
+      // the legacy `resolveConflicts` boolean. When neither is set, default to serverWins.
+      let conflictStrategy: ConflictStrategy
+      if let strategyStr = config["conflictStrategy"] as? String,
+         let parsed = ConflictStrategy(rawValue: strategyStr) {
+        conflictStrategy = parsed
+      } else if resolveConflicts {
+        // Backwards-compat: resolveConflicts: true without conflictStrategy => manual.
+        conflictStrategy = .manual
+      } else {
+        conflictStrategy = .serverWins
+      }
+
+      // Feature 2: autoSyncNewShares.
+      self.autoSyncNewShares = config["autoSyncNewShares"] as? Bool == true
+
       let zoneIDs = zoneNames.map {
         CKRecordZone.ID(zoneName: $0, ownerName: CKCurrentUserDefaultName)
       }
@@ -855,13 +878,11 @@ public class ExpoCloudKitModule: Module {
           )
         }
 
-        // G.6 — enable custom JS conflict resolution if the caller opted in.
-        // conflictResolutionEnabled is nonisolated(unsafe) on both actor implementations,
-        // written here once before start() is called and never mutated again during a sync
-        // cycle, making the unsynchronised write safe in practice.
-        if resolveConflicts {
-          provider.conflictResolutionEnabled = true
-        }
+        // Feature 1: set the conflict resolution strategy before start().
+        // `conflictStrategy` is nonisolated(unsafe) on both actor implementations,
+        // written here exactly once before start() and never mutated again during a
+        // sync cycle, making the unsynchronised write safe in practice.
+        provider.conflictStrategy = conflictStrategy
 
         self.syncProviders[scope] = provider
         // Expose to CloudKitStore (Phase J.1).
@@ -1923,6 +1944,14 @@ public class ExpoCloudKitModule: Module {
 
             DispatchQueue.main.async {
               self.sendEvent("onShareAccepted", payload)
+            }
+
+            // Feature 2: autoSyncNewShares — add the accepted zone to the running
+            // shared-database sync provider so it starts syncing without a restart.
+            if self.autoSyncNewShares,
+               let sharedProvider = self.syncProviders[.shared] {
+              let newZoneID = metadata.rootRecordID.zoneID
+              Task { await sharedProvider.addZone(newZoneID) }
             }
           }
         }

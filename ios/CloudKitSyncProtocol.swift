@@ -1,6 +1,24 @@
 import CloudKit
 import Foundation
 
+// MARK: - Conflict Resolution Strategy
+
+/// Determines how write conflicts are resolved when a client save is rejected
+/// by CloudKit because the server has a newer record version.
+enum ConflictStrategy: String {
+  /// Accept the server record as-is. The client change is discarded. (default)
+  case serverWins
+  /// Take all client fields, stamp the record with the server's changeTag,
+  /// and re-enqueue. Overwrites any concurrent server-side changes.
+  case clientWins
+  /// Per-field merge: for each field, prefer the version (client or server)
+  /// whose record has the more recent modificationDate. Re-enqueues merged record.
+  case fieldLevelMerge
+  /// Emit a `recordsSent` failure event so JS can implement custom merge logic.
+  /// Equivalent to the legacy `resolveConflicts: true` behaviour.
+  case manual
+}
+
 // MARK: - Sync Provider Events
 
 /// Events emitted by a sync provider, forwarded to JS via ExpoCloudKitModule.
@@ -87,9 +105,35 @@ protocol CloudKitSyncProvider: AnyObject, Sendable {
   /// Enqueue a record deletion for the next sync cycle.
   func enqueueDelete(_ recordID: CKRecord.ID) async
 
-  /// When true, conflict errors are surfaced to JS via `onSyncConflict` instead of
-  /// being resolved automatically with server-record-wins. JS must always call
-  /// `resolveSyncConflict(requestId:resolvedRecord:)` to unblock the waiting continuation.
+  /// Adds a new zone to the running sync provider without requiring a restart.
+  ///
+  /// On iOS 17+ (`CloudKitSyncEngineAdapter`), this adds a pending zone save to
+  /// `CKSyncEngine.state` so the engine registers and fetches the zone on its next cycle.
+  /// On iOS 16 (`CloudKitSyncFallbackAdapter`), this appends the zone to `trackedZones`
+  /// and immediately triggers a fetch for the new zone only.
+  ///
+  /// Used by the `autoSyncNewShares` feature to add newly-accepted shared zones
+  /// to a running shared-database sync provider without a full restart.
+  func addZone(_ zoneID: CKRecordZone.ID) async
+
+  /// Strategy for resolving write conflicts detected during a sync cycle.
+  ///
+  /// Set this before calling `start()`. Both adapter implementations expose this as
+  /// `nonisolated(unsafe)` so the module can write it synchronously before crossing
+  /// the actor boundary. It is written exactly once at configuration time.
+  ///
+  /// - `serverWins`: Use the server record unchanged. Client change is discarded. (default)
+  /// - `clientWins`: Copy all client fields over the server record and re-enqueue.
+  /// - `fieldLevelMerge`: Per-field: prefer whichever record (client/server) was modified more recently.
+  /// - `manual`: Surface via `onSyncConflict` event so JS can implement custom resolution.
+  ///
+  /// `conflictResolutionEnabled` is a backwards-compat alias: setting it true is
+  /// equivalent to setting `conflictStrategy = .manual`.
+  var conflictStrategy: ConflictStrategy { get set }
+
+  /// Backwards-compatibility alias for `conflictStrategy = .manual`.
+  /// Setting this to `true` overrides `conflictStrategy` to `.manual`.
+  /// Ignored when `conflictStrategy` is set explicitly in `startSyncEngine` config.
   var conflictResolutionEnabled: Bool { get set }
 
   /// Resumes a pending conflict resolution continuation. Called by the module when JS

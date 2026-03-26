@@ -42,13 +42,20 @@ actor CloudKitSyncEngineAdapter: CloudKitSyncProvider {
   private let tokenStore: ChangeTokenStore
   private let ckContainer: CKContainer
 
-  /// When true, CONFLICT errors are forwarded to JS via `onSyncConflict` instead of
-  /// being auto-resolved with server-record-wins. Default: false.
+  /// Built-in conflict resolution strategy. Default: `.serverWins`.
   ///
   /// Declared `nonisolated(unsafe)` so the module can set it synchronously before
   /// calling `start()`. It is written exactly once at configuration time and never
   /// mutated during an in-flight sync cycle, making the unsynchronised write safe.
-  nonisolated(unsafe) var conflictResolutionEnabled = false
+  nonisolated(unsafe) var conflictStrategy: ConflictStrategy = .serverWins
+
+  /// Backwards-compatibility alias. Setting this to `true` is equivalent to
+  /// setting `conflictStrategy = .manual`. The module sets this for legacy
+  /// `resolveConflicts: true` callers that do not supply `conflictStrategy`.
+  nonisolated(unsafe) var conflictResolutionEnabled: Bool {
+    get { conflictStrategy == .manual }
+    set { if newValue { conflictStrategy = .manual } }
+  }
 
   private var pendingSaves: [CKRecord] = []
   private var pendingDeletes: [CKRecord.ID] = []
@@ -249,8 +256,32 @@ actor CloudKitSyncEngineAdapter: CloudKitSyncProvider {
 
       let clientRecord = failedSave.record
 
-      if conflictResolutionEnabled {
-        // Custom conflict resolution: emit to JS and await the result.
+      // Capture the strategy value once (nonisolated(unsafe) read is safe here
+      // because it is written exactly once before start() and never mutated again).
+      let strategy = conflictStrategy
+
+      switch strategy {
+      case .serverWins:
+        // Default: start with server record, overlay client's changed fields.
+        let merged = resolveConflictServerWins(clientRecord: clientRecord, serverRecord: serverRecord)
+        pendingSaves.append(merged)
+        syncEngine.state.add(pendingRecordZoneChanges: [.saveRecord(merged.recordID)])
+
+      case .clientWins:
+        // Copy all client fields onto the server record's system fields (changeTag etc.)
+        // so the re-enqueued record passes CloudKit's version check.
+        let merged = resolveConflictClientWins(clientRecord: clientRecord, serverRecord: serverRecord)
+        pendingSaves.append(merged)
+        syncEngine.state.add(pendingRecordZoneChanges: [.saveRecord(merged.recordID)])
+
+      case .fieldLevelMerge:
+        // Per-field: prefer whichever side was modified more recently.
+        let merged = resolveConflictFieldLevel(clientRecord: clientRecord, serverRecord: serverRecord)
+        pendingSaves.append(merged)
+        syncEngine.state.add(pendingRecordZoneChanges: [.saveRecord(merged.recordID)])
+
+      case .manual:
+        // Surface to JS and await resolution via resolveSyncConflict().
         let requestId = UUID().uuidString
         let clientDict = Converters.toDictionary(clientRecord)
         let serverDict = Converters.toDictionary(serverRecord)
@@ -283,12 +314,6 @@ actor CloudKitSyncEngineAdapter: CloudKitSyncProvider {
         }
         pendingSaves.append(recordToEnqueue)
         syncEngine.state.add(pendingRecordZoneChanges: [.saveRecord(recordToEnqueue.recordID)])
-
-      } else {
-        // Default: server-record-wins with client field overlay.
-        let merged = resolveConflict(clientRecord: clientRecord, serverRecord: serverRecord)
-        pendingSaves.append(merged)
-        syncEngine.state.add(pendingRecordZoneChanges: [.saveRecord(merged.recordID)])
       }
     }
 
@@ -392,14 +417,62 @@ actor CloudKitSyncEngineAdapter: CloudKitSyncProvider {
 
   // MARK: - Conflict Resolution
 
-  /// Server-record-wins merge: start with the server record and overlay the
-  /// client's changed fields on top. This preserves the server's system fields
-  /// (changeTag, modificationDate) while applying the client's intent.
-  private func resolveConflict(clientRecord: CKRecord, serverRecord: CKRecord) -> CKRecord {
+  /// Server-record-wins: start with the server record and overlay the client's
+  /// changed fields on top. Preserves the server's changeTag and system dates
+  /// while applying the client's intent for fields it modified.
+  private func resolveConflictServerWins(clientRecord: CKRecord, serverRecord: CKRecord) -> CKRecord {
     for key in clientRecord.changedKeys() {
       serverRecord[key] = clientRecord[key]
     }
     return serverRecord
+  }
+
+  /// Client-record-wins: copy all client user fields over the server record.
+  /// We take the server record object (which carries the server's changeTag) and
+  /// overwrite every field the server has with the client's value, then fill in
+  /// any client-only fields. This ensures the re-save passes CloudKit's tag check.
+  private func resolveConflictClientWins(clientRecord: CKRecord, serverRecord: CKRecord) -> CKRecord {
+    // Apply all client fields onto the server record (which holds the current changeTag).
+    for key in clientRecord.allKeys() {
+      serverRecord[key] = clientRecord[key]
+    }
+    return serverRecord
+  }
+
+  /// Field-level merge: for each field, prefer the value from whichever record
+  /// (client or server) has the more recent `modificationDate`. Falls back to
+  /// `serverWins` for a field when dates cannot be compared.
+  private func resolveConflictFieldLevel(clientRecord: CKRecord, serverRecord: CKRecord) -> CKRecord {
+    let clientDate = clientRecord.modificationDate ?? .distantPast
+    let serverDate = serverRecord.modificationDate ?? .distantPast
+
+    // Collect the superset of all field keys.
+    let allKeys = Set(clientRecord.allKeys()).union(serverRecord.allKeys())
+
+    for key in allKeys {
+      let clientValue = clientRecord[key]
+      let serverValue = serverRecord[key]
+
+      if clientValue != nil && serverValue == nil {
+        // Field only exists on client — use client value.
+        serverRecord[key] = clientValue
+      } else if clientDate > serverDate {
+        // Client was modified more recently — prefer client for this field.
+        serverRecord[key] = clientValue
+      }
+      // else: server value wins (server more recent or field only on server).
+    }
+    return serverRecord
+  }
+
+  // MARK: - Dynamic Zone Management (autoSyncNewShares)
+
+  func addZone(_ zoneID: CKRecordZone.ID) {
+    guard let engine = engine else { return }
+    // Register the zone with the engine so it starts tracking and fetching it.
+    // CKSyncEngine de-duplicates zone registrations; safe to call for existing zones.
+    let zone = CKRecordZone(zoneID: zoneID)
+    engine.state.add(pendingDatabaseChanges: [.saveZone(zone)])
   }
 
   // MARK: - Event Emission Helper

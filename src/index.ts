@@ -69,6 +69,7 @@ export type {
   SortDescriptor,
   Subscription,
   // Phase B — CKSyncEngine
+  ConflictStrategy,
   SyncEngineConfig,
   SyncConflictEvent,
   SyncEngineEvent,

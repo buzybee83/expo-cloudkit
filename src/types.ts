@@ -638,6 +638,28 @@ export interface AcceptShareOptions {
 // ---------------------------------------------------------------------------
 
 /**
+ * Determines how write conflicts (CKError.serverRecordChanged) are resolved
+ * when the sync engine attempts to push a local record change.
+ *
+ * - `'serverWins'` (default): accept the server record as-is. The client's
+ *   pending change is discarded. Safe and predictable.
+ * - `'clientWins'`: copy all client fields onto the server record's changeTag
+ *   envelope and re-enqueue. Overwrites any concurrent server-side changes.
+ * - `'fieldLevelMerge'`: per-field merge — for each field, prefer whichever
+ *   record (client or server) has the more recent `modificationDate`.
+ *   Re-enqueues the merged record.
+ * - `'manual'`: emit a conflict event (`onSyncConflict`) so the JS caller can
+ *   implement custom merge logic. The caller must respond by calling
+ *   `resolveSyncConflict(requestId, resolvedRecord)`.
+ *   Equivalent to the legacy `resolveConflicts: true` option.
+ */
+export type ConflictStrategy =
+  | 'serverWins'
+  | 'clientWins'
+  | 'fieldLevelMerge'
+  | 'manual';
+
+/**
  * Configuration passed to `startSyncEngine()`.
  *
  * On iOS 17+, `automaticallySync` delegates scheduling to CKSyncEngine.
@@ -685,9 +707,33 @@ export interface SyncEngineConfig {
    * Set to `false` (or omit) to retain the default server-record-wins behavior,
    * in which conflicts are silently resolved by discarding the client version.
    *
+   * @deprecated Prefer `conflictStrategy: 'manual'` for explicit intent.
+   * When `conflictStrategy` is also set, it takes precedence and `resolveConflicts`
+   * is ignored.
+   *
    * Default: `false`.
    */
   resolveConflicts?: boolean;
+  /**
+   * Built-in strategy for resolving write conflicts detected during a sync cycle.
+   *
+   * When set, this overrides `resolveConflicts`.
+   * Default: `'serverWins'`.
+   *
+   * @see ConflictStrategy
+   */
+  conflictStrategy?: ConflictStrategy;
+  /**
+   * When true and `databases` includes `'shared'`, automatically detects
+   * newly-accepted shared zones and adds them to the running sync engine
+   * without requiring a full `startSyncEngine` restart.
+   *
+   * The zone ID is extracted from the `onShareAccepted` event and passed
+   * directly to the shared-scope sync provider's `addZone` method.
+   *
+   * Default: false.
+   */
+  autoSyncNewShares?: boolean;
 }
 
 /**
