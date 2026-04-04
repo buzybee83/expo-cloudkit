@@ -11,6 +11,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.20.1] — 2026-04-04
+
+### Fixed
+
+- `usePresence` hook: narrowed `.then` callback type to `PresenceEntry[] | undefined` to satisfy strict TypeScript inference.
+
+---
+
 ## [0.20.0] — 2026-03-25
 
 ### Added

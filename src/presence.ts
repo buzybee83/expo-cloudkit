@@ -113,7 +113,7 @@ export function usePresence(
         setIsReady(true);
         return getPresence({ zoneName, database: presenceOptions.database });
       })
-      .then((initial) => {
+      .then((initial: PresenceEntry[] | undefined) => {
         if (!mounted || !initial) return;
         setAllParticipants(initial);
       })
