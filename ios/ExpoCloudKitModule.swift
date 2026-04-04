@@ -2451,7 +2451,10 @@ public class ExpoCloudKitModule: Module {
       _ = self  // captured to keep module alive during dispatch
       guard #available(iOS 14.0, *) else {
         promise.reject(CloudKitModuleError.invalidArgument("Core ML bridge requires iOS 14+"))
+        return
+      }
       DispatchQueue.global(qos: .userInitiated).async {
+        do {
           let record = options["record"] as? [String: Any] ?? [:]
           let modelPath = options["modelPath"] as? String ?? ""
           let inputFields = options["inputFields"] as? [String] ?? []
@@ -2461,15 +2464,20 @@ public class ExpoCloudKitModule: Module {
             modelPath: modelPath,
             inputFields: inputFields,
             outputFeatures: outputFeatures
+          )
           promise.resolve(result)
         } catch let mlError as CloudKitMLError {
           promise.reject(mlError.toExpoError())
+        } catch {
           promise.reject(ExpoCloudKitBridgeError(
             code: "ML_INFERENCE_FAILED",
             message: error.localizedDescription,
             retryAfterSeconds: nil,
             serverRecord: nil
           ))
+        }
+      }
+    }
     /// Runs an on-device Core ML model on a batch of CloudKit records.
     /// - options keys:
     ///   - `records`        [[String: Any]] Array of CloudKit record dicts
@@ -2482,6 +2490,8 @@ public class ExpoCloudKitModule: Module {
       _ = self
       guard #available(iOS 14.0, *) else {
         promise.reject(CloudKitModuleError.invalidArgument("Core ML bridge requires iOS 14+"))
+        return
+      }
       DispatchQueue.global(qos: .userInitiated).async {
         do {
           let records = options["records"] as? [[String: Any]] ?? []
@@ -2504,6 +2514,9 @@ public class ExpoCloudKitModule: Module {
             retryAfterSeconds: nil,
             serverRecord: nil
           ))
+        }
+      }
+    }
     /// Returns the input feature names and type descriptions for a compiled Core ML model.
     /// - Parameter modelPath: Absolute path to the compiled `.mlmodelc` bundle.
     /// - Resolves with `[String: String]` mapping feature name → type name
@@ -2512,6 +2525,8 @@ public class ExpoCloudKitModule: Module {
       _ = self
       guard #available(iOS 14.0, *) else {
         promise.reject(CloudKitModuleError.invalidArgument("Core ML bridge requires iOS 14+"))
+        return
+      }
       DispatchQueue.global(qos: .userInitiated).async {
         do {
           let schema = try CloudKitMLBridge.modelSchema(modelPath: modelPath)
@@ -2525,6 +2540,9 @@ public class ExpoCloudKitModule: Module {
             retryAfterSeconds: nil,
             serverRecord: nil
           ))
+        }
+      }
+    }
 
     // -------------------------------------------------------------------------
     // Debug Helpers — Phase C (dev-only, never call from production)

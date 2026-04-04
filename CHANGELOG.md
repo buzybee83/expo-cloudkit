@@ -11,6 +11,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.20.2] — 2026-04-04
+
+### Fixed
+
+- **Swift**: Fixed three malformed ML bridge `AsyncFunction` closures (`mlPredict`, `mlBatchPredict`, `mlModelSchema`) — missing `return` + closing `}` after `guard #available`, missing `)` on `predict(` call in `mlPredict`, and missing `do`/`catch`/`}` structure. These caused ~50 cascading Swift compile errors (exit code 65 in CI).
+- **Swift**: Added missing `.crdtMerge` case to `ConflictStrategy` switch in `CloudKitSyncFallback.swift` (non-exhaustive switch compiler error).
+- **CI**: Upgraded GitHub Actions Node.js runner from 20 → 22 to suppress deprecation warnings.
+
+---
+
 ## [0.20.1] — 2026-04-04
 
 ### Fixed

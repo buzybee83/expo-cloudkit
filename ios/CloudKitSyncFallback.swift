@@ -363,6 +363,13 @@ actor CloudKitSyncFallbackAdapter: CloudKitSyncProvider {
             box.conflictedRecords.append(
               CloudKitSyncFallbackAdapter.resolveConflictServerWinsStatic(clientRecord: clientRecord, serverRecord: serverRecord)
             )
+
+          case .crdtMerge:
+            // CRDT merge delegates to server-wins at the record level; field-level CRDT
+            // semantics are applied by the CRDT mutation functions, not here.
+            box.conflictedRecords.append(
+              CloudKitSyncFallbackAdapter.resolveConflictServerWinsStatic(clientRecord: clientRecord, serverRecord: serverRecord)
+            )
           }
         }
       }
