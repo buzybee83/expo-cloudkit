@@ -2723,10 +2723,10 @@ public class ExpoCloudKitModule: Module {
 
         // Wire save/delete through the active sync provider for batching.
         manager.enqueueSave = { [weak self] record in
-          self?.syncProvider?.enqueueSave(record)
+          self?.syncProviders[.private]?.enqueueSave(record)
         }
         manager.enqueueDelete = { [weak self] recordID in
-          self?.syncProvider?.enqueueDelete(recordID)
+          self?.syncProviders[.private]?.enqueueDelete(recordID)
         }
 
         // Stop any existing manager for this zone before replacing it.

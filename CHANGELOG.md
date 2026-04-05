@@ -11,6 +11,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.20.5] — 2026-04-04
+
+### Fixed
+
+- **Swift**: `ExpoCloudKitModule` presence manager wiring — replaced non-existent `self.syncProvider` with `self.syncProviders[.private]` for `enqueueSave` and `enqueueDelete` closures.
+
+---
+
 ## [0.20.4] — 2026-04-04
 
 ### Fixed
