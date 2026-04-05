@@ -556,6 +556,29 @@ final class ConvertersTests: XCTestCase {
     let value = fields["ref"]?["value"] as? [String: Any]
     XCTAssertEqual(value?["action"] as? String, "none")
   }
+
+  // MARK: - Share participant helper converters
+
+  func test_participantRoleToString_allCases() {
+    XCTAssertEqual(Converters.participantRoleToString(.unknown), "unknown")
+    XCTAssertEqual(Converters.participantRoleToString(.owner), "owner")
+    XCTAssertEqual(Converters.participantRoleToString(.privateUser), "privateUser")
+    XCTAssertEqual(Converters.participantRoleToString(.publicUser), "publicUser")
+  }
+
+  func test_participantPermissionToString_allCases() {
+    XCTAssertEqual(Converters.participantPermissionToString(.unknown), "unknown")
+    XCTAssertEqual(Converters.participantPermissionToString(.none), "none")
+    XCTAssertEqual(Converters.participantPermissionToString(.readOnly), "readOnly")
+    XCTAssertEqual(Converters.participantPermissionToString(.readWrite), "readWrite")
+  }
+
+  func test_participantAcceptanceToString_allCases() {
+    XCTAssertEqual(Converters.participantAcceptanceToString(.unknown), "unknown")
+    XCTAssertEqual(Converters.participantAcceptanceToString(.pending), "pending")
+    XCTAssertEqual(Converters.participantAcceptanceToString(.accepted), "accepted")
+    XCTAssertEqual(Converters.participantAcceptanceToString(.removed), "removed")
+  }
 }
 
 // MARK: - CKError convenience init (test helper)
