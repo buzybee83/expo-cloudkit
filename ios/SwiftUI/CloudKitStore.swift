@@ -241,7 +241,7 @@ public final class CloudKitStore {
 
   // MARK: - Private
 
-  private var syncObserver: NSObjectProtocol?
+  nonisolated(unsafe) private var syncObserver: NSObjectProtocol?
 
   // MARK: - Init / Deinit
 
@@ -450,7 +450,7 @@ public final class CloudKitStore {
 
   private var syncProvider: CloudKitSyncProvider? {
     #if canImport(ExpoModulesCore)
-    return ExpoCloudKitModule.sharedSyncProvider
+    return ExpoCloudKitModule.sharedSyncProviders[.private]?.value
     #else
     return nil
     #endif
@@ -496,7 +496,7 @@ public final class CloudKitStoreLegacy: ObservableObject {
 
   // MARK: - Private
 
-  private var syncObserver: NSObjectProtocol?
+  nonisolated(unsafe) private var syncObserver: NSObjectProtocol?
 
   // MARK: - Init / Deinit
 
@@ -699,7 +699,7 @@ public final class CloudKitStoreLegacy: ObservableObject {
 
   private var syncProvider: CloudKitSyncProvider? {
     #if canImport(ExpoModulesCore)
-    return ExpoCloudKitModule.sharedSyncProvider
+    return ExpoCloudKitModule.sharedSyncProviders[.private]?.value
     #else
     return nil
     #endif

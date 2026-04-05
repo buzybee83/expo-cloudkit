@@ -73,7 +73,8 @@ public enum CloudKitSwiftDataBridge {
   public static func fromRecord<T: PersistentModel>(
     _ record: [String: Any],
     context: ModelContext,
-    type: T.Type = T.self
+    type: T.Type = T.self,
+    factory: () -> T
   ) throws -> T {
     guard let recordName = record["recordName"] as? String else {
       throw CloudKitSwiftDataBridgeError.missingRecordName
@@ -94,14 +95,9 @@ public enum CloudKitSwiftDataBridge {
     if let existing = existing {
       model = existing
     } else {
-      // Use the default initialiser via reflection.
-      // SwiftData models must have a no-argument init (the compiler synthesises one
-      // for `@Model` classes that have default values on all stored properties).
-      guard let instance = T.init() as T? else {
-        throw CloudKitSwiftDataBridgeError.cannotInstantiate(String(describing: T.self))
-      }
+      let instance = factory()
+      context.insert(instance)
       model = instance
-      context.insert(model)
     }
 
     // Apply field values via Mirror.
@@ -208,10 +204,11 @@ public enum CloudKitSwiftDataBridge {
   public static func syncRecords<T: PersistentModel>(
     _ records: [[String: Any]],
     context: ModelContext,
-    type: T.Type = T.self
+    type: T.Type = T.self,
+    factory: () -> T
   ) throws {
     for record in records {
-      _ = try fromRecord(record, context: context, type: type)
+      _ = try fromRecord(record, context: context, type: type, factory: factory)
     }
   }
 

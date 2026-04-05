@@ -310,6 +310,13 @@ actor CloudKitSyncEngineAdapter: CloudKitSyncProvider {
         }
         pendingSaves.append(recordToEnqueue)
         syncEngine.state.add(pendingRecordZoneChanges: [.saveRecord(recordToEnqueue.recordID)])
+
+      case .crdtMerge:
+        // CRDT semantics are enforced by the mutation functions; fall back to server-wins
+        // at the record level when a raw conflict surfaces here.
+        let merged = resolveConflict(clientRecord: clientRecord, serverRecord: serverRecord)
+        pendingSaves.append(merged)
+        syncEngine.state.add(pendingRecordZoneChanges: [.saveRecord(merged.recordID)])
       }
     }
 

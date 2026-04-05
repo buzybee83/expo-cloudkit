@@ -11,6 +11,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.20.3] — 2026-04-04
+
+### Fixed
+
+- **Swift**: `CloudKitStore` / `CloudKitStoreLegacy` — marked `syncObserver` as `nonisolated(unsafe)` so `deinit` can access it from a nonisolated context (fixes `@MainActor`-isolated property error).
+- **Swift**: `CloudKitStore` — changed `ExpoCloudKitModule.sharedSyncProvider` (no longer exists) to `ExpoCloudKitModule.sharedSyncProviders[.private]?.value`.
+- **Swift**: `CloudKitSyncEngine` — added missing `.crdtMerge` case to conflict-strategy switch (delegates to server-wins at record level).
+- **Swift**: `CloudKitSwiftDataBridge` — replaced `T.init()` (unsupported on `@Model` classes in Xcode 16) with a `factory: () -> T` closure parameter on `fromRecord` and `syncRecords`.
+
+---
+
 ## [0.20.2] — 2026-04-04
 
 ### Fixed
