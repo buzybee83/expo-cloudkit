@@ -11,6 +11,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.20.8] — 2026-04-04
+
+### Fixed
+
+- **Tests**: Rewrote `CloudKitStoreTests` to match current `CloudKitStore` API — added `@MainActor`, replaced `isSyncing`/`lastError`/`pendingConflicts` with `syncState.status`/`error`, updated `fetch`/`save`/`delete` call sites to use `FetchConfig`/`RecordToSave`/`RecordIdentifier`.
+- **CI**: Upgraded `actions/checkout`, `actions/setup-node`, `actions/cache` from `@v4` → `@v5` (Node.js 20 deprecation warnings).
+
+---
+
 ## [0.20.7] — 2026-04-04
 
 ### Fixed

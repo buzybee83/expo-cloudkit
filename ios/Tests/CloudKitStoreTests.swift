@@ -9,15 +9,18 @@ import CloudKit
 // All tests are guarded with `#available(iOS 17, *)` and skip gracefully on
 // earlier OS versions using `XCTSkip`. No real CKContainer is used — all
 // CloudKit networking is avoided.
+//
+// CloudKitStore is @MainActor-isolated, so every test that touches the store
+// must be marked `@MainActor` (or run inside `await MainActor.run { ... }`).
 
 @available(iOS 17, macOS 14, *)
+@MainActor
 final class CloudKitStoreTests: XCTestCase {
 
   // MARK: - Lifecycle
 
   override func setUp() {
     super.setUp()
-    // Clear the shared record manager so each test starts clean.
     ExpoCloudKitModule.sharedRecordManager = nil
   }
 
@@ -29,47 +32,35 @@ final class CloudKitStoreTests: XCTestCase {
   // MARK: - test_init_startWithEmptyState
 
   func test_init_startWithEmptyState() throws {
-    guard #available(iOS 17, *) else {
-      throw XCTSkip("CloudKitStore requires iOS 17+")
-    }
+    guard #available(iOS 17, *) else { throw XCTSkip("CloudKitStore requires iOS 17+") }
 
     let store = CloudKitStore()
 
     XCTAssertTrue(store.records.isEmpty, "records should be empty on init")
-    XCTAssertFalse(store.isSyncing, "isSyncing should be false on init")
-    XCTAssertEqual(store.syncState, "idle", "syncState should be 'idle' on init")
-    XCTAssertNil(store.lastError, "lastError should be nil on init")
-    XCTAssertTrue(store.pendingConflicts.isEmpty, "pendingConflicts should be empty on init")
+    XCTAssertFalse(store.isLoading, "isLoading should be false on init")
+    XCTAssertEqual(store.syncState.status, .notStarted, "syncState.status should be .notStarted on init")
+    XCTAssertNil(store.error, "error should be nil on init")
   }
 
   // MARK: - test_syncNotification_updatesSyncState
 
   func test_syncNotification_updatesSyncState() throws {
-    guard #available(iOS 17, *) else {
-      throw XCTSkip("CloudKitStore requires iOS 17+")
-    }
+    guard #available(iOS 17, *) else { throw XCTSkip("CloudKitStore requires iOS 17+") }
 
     let store = CloudKitStore()
 
-    // Confirm initial state
-    XCTAssertEqual(store.syncState, "idle")
-    XCTAssertFalse(store.isSyncing)
+    XCTAssertEqual(store.syncState.status, .notStarted)
+    XCTAssertFalse(store.syncState.status == .syncing)
 
-    // Post the "syncing" notification on the main queue and spin the run loop so
-    // the observer fires before we assert.
     NotificationCenter.default.post(
       name: .expoCloudKitSyncStateChanged,
       object: nil,
       userInfo: ["state": "syncing"]
     )
-    // The observer is registered on .main queue; we are already on main here
-    // (XCTest runs setUp/test/tearDown on main), so the observer fires synchronously.
     RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
 
-    XCTAssertEqual(store.syncState, "syncing", "syncState should update to 'syncing'")
-    XCTAssertTrue(store.isSyncing, "isSyncing should be true when state is 'syncing'")
+    XCTAssertEqual(store.syncState.status, .syncing, "status should update to .syncing")
 
-    // Post the "idle" notification and confirm it clears isSyncing.
     NotificationCenter.default.post(
       name: .expoCloudKitSyncStateChanged,
       object: nil,
@@ -77,16 +68,14 @@ final class CloudKitStoreTests: XCTestCase {
     )
     RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
 
-    XCTAssertEqual(store.syncState, "idle", "syncState should revert to 'idle'")
-    XCTAssertFalse(store.isSyncing, "isSyncing should be false when state is 'idle'")
+    XCTAssertEqual(store.syncState.status, .idle, "status should revert to .idle")
+    XCTAssertNotEqual(store.syncState.status, .syncing, "syncing should be false after idle notification")
   }
 
   // MARK: - test_syncNotification_suspendedState
 
   func test_syncNotification_suspendedState() throws {
-    guard #available(iOS 17, *) else {
-      throw XCTSkip("CloudKitStore requires iOS 17+")
-    }
+    guard #available(iOS 17, *) else { throw XCTSkip("CloudKitStore requires iOS 17+") }
 
     let store = CloudKitStore()
 
@@ -97,117 +86,69 @@ final class CloudKitStoreTests: XCTestCase {
     )
     RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
 
-    XCTAssertEqual(store.syncState, "suspended")
-    XCTAssertFalse(store.isSyncing, "isSyncing must be false for non-'syncing' states")
+    XCTAssertEqual(store.syncState.status, .suspended)
+    XCTAssertNotEqual(store.syncState.status, .syncing, "suspended is not syncing")
   }
 
-  // MARK: - test_noRecordManager_throwsNotConfigured
+  // MARK: - test_noRecordManager_fetchThrowsNotConfigured
 
-  func test_noRecordManager_throwsNotConfigured() async throws {
-    guard #available(iOS 17, *) else {
-      throw XCTSkip("CloudKitStore requires iOS 17+")
-    }
+  func test_noRecordManager_fetchThrowsNotConfigured() async throws {
+    guard #available(iOS 17, *) else { throw XCTSkip("CloudKitStore requires iOS 17+") }
 
-    // sharedRecordManager is nil (cleared in setUp)
     let store = CloudKitStore()
+    let config = FetchConfig(recordType: "Note")
 
-    do {
-      try await store.fetch(recordType: "Note")
-      XCTFail("Expected CloudKitNotConfiguredException but no error was thrown")
-    } catch is CloudKitNotConfiguredException {
-      // Expected path — test passes.
-    } catch {
-      XCTFail("Expected CloudKitNotConfiguredException but got: \(error)")
-    }
+    await store.fetch(config)
+
+    XCTAssertNotNil(store.error, "error should be set when fetch is called without a manager")
   }
 
   // MARK: - test_noRecordManager_saveThrowsNotConfigured
 
   func test_noRecordManager_saveThrowsNotConfigured() async throws {
-    guard #available(iOS 17, *) else {
-      throw XCTSkip("CloudKitStore requires iOS 17+")
-    }
+    guard #available(iOS 17, *) else { throw XCTSkip("CloudKitStore requires iOS 17+") }
 
     let store = CloudKitStore()
+    let toSave = RecordToSave(recordType: "Note", fields: [:])
 
-    do {
-      try await store.save(["recordType": "Note"])
-      XCTFail("Expected CloudKitNotConfiguredException but no error was thrown")
-    } catch is CloudKitNotConfiguredException {
-      // Expected path — test passes.
-    } catch {
-      XCTFail("Expected CloudKitNotConfiguredException but got: \(error)")
-    }
+    await store.save(toSave)
+
+    XCTAssertNotNil(store.error, "error should be set when save is called without a manager")
   }
 
   // MARK: - test_noRecordManager_deleteThrowsNotConfigured
 
   func test_noRecordManager_deleteThrowsNotConfigured() async throws {
-    guard #available(iOS 17, *) else {
-      throw XCTSkip("CloudKitStore requires iOS 17+")
-    }
+    guard #available(iOS 17, *) else { throw XCTSkip("CloudKitStore requires iOS 17+") }
 
     let store = CloudKitStore()
+    let identifier = RecordIdentifier(recordName: "nonexistent", zoneName: "_defaultZone", database: "private")
 
-    do {
-      try await store.delete(recordName: "nonexistent-record")
-      XCTFail("Expected CloudKitNotConfiguredException but no error was thrown")
-    } catch is CloudKitNotConfiguredException {
-      // Expected path — test passes.
-    } catch {
-      XCTFail("Expected CloudKitNotConfiguredException but got: \(error)")
-    }
+    await store.delete(identifier)
+
+    XCTAssertNotNil(store.error, "error should be set when delete is called without a manager")
   }
 
-  // MARK: - test_delete_removesFromRecordsDictionary
+  // MARK: - test_records_emptyOnInit
 
-  /// Directly seeds `records` via the save path (using a manually populated
-  /// records dict) and verifies that calling `delete` removes the entry.
-  ///
-  /// Because `CloudKitRecordManager` requires a live `CKContainer`, this test
-  /// exercises the in-memory removal logic by simulating the post-delete path:
-  /// we verify that the delete operation throws `CloudKitNotConfiguredException`
-  /// (since there's no real manager), and that the `records` dict is not modified
-  /// when the throw short-circuits before the removal.
-  ///
-  /// The actual removal code path (`self.records.removeValue(forKey:)`) is tested
-  /// in isolation below.
-  func test_delete_removesFromRecordsDictionary() throws {
-    guard #available(iOS 17, *) else {
-      throw XCTSkip("CloudKitStore requires iOS 17+")
-    }
+  func test_records_emptyOnInit() throws {
+    guard #available(iOS 17, *) else { throw XCTSkip("CloudKitStore requires iOS 17+") }
 
-    // We can't inject a stub manager without a live CKContainer, so we verify
-    // the internal removal logic through the sync-state pathway instead:
-    // manually confirm that `records` can hold and drop a value.
     let store = CloudKitStore()
-
-    // Seed records directly (internal state is @Observable — tests can read it
-    // but cannot write it without going through the public API when a manager
-    // is available). We verify the empty-on-throw path: after a failed delete,
-    // records is unmodified.
     XCTAssertTrue(store.records.isEmpty)
   }
 
-  // MARK: - test_save_updatesRecordsDictionary (stub path)
+  // MARK: - test_save_setsErrorWhenNoManager
 
-  /// When no record manager is wired, save throws NotConfigured and records
-  /// remains unmodified — verifying the early-exit guard path.
-  func test_save_updatesRecordsDictionary() async throws {
-    guard #available(iOS 17, *) else {
-      throw XCTSkip("CloudKitStore requires iOS 17+")
-    }
+  func test_save_setsErrorWhenNoManager() async throws {
+    guard #available(iOS 17, *) else { throw XCTSkip("CloudKitStore requires iOS 17+") }
 
     let store = CloudKitStore()
     XCTAssertTrue(store.records.isEmpty)
 
-    do {
-      try await store.save(["recordType": "Note", "fields": [:]])
-      XCTFail("Expected CloudKitNotConfiguredException")
-    } catch is CloudKitNotConfiguredException {
-      // Confirmed: records dict is untouched when manager is absent.
-      XCTAssertTrue(store.records.isEmpty,
-        "records should remain empty when save throws NotConfigured")
-    }
+    await store.save(RecordToSave(recordType: "Note", fields: [:]))
+
+    XCTAssertTrue(store.records.isEmpty, "records should remain empty when save has no manager")
+    XCTAssertNotNil(store.error, "error should be set")
   }
 }
