@@ -11,6 +11,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.20.6] — 2026-04-04
+
+### Fixed
+
+- **Swift**: Replaced four remaining `self.syncProvider` (singular) references in CRDT `AsyncFunction` closures with `self.syncProviders[.private]`.
+- **Swift**: Added missing `CloudKitModuleError.crdtNotConfigured` and `CloudKitModuleError.missingRequiredField` static members (used by CRDT functions).
+- **Tests**: Added `crdtNotConfigured` and `missingRequiredField` to `CompilationRegressionTests` compile guard.
+
+---
+
 ## [0.20.5] — 2026-04-04
 
 ### Fixed

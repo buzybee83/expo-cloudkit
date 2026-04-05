@@ -65,6 +65,8 @@ final class CompilationRegressionTests: XCTestCase {
       _ = CloudKitModuleError.participantNotFound("name")
       _ = CloudKitModuleError.shareNotFound()
       _ = CloudKitModuleError.shareNotFound("detail")
+      _ = CloudKitModuleError.crdtNotConfigured
+      _ = CloudKitModuleError.missingRequiredField
     }
     XCTAssertTrue(true, "All CloudKitModuleError members compiled successfully")
   }

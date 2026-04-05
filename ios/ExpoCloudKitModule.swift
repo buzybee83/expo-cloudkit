@@ -2874,7 +2874,7 @@ public class ExpoCloudKitModule: Module {
       guard let recordManager = self.recordManager else {
         return promise.reject(CloudKitModuleError.notConfigured)
       }
-      guard let provider = self.syncProvider else {
+      guard let provider = self.syncProviders[.private] else {
         return promise.reject(CloudKitModuleError.syncEngineNotRunning)
       }
       guard let crdtManager = self.crdtManager else {
@@ -2926,7 +2926,7 @@ public class ExpoCloudKitModule: Module {
       guard let recordManager = self.recordManager else {
         return promise.reject(CloudKitModuleError.notConfigured)
       }
-      guard let provider = self.syncProvider else {
+      guard let provider = self.syncProviders[.private] else {
         return promise.reject(CloudKitModuleError.syncEngineNotRunning)
       }
       guard let crdtManager = self.crdtManager else {
@@ -2977,7 +2977,7 @@ public class ExpoCloudKitModule: Module {
       guard let recordManager = self.recordManager else {
         return promise.reject(CloudKitModuleError.notConfigured)
       }
-      guard let provider = self.syncProvider else {
+      guard let provider = self.syncProviders[.private] else {
         return promise.reject(CloudKitModuleError.syncEngineNotRunning)
       }
       guard let crdtManager = self.crdtManager else {
@@ -3028,7 +3028,7 @@ public class ExpoCloudKitModule: Module {
       guard let recordManager = self.recordManager else {
         return promise.reject(CloudKitModuleError.notConfigured)
       }
-      guard let provider = self.syncProvider else {
+      guard let provider = self.syncProviders[.private] else {
         return promise.reject(CloudKitModuleError.syncEngineNotRunning)
       }
       guard let crdtManager = self.crdtManager else {
@@ -4113,6 +4113,8 @@ enum CloudKitModuleError {
   static func participantNotFound(_ name: String) -> Exception { ParticipantNotFoundException(name) }
   static var participantLookupFailed: Exception              { ParticipantLookupFailedException() }
   static func shareNotFound(_ detail: String = "") -> Exception { ShareURLNotFoundException(detail) }
+  static var crdtNotConfigured: Exception { CloudKitInvalidArgumentException("CRDT manager not configured") }
+  static var missingRequiredField: Exception { CloudKitInvalidArgumentException("Required field missing from options") }
 }
 
 #endif // canImport(ExpoModulesCore)
