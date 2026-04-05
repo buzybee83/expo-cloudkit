@@ -11,6 +11,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.20.7] — 2026-04-04
+
+### Fixed
+
+- **Swift**: `CKShareMetadata` → `CKShare.Metadata` (API rename in Xcode 16).
+- **Swift**: `crdtManager` on both actor adapters marked `nonisolated(unsafe)` so the property can be set from a non-actor context during `startSyncEngine`.
+- **Swift**: Six `provider.enqueueSave/Delete` call sites now wrapped in `Task { await ... }` since the protocol declares them `async`.
+
+---
+
 ## [0.20.6] — 2026-04-04
 
 ### Fixed

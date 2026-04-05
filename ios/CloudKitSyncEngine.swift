@@ -52,7 +52,7 @@ actor CloudKitSyncEngineAdapter: CloudKitSyncProvider {
   }
 
   /// CRDT manager set when `crdtSchema` is provided in `startSyncEngine` config.
-  var crdtManager: CRDTManager?
+  nonisolated(unsafe) var crdtManager: CRDTManager?
   private var pendingSaves: [CKRecord] = []
   private var pendingDeletes: [CKRecord.ID] = []
 

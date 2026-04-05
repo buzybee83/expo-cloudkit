@@ -1998,7 +1998,7 @@ public class ExpoCloudKitModule: Module {
     //
     // When the app delegate calls `application(_:userDidAcceptCloudKitShareWith:)`
     // it should post NSNotification.Name("CKShareAccepted") with the
-    // CKShareMetadata in userInfo["metadata"].
+    // CKShare.Metadata in userInfo["metadata"].
     //
     // This observer accepts the share via CKAcceptSharesOperation, then emits
     // "onShareAccepted" to JS with rich owner + zone info.
@@ -2012,7 +2012,7 @@ public class ExpoCloudKitModule: Module {
       ) { [weak self] notification in
         guard let self = self,
               let container = self.container,
-              let metadata = notification.userInfo?["metadata"] as? CKShareMetadata else {
+              let metadata = notification.userInfo?["metadata"] as? CKShare.Metadata else {
           return
         }
 
@@ -2112,7 +2112,7 @@ public class ExpoCloudKitModule: Module {
       // Collect the first successfully-fetched metadata object.
       // perShareMetadataResultBlock is called once per URL before
       // fetchShareMetadataResultBlock fires.
-      var fetchedMetadata: CKShareMetadata?
+      var fetchedMetadata: CKShare.Metadata?
       var perShareError: Error?
 
       op.perShareMetadataResultBlock = { _, result in
@@ -2723,10 +2723,12 @@ public class ExpoCloudKitModule: Module {
 
         // Wire save/delete through the active sync provider for batching.
         manager.enqueueSave = { [weak self] record in
-          self?.syncProviders[.private]?.enqueueSave(record)
+          guard let provider = self?.syncProviders[.private] else { return }
+          Task { await provider.enqueueSave(record) }
         }
         manager.enqueueDelete = { [weak self] recordID in
-          self?.syncProviders[.private]?.enqueueDelete(recordID)
+          guard let provider = self?.syncProviders[.private] else { return }
+          Task { await provider.enqueueDelete(recordID) }
         }
 
         // Stop any existing manager for this zone before replacing it.
@@ -2912,7 +2914,8 @@ public class ExpoCloudKitModule: Module {
         var mutableDict = baseDict
         do {
           try crdtManager.applyIncrement(to: &mutableDict, field: field, delta: delta)
-          provider.enqueueSave(try Converters.toCKRecord(from: mutableDict))
+          let ckRecord = try Converters.toCKRecord(from: mutableDict)
+          Task { await provider.enqueueSave(ckRecord) }
           promise.resolve(mutableDict)
         } catch {
           promise.reject(error)
@@ -2963,7 +2966,8 @@ public class ExpoCloudKitModule: Module {
         var mutableDict = baseDict
         do {
           try crdtManager.applyAdd(to: &mutableDict, field: field, value: value)
-          provider.enqueueSave(try Converters.toCKRecord(from: mutableDict))
+          let ckRecord = try Converters.toCKRecord(from: mutableDict)
+          Task { await provider.enqueueSave(ckRecord) }
           promise.resolve(mutableDict)
         } catch {
           promise.reject(error)
@@ -3014,7 +3018,8 @@ public class ExpoCloudKitModule: Module {
         var mutableDict = baseDict
         do {
           try crdtManager.applyRemove(to: &mutableDict, field: field, value: value)
-          provider.enqueueSave(try Converters.toCKRecord(from: mutableDict))
+          let ckRecord = try Converters.toCKRecord(from: mutableDict)
+          Task { await provider.enqueueSave(ckRecord) }
           promise.resolve(mutableDict)
         } catch {
           promise.reject(error)
@@ -3068,7 +3073,8 @@ public class ExpoCloudKitModule: Module {
         var mutableDict = baseDict
         do {
           try crdtManager.applySet(to: &mutableDict, field: field, value: value)
-          provider.enqueueSave(try Converters.toCKRecord(from: mutableDict))
+          let ckRecord = try Converters.toCKRecord(from: mutableDict)
+          Task { await provider.enqueueSave(ckRecord) }
           promise.resolve(mutableDict)
         } catch {
           promise.reject(error)
