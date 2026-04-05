@@ -1604,7 +1604,7 @@ public class ExpoCloudKitModule: Module {
           return
         }
         guard let share = record as? CKShare else {
-          promise.reject(CloudKitModuleError.recordNotFound)
+          promise.reject(CloudKitModuleError.shareNotFound("Fetched record is not a CKShare"))
           return
         }
         share.publicPermission = permission

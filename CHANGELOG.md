@@ -11,6 +11,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.20.4] — 2026-04-04
+
+### Fixed
+
+- **Swift**: `Converters.toParticipantDictionary` — removed `isCurrentUser` key; `CKShare.Participant` has no such property in the CloudKit API.
+- **Swift**: `ExpoCloudKitModule` line 1607 — replaced non-existent `CloudKitModuleError.recordNotFound` with `shareNotFound("Fetched record is not a CKShare")`.
+
+---
+
 ## [0.20.3] — 2026-04-04
 
 ### Fixed
