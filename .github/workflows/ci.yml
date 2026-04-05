@@ -11,11 +11,11 @@ jobs:
     name: Typecheck / Lint / Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
@@ -38,11 +38,11 @@ jobs:
     runs-on: macos-15
     continue-on-error: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Install root dependencies and build plugin
         run: npm ci && npm run build
@@ -194,7 +194,7 @@ jobs:
           RUBY
 
       - name: Cache CocoaPods downloads
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cocoapods
           key: cocoapods-${{ runner.os }}-${{ hashFiles('example/ios/Podfile') }}
@@ -222,7 +222,7 @@ jobs:
             2>&1 | tee /tmp/xcodebuild.log | xcpretty --color
           EXIT=${PIPESTATUS[0]}
           if [ "$EXIT" -ne 0 ]; then
-            echo "--- xcodebuild failed (exit $EXIT) — last 100 lines of raw log ---"
-            tail -100 /tmp/xcodebuild.log
+            echo "--- xcodebuild failed (exit $EXIT) — last 200 lines of raw log ---"
+            tail -200 /tmp/xcodebuild.log
             exit "$EXIT"
           fi
