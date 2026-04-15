@@ -101,7 +101,7 @@ The module is auto-linked — no manual `pod install` step beyond `expo prebuild
 SPM support is available for pure Swift (non-Expo) projects. Expo projects should continue using CocoaPods.
 
 ```swift
-.package(url: "https://github.com/buzybee83/expo-cloudkit.git", from: "0.11.0")
+.package(url: "https://github.com/DevLab-Innovations/expo-cloudkit.git", from: "0.11.0")
 ```
 
 Then add `"ExpoCloudKit"` to your target's dependencies. Full SPM support (including the Expo module entry point) is pending ExpoModulesCore adding SPM distribution.
